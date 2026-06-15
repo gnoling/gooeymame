@@ -444,6 +444,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/artworkpanel.h",
 		MAME_DIR .. "src/osd/qtui/artloader.cpp",
 		MAME_DIR .. "src/osd/qtui/artloader.h",
+		MAME_DIR .. "src/osd/qtui/infoloader.cpp",
+		MAME_DIR .. "src/osd/qtui/infoloader.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",
@@ -455,6 +457,7 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp",
 		GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp",
 		GEN_DIR .. "osd/qtui/artloader.moc.cpp",
+		GEN_DIR .. "osd/qtui/infoloader.moc.cpp",
 	}
 
 	local MOC = qtui_find_moc()
@@ -470,6 +473,7 @@ project ("osd_" .. _OPTIONS["osd"])
 		{ MAME_DIR .. "src/osd/qtui/optionsdialog.h", GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/artworkpanel.h", GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/artloader.h", GEN_DIR .. "osd/qtui/artloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/infoloader.h", GEN_DIR .. "osd/qtui/infoloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 	}
 
 

@@ -30,6 +30,7 @@ class QTabWidget;
 namespace osd::qtui {
 
 class ArtLoader;
+class InfoLoader;
 
 class ArtworkPanel : public QWidget
 {
@@ -50,6 +51,7 @@ protected:
 private slots:
 	void loadCurrent();
 	void onLoaded(quint64 epoch, int tab, const QByteArray &bytes);
+	void onInfoLoaded(quint64 epoch, const QString &text);
 
 private:
 	enum class Mode { System, Software };
@@ -59,15 +61,18 @@ private:
 
 	struct Tab
 	{
+		bool isText;      // true = history text tab; false = image tab
 		QString sysKey;   // frontendpaths key in system mode ("" = none)
 		QString swKey;    // frontendpaths key in software mode ("" = none)
-		QLabel *view;
+		QWidget *view;    // QLabel (image) or QTextBrowser (text)
 		bool loaded;
-		QPixmap original;
+		QPixmap original; // image tabs only
 	};
 
 	QTabWidget *m_tabs = nullptr;
 	ArtLoader *m_loader = nullptr;
+	InfoLoader *m_info = nullptr;
+	int m_historyTab = -1;
 	std::vector<Tab> m_views;
 
 	Mode m_mode = Mode::System;
