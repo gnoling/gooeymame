@@ -12,7 +12,12 @@
 
 #include <QtWidgets/QMainWindow>
 
+class QSortFilterProxyModel;
+class QTableView;
+
 namespace osd::qtui {
+
+class GameListModel;
 
 //============================================================
 //  The main MAMEUI browser window.
@@ -30,6 +35,12 @@ private slots:
 
 private:
 	void createMenus();
+	void createGameList();
+	void updateStatusCount();
+
+	GameListModel *m_model = nullptr;
+	QSortFilterProxyModel *m_proxy = nullptr;
+	QTableView *m_view = nullptr;
 };
 
 } // namespace osd::qtui

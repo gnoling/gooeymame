@@ -422,12 +422,16 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/emulator.h",
 		MAME_DIR .. "src/osd/qtui/mainwindow.cpp",
 		MAME_DIR .. "src/osd/qtui/mainwindow.h",
+		MAME_DIR .. "src/osd/qtui/gamelistmodel.cpp",
+		MAME_DIR .. "src/osd/qtui/gamelistmodel.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
+		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 	}
 
 	local MOC = qtui_find_moc()
 	custombuildtask {
 		{ MAME_DIR .. "src/osd/qtui/mainwindow.h", GEN_DIR .. "osd/qtui/mainwindow.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/gamelistmodel.h", GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 	}
 
 
