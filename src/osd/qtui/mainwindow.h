@@ -32,15 +32,20 @@ public:
 
 private slots:
 	void showAbout();
+	void launchSelected();
 
 private:
 	void createMenus();
 	void createGameList();
 	void updateStatusCount();
 
+	// Short name of the currently selected system, or empty if none.
+	QString selectedSystem() const;
+
 	GameListModel *m_model = nullptr;
 	QSortFilterProxyModel *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
+	QAction *m_playAct = nullptr;
 };
 
 } // namespace osd::qtui

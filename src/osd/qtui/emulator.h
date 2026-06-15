@@ -31,4 +31,10 @@ int qtui_run_emulation(int argc, char **argv);
 // system in-process.  Returns the emulator exit code.
 int qtui_run_args(std::vector<std::string> &args);
 
+// Launch a single system by short name (e.g. "pacman") in-process, reading
+// configured options from the usual .ini files.  Convenience wrapper around
+// qtui_run_args() used by the Qt front-end's modal launch.  Returns the
+// emulator exit code.
+int qtui_run_system(const std::string &system);
+
 #endif // MAME_OSD_QTUI_EMULATOR_H
