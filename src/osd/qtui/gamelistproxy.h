@@ -1,0 +1,84 @@
+// license:BSD-3-Clause
+// copyright-holders:MAMEdev Team
+//============================================================
+//
+//  gamelistproxy.h - sorting/filtering proxy for the system list
+//
+//  Adds folder (category) filtering and free-text search on top of the
+//  GameListModel, while still providing the column sorting of the base
+//  QSortFilterProxyModel.
+//
+//============================================================
+#ifndef MAME_OSD_QTUI_GAMELISTPROXY_H
+#define MAME_OSD_QTUI_GAMELISTPROXY_H
+
+#pragma once
+
+#include <QtCore/QSortFilterProxyModel>
+#include <QtCore/QString>
+
+namespace osd::qtui {
+
+//============================================================
+//  FolderFilter - the structural category selected in the folder tree.
+//
+//  Status (working / availability) is intentionally NOT a folder; it is an
+//  orthogonal modifier (see StatusFilter) applied on top of whatever folder
+//  is selected.
+//============================================================
+struct FolderFilter
+{
+	enum Kind
+	{
+		All,            // every system
+		Arcade,         // arcade machines
+		Console,        // consoles / computers / other (non-arcade)
+		Manufacturer,   // a specific manufacturer (value)
+		Year            // a specific release year (value)
+	};
+
+	Kind kind = All;
+	QString value;      // used by Manufacturer / Year
+};
+
+
+//============================================================
+//  StatusFlag - combinable status modifiers applied to the current list.
+//
+//  Flags within a group (emulation: Working/NotWorking; availability:
+//  Available/Unavailable) are OR'd together; the groups are AND'd.  An empty
+//  group imposes no constraint.  This lets e.g. "Working" combine with
+//  "Available" to show working *and* available systems.
+//============================================================
+enum StatusFlag
+{
+	StatusWorking     = 0x01,
+	StatusNotWorking  = 0x02,
+	StatusAvailable   = 0x04,   // wired in the audit phase
+	StatusUnavailable = 0x08    // wired in the audit phase
+};
+
+
+class GameListProxy : public QSortFilterProxyModel
+{
+	Q_OBJECT
+
+public:
+	explicit GameListProxy(QObject *parent = nullptr);
+
+	void setFolderFilter(const FolderFilter &filter);
+	void setStatusFilter(int flags);   // bitwise OR of StatusFlag
+	void setSearchText(const QString &text);
+
+protected:
+	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
+
+private:
+	FolderFilter m_filter;
+	int m_status = 0;
+	QString m_search;
+};
+
+} // namespace osd::qtui
+
+#endif // MAME_OSD_QTUI_GAMELISTPROXY_H

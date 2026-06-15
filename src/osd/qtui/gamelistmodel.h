@@ -15,6 +15,7 @@
 #pragma once
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QStringList>
 
 #include <vector>
 
@@ -41,13 +42,21 @@ public:
 		COLUMN_COUNT
 	};
 
-	// Custom roles for the proxy/filtering layers in later phases.
+	// Custom roles used by the filtering proxy and the folder tree.
 	enum Role
 	{
 		// driver_list index for the row (int)
 		DriverIndexRole = Qt::UserRole + 1,
 		// short name as a QString, for case-insensitive sorting/searching
-		ShortNameRole
+		ShortNameRole,
+		// true if the system is emulated well enough to be considered working
+		WorkingRole,
+		// true if the system is an arcade machine (vs. a console/computer/etc.)
+		ArcadeRole,
+		// normalised manufacturer name (parenthetical notes stripped)
+		ManufacturerRole,
+		// release year as a QString
+		YearRole
 	};
 
 	explicit GameListModel(QObject *parent = nullptr);
@@ -60,6 +69,13 @@ public:
 
 	// Map a model row back to a driver_list index, or -1 if out of range.
 	int driverIndexForRow(int row) const;
+
+	// Sorted, de-duplicated lists for populating the folder tree.
+	QStringList manufacturers() const;
+	QStringList years() const;
+
+	// Normalise a manufacturer string for grouping (strip "(...)" notes).
+	static QString normaliseManufacturer(const char *manufacturer);
 
 private:
 	const game_driver &driverForRow(int row) const;

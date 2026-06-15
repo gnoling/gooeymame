@@ -424,14 +424,26 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/mainwindow.h",
 		MAME_DIR .. "src/osd/qtui/gamelistmodel.cpp",
 		MAME_DIR .. "src/osd/qtui/gamelistmodel.h",
+		MAME_DIR .. "src/osd/qtui/gamelistproxy.cpp",
+		MAME_DIR .. "src/osd/qtui/gamelistproxy.h",
+		MAME_DIR .. "src/osd/qtui/foldertree.cpp",
+		MAME_DIR .. "src/osd/qtui/foldertree.h",
+		MAME_DIR .. "src/osd/qtui/softwaremodel.cpp",
+		MAME_DIR .. "src/osd/qtui/softwaremodel.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
+		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",
+		GEN_DIR .. "osd/qtui/foldertree.moc.cpp",
+		GEN_DIR .. "osd/qtui/softwaremodel.moc.cpp",
 	}
 
 	local MOC = qtui_find_moc()
 	custombuildtask {
 		{ MAME_DIR .. "src/osd/qtui/mainwindow.h", GEN_DIR .. "osd/qtui/mainwindow.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/gamelistmodel.h", GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/gamelistproxy.h", GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/foldertree.h", GEN_DIR .. "osd/qtui/foldertree.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/softwaremodel.h", GEN_DIR .. "osd/qtui/softwaremodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 	}
 
 

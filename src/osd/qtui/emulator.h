@@ -37,4 +37,25 @@ int qtui_run_args(std::vector<std::string> &args);
 // emulator exit code.
 int qtui_run_system(const std::string &system);
 
+// Launch a system with a piece of software from one of its software lists
+// (e.g. system "nes", software "smb").  Returns the emulator exit code.
+int qtui_run_software(const std::string &system, const std::string &software);
+
+// A single software-list entry, flattened to plain data for the GUI.
+struct qtui_software_entry
+{
+	std::string list;        // software list short name (e.g. "nes")
+	std::string shortname;   // software short name (e.g. "smb")
+	std::string description; // human-readable title
+	std::string year;
+	std::string publisher;
+	int         supported;   // 0 = supported, 1 = partial, 2 = unsupported
+};
+
+// Enumerate the software available to a system across all of its software
+// lists.  Builds the system's machine configuration on demand, so this is
+// relatively expensive and should be called off the UI thread or debounced.
+// Returns an empty vector for systems that have no software lists.
+std::vector<qtui_software_entry> qtui_enumerate_software(const std::string &system);
+
 #endif // MAME_OSD_QTUI_EMULATOR_H

@@ -12,6 +12,10 @@
 
 #include "drivenum.h"
 
+#include <QtCore/QSet>
+
+#include <algorithm>
+
 
 namespace osd::qtui {
 
@@ -76,6 +80,18 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 	case ShortNameRole:
 		return QString::fromLatin1(drv.name);
 
+	case WorkingRole:
+		return !(drv.type.emulation_flags() & emu::detail::device_flags::NOT_WORKING);
+
+	case ArcadeRole:
+		return bool(drv.flags & machine_flags::TYPE_ARCADE);
+
+	case ManufacturerRole:
+		return normaliseManufacturer(drv.manufacturer);
+
+	case YearRole:
+		return QString::fromLatin1(drv.year ? drv.year : "");
+
 	case Qt::TextAlignmentRole:
 		if (index.column() == COLUMN_YEAR)
 			return int(Qt::AlignCenter);
@@ -123,6 +139,49 @@ QVariant GameListModel::headerData(int section, Qt::Orientation orientation, int
 	case COLUMN_STATUS:       return tr("Status");
 	}
 	return QVariant();
+}
+
+QString GameListModel::normaliseManufacturer(const char *manufacturer)
+{
+	if (!manufacturer || !*manufacturer)
+		return tr("<unknown>");
+
+	QString result = QString::fromUtf8(manufacturer);
+
+	// Drop any parenthetical qualifier, e.g. "Atari (Games)" -> "Atari".
+	int const paren = result.indexOf('(');
+	if (paren > 0)
+		result.truncate(paren);
+
+	return result.trimmed();
+}
+
+QStringList GameListModel::manufacturers() const
+{
+	QSet<QString> seen;
+	for (int row : m_rows)
+		seen.insert(normaliseManufacturer(driver_list::driver(row).manufacturer));
+
+	QStringList list(seen.cbegin(), seen.cend());
+	std::sort(list.begin(), list.end(), [] (const QString &a, const QString &b) {
+		return a.localeAwareCompare(b) < 0;
+	});
+	return list;
+}
+
+QStringList GameListModel::years() const
+{
+	QSet<QString> seen;
+	for (int row : m_rows)
+	{
+		const char *year = driver_list::driver(row).year;
+		if (year && *year)
+			seen.insert(QString::fromLatin1(year));
+	}
+
+	QStringList list(seen.cbegin(), seen.cend());
+	std::sort(list.begin(), list.end());
+	return list;
 }
 
 } // namespace osd::qtui
