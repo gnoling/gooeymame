@@ -13,6 +13,7 @@
 #include "drivenum.h"
 
 #include <QtCore/QSet>
+#include <QtGui/QBrush>
 
 #include <algorithm>
 
@@ -37,6 +38,12 @@ GameListModel::GameListModel(QObject *parent) :
 			continue;
 		m_rows.push_back(int(i));
 	}
+
+	m_availability.assign(m_rows.size(), AvailabilityUnknown);
+
+	m_nameToRow.reserve(int(m_rows.size()));
+	for (int row = 0; row < int(m_rows.size()); row++)
+		m_nameToRow.insert(QString::fromLatin1(driver_list::driver(m_rows[row]).name), row);
 }
 
 int GameListModel::rowCount(const QModelIndex &parent) const
@@ -91,6 +98,15 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 
 	case YearRole:
 		return QString::fromLatin1(drv.year ? drv.year : "");
+
+	case AvailabilityRole:
+		return int(m_availability[index.row()]);
+
+	case Qt::ForegroundRole:
+		// Grey out systems whose ROMs are known to be missing.
+		if (m_availability[index.row()] == Unavailable)
+			return QBrush(Qt::gray);
+		return QVariant();
 
 	case Qt::TextAlignmentRole:
 		if (index.column() == COLUMN_YEAR)
@@ -167,6 +183,27 @@ QStringList GameListModel::manufacturers() const
 		return a.localeAwareCompare(b) < 0;
 	});
 	return list;
+}
+
+void GameListModel::applyAvailabilityBatch(const QVector<QPair<QString, int>> &results)
+{
+	int minRow = -1;
+	int maxRow = -1;
+	for (const auto &entry : results)
+	{
+		auto it = m_nameToRow.constFind(entry.first);
+		if (it == m_nameToRow.constEnd())
+			continue;
+		int const row = it.value();
+		m_availability[row] = std::int8_t(entry.second);
+		if (minRow < 0 || row < minRow)
+			minRow = row;
+		if (row > maxRow)
+			maxRow = row;
+	}
+
+	if (minRow >= 0)
+		emit dataChanged(index(minRow, 0), index(maxRow, COLUMN_COUNT - 1));
 }
 
 QStringList GameListModel::years() const

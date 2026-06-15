@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -50,12 +52,41 @@ struct qtui_software_entry
 	std::string year;
 	std::string publisher;
 	int         supported;   // 0 = supported, 1 = partial, 2 = unsupported
+	int         availability; // qtui_availability (ROM presence)
 };
 
-// Enumerate the software available to a system across all of its software
-// lists.  Builds the system's machine configuration on demand, so this is
-// relatively expensive and should be called off the UI thread or debounced.
-// Returns an empty vector for systems that have no software lists.
-std::vector<qtui_software_entry> qtui_enumerate_software(const std::string &system);
+// Load a system's software lists in two phases, off the UI thread:
+//   on_entries - called once with every entry (availability UNKNOWN) as soon
+//                as the lists are parsed; this is fast.
+//   on_audited - called per entry with (entry index, qtui_availability) as
+//                each entry's ROMs are fast-audited; this is the slow part.
+// Both callbacks run on the calling thread.  Aborts promptly if *cancel
+// becomes true (when non-null).  The audit visits entries in the same order
+// as on_entries, so the index lines up with that vector.
+void qtui_load_software(
+		const std::string &system,
+		const std::atomic<bool> *cancel,
+		const std::function<void (const std::vector<qtui_software_entry> &)> &on_entries,
+		const std::function<void (int, int)> &on_audited);
+
+// Total number of systems in the build (for audit progress reporting).
+int qtui_system_count();
+
+// ROM availability of a system.
+enum qtui_availability
+{
+	QTUI_AVAIL_UNKNOWN = 0,
+	QTUI_AVAIL_AVAILABLE = 1,
+	QTUI_AVAIL_UNAVAILABLE = 2
+};
+
+// Fast-audit every system's ROMs (CRC only), invoking progress(shortname,
+// availability) for each one as it is checked.  Intended to run on a worker
+// thread; aborts promptly when cancel becomes true.  Internally serialised
+// with qtui_enumerate_software() so the two never touch the MAME core at the
+// same time.
+void qtui_audit_all(
+		const std::function<void (const std::string &, int)> &progress,
+		const std::atomic<bool> &cancel);
 
 #endif // MAME_OSD_QTUI_EMULATOR_H

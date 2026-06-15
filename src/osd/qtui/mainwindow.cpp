@@ -8,14 +8,17 @@
 
 #include "mainwindow.h"
 
+#include "auditmanager.h"
 #include "emulator.h"
 #include "foldertree.h"
 #include "gamelistmodel.h"
 #include "gamelistproxy.h"
+#include "softwareloader.h"
 #include "softwaremodel.h"
+#include "softwareproxy.h"
 
 #include <QtCore/QItemSelectionModel>
-#include <QtCore/QSortFilterProxyModel>
+#include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QHBoxLayout>
@@ -25,6 +28,7 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QStatusBar>
@@ -42,6 +46,28 @@ namespace {
 // expensive, so we debounce rapid keyboard navigation.
 constexpr int SOFTWARE_DEBOUNCE_MS = 200;
 
+// Create a compact checkable quick-filter button.
+QPushButton *makeToggle(const QString &text, const QString &tip)
+{
+	QPushButton *button = new QPushButton(text);
+	button->setCheckable(true);
+	button->setToolTip(tip);
+	return button;
+}
+
+// Make two toggle buttons mutually exclusive (either, or neither, but never
+// both).  Unchecking the opposite is silenced so it does not re-trigger the
+// filter recomputation.
+void pairExclusive(QPushButton *a, QPushButton *b)
+{
+	QObject::connect(a, &QPushButton::toggled, b, [b] (bool on) {
+		if (on) { QSignalBlocker block(b); b->setChecked(false); }
+	});
+	QObject::connect(b, &QPushButton::toggled, a, [a] (bool on) {
+		if (on) { QSignalBlocker block(a); a->setChecked(false); }
+	});
+}
+
 } // anonymous namespace
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -54,6 +80,44 @@ MainWindow::MainWindow(QWidget *parent) :
 	createWidgets();
 
 	updateStatusCount();
+
+	// Audit progress widgets live permanently in the status bar, hidden until
+	// an audit runs.
+	m_progressBar = new QProgressBar;
+	m_progressBar->setMaximumWidth(220);
+	m_progressBar->setVisible(false);
+	m_cancelAuditButton = new QPushButton(tr("Cancel"));
+	m_cancelAuditButton->setVisible(false);
+	statusBar()->addPermanentWidget(m_progressBar);
+	statusBar()->addPermanentWidget(m_cancelAuditButton);
+
+	// Background ROM availability: load the cache if present, otherwise run a
+	// first audit so the Available/Unavailable filters have data to work with.
+	m_audit = new AuditManager(m_model, this);
+	connect(m_cancelAuditButton, &QPushButton::clicked, this, [this] {
+		m_cancelAuditButton->setEnabled(false);
+		m_audit->cancelAudit();
+		statusBar()->showMessage(tr("Cancelling audit…"));
+	});
+	connect(m_audit, &AuditManager::progress, this, [this] (int audited, int total) {
+		m_progressBar->setVisible(true);
+		m_cancelAuditButton->setVisible(true);
+		m_cancelAuditButton->setEnabled(true);
+		m_progressBar->setRange(0, total);
+		m_progressBar->setValue(audited);
+		statusBar()->showMessage(tr("Auditing ROMs… %1 of %2").arg(audited).arg(total));
+	});
+	connect(m_audit, &AuditManager::finished, this, [this] {
+		m_progressBar->setVisible(false);
+		m_cancelAuditButton->setVisible(false);
+		m_auditAct->setEnabled(true);
+		updateStatusCount();
+	});
+	if (!m_audit->loadCache())
+	{
+		m_auditAct->setEnabled(false);
+		m_audit->startAudit();
+	}
 }
 
 MainWindow::~MainWindow()
@@ -74,6 +138,16 @@ void MainWindow::createMenus()
 	QAction *exitAct = fileMenu->addAction(tr("E&xit"));
 	exitAct->setShortcut(QKeySequence::Quit);
 	connect(exitAct, &QAction::triggered, this, &QWidget::close);
+
+	QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+	m_auditAct = toolsMenu->addAction(tr("&Refresh ROM Availability"));
+	connect(m_auditAct, &QAction::triggered, this, [this] {
+		if (m_audit && !m_audit->isRunning())
+		{
+			m_auditAct->setEnabled(false);
+			m_audit->startAudit();
+		}
+	});
 
 	QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 	QAction *aboutAct = helpMenu->addAction(tr("&About"));
@@ -116,36 +190,39 @@ void MainWindow::createWidgets()
 	m_search->setPlaceholderText(tr("Search systems…"));
 	connect(m_search, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
 
-	// Status modifiers: combinable toggles that refine the current list.
-	m_btnWorking = new QPushButton(tr("Working"));
-	m_btnWorking->setCheckable(true);
-	m_btnWorking->setToolTip(tr("Show systems with working emulation"));
-	connect(m_btnWorking, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
+	// Status quick-filters: combinable toggles that refine the current list.
+	// Opposite pairs are mutually exclusive; the two groups (emulation,
+	// availability) AND together.
+	m_btnWorking = makeToggle(tr("Working"), tr("Show systems with working emulation"));
+	m_btnNotWorking = makeToggle(tr("Not working"), tr("Show systems with non-working emulation"));
+	m_btnAvailable = makeToggle(tr("Available"), tr("Show systems whose ROMs are present"));
+	m_btnUnavailable = makeToggle(tr("Unavailable"), tr("Show systems whose ROMs are missing"));
 
-	m_btnNotWorking = new QPushButton(tr("Not working"));
-	m_btnNotWorking->setCheckable(true);
-	m_btnNotWorking->setToolTip(tr("Show systems with non-working emulation"));
-	connect(m_btnNotWorking, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
+	pairExclusive(m_btnWorking, m_btnNotWorking);
+	pairExclusive(m_btnAvailable, m_btnUnavailable);
+
+	for (QPushButton *button : { m_btnWorking, m_btnNotWorking, m_btnAvailable, m_btnUnavailable })
+		connect(button, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
 
 	QWidget *systemPane = new QWidget;
 	QVBoxLayout *systemLayout = new QVBoxLayout(systemPane);
 	systemLayout->setContentsMargins(0, 0, 0, 0);
+
+	// Quick-filter bar over the system list.
 	QHBoxLayout *systemBar = new QHBoxLayout;
 	systemBar->addWidget(m_search, 1);
 	systemBar->addWidget(m_btnWorking);
 	systemBar->addWidget(m_btnNotWorking);
+	systemBar->addWidget(m_btnAvailable);
+	systemBar->addWidget(m_btnUnavailable);
 	systemLayout->addLayout(systemBar);
 	systemLayout->addWidget(m_view);
 
-	// --- software list pane: [search] over the table ---
+	// --- software list pane: quick-filter bar over the table ---
 	m_softwareModel = new SoftwareModel(this);
 
-	m_softwareProxy = new QSortFilterProxyModel(this);
+	m_softwareProxy = new SoftwareProxy(this);
 	m_softwareProxy->setSourceModel(m_softwareModel);
-	m_softwareProxy->setSortCaseSensitivity(Qt::CaseInsensitive);
-	m_softwareProxy->setSortLocaleAware(true);
-	m_softwareProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
-	m_softwareProxy->setFilterKeyColumn(-1);   // match against every column
 
 	m_softwareView = new QTableView;
 	m_softwareView->setModel(m_softwareProxy);
@@ -164,13 +241,36 @@ void MainWindow::createWidgets()
 	m_softwareSearch->setClearButtonEnabled(true);
 	m_softwareSearch->setPlaceholderText(tr("Search software…"));
 	connect(m_softwareSearch, &QLineEdit::textChanged, this, [this] (const QString &text) {
-		m_softwareProxy->setFilterFixedString(text.trimmed());
+		m_softwareProxy->setSearchText(text);
 	});
+
+	// Software runs through a background loader so per-entry ROM auditing
+	// never blocks the UI and selection changes cancel in-flight work.
+	m_softwareLoader = new SoftwareLoader(this);
+	connect(m_softwareLoader, &SoftwareLoader::loaded, this, &MainWindow::onSoftwareLoaded);
+	connect(m_softwareLoader, &SoftwareLoader::availabilityReady, this, &MainWindow::onSoftwareAvailabilityReady);
+
+	// Support-level and availability quick-filters for the software list.
+	m_btnSupported = makeToggle(tr("Supported"), tr("Show fully supported software"));
+	m_btnPartial = makeToggle(tr("Partial"), tr("Show partially supported software"));
+	m_btnUnsupported = makeToggle(tr("Unsupported"), tr("Show unsupported software"));
+	m_btnSwAvailable = makeToggle(tr("Available"), tr("Show software whose ROMs are present"));
+	m_btnSwUnavailable = makeToggle(tr("Unavailable"), tr("Show software whose ROMs are missing"));
+	pairExclusive(m_btnSwAvailable, m_btnSwUnavailable);
+	for (QPushButton *button : { m_btnSupported, m_btnPartial, m_btnUnsupported, m_btnSwAvailable, m_btnSwUnavailable })
+		connect(button, &QPushButton::toggled, this, &MainWindow::onSoftwareFilterChanged);
 
 	m_softwarePane = new QWidget;
 	QVBoxLayout *softwareLayout = new QVBoxLayout(m_softwarePane);
 	softwareLayout->setContentsMargins(0, 0, 0, 0);
-	softwareLayout->addWidget(m_softwareSearch);
+	QHBoxLayout *softwareBar = new QHBoxLayout;
+	softwareBar->addWidget(m_softwareSearch, 1);
+	softwareBar->addWidget(m_btnSupported);
+	softwareBar->addWidget(m_btnPartial);
+	softwareBar->addWidget(m_btnUnsupported);
+	softwareBar->addWidget(m_btnSwAvailable);
+	softwareBar->addWidget(m_btnSwUnavailable);
+	softwareLayout->addLayout(softwareBar);
 	softwareLayout->addWidget(m_softwareView);
 
 	// --- folder tree ---
@@ -234,8 +334,31 @@ void MainWindow::onStatusFilterChanged()
 		flags |= StatusWorking;
 	if (m_btnNotWorking->isChecked())
 		flags |= StatusNotWorking;
+	if (m_btnAvailable->isChecked())
+		flags |= StatusAvailable;
+	if (m_btnUnavailable->isChecked())
+		flags |= StatusUnavailable;
 	m_proxy->setStatusFilter(flags);
 	updateStatusCount();
+}
+
+void MainWindow::onSoftwareFilterChanged()
+{
+	int support = 0;
+	if (m_btnSupported->isChecked())
+		support |= SwSupported;
+	if (m_btnPartial->isChecked())
+		support |= SwPartial;
+	if (m_btnUnsupported->isChecked())
+		support |= SwUnsupported;
+	m_softwareProxy->setSupportFilter(support);
+
+	int avail = 0;
+	if (m_btnSwAvailable->isChecked())
+		avail |= SwAvailable;
+	if (m_btnSwUnavailable->isChecked())
+		avail |= SwUnavailable;
+	m_softwareProxy->setAvailabilityFilter(avail);
 }
 
 void MainWindow::onSystemSelectionChanged()
@@ -252,20 +375,32 @@ void MainWindow::refreshSoftware()
 	QString const system = selectedSystem();
 	if (system.isEmpty())
 	{
+		m_softwareLoader->cancel();
 		m_softwareModel->setEntries({});
 		setSoftwarePaneVisible(false);
 		return;
 	}
 
-	// Synchronous, but only fired once selection settles (debounced).  A
-	// future optimisation could move this to a worker thread.
-	auto entries = qtui_enumerate_software(system.toStdString());
-	bool const hasSoftware = !entries.empty();
+	// Enumerate + audit on a worker thread; results arrive in onSoftwareLoaded.
+	m_softwareLoader->load(system);
+}
 
-	m_softwareModel->setEntries(std::move(entries));
+void MainWindow::onSoftwareLoaded(const std::vector<qtui_software_entry> &entries)
+{
+	bool const hasSoftware = !entries.empty();
+	m_softwareModel->setEntries(entries);
 	if (hasSoftware)
+	{
 		m_softwareSearch->clear();   // start fresh for the new system
+		statusBar()->showMessage(tr("Checking software availability…"));
+	}
 	setSoftwarePaneVisible(hasSoftware);
+}
+
+void MainWindow::onSoftwareAvailabilityReady(const QVector<int> &availability)
+{
+	m_softwareModel->setAvailabilities(availability);
+	updateStatusCount();
 }
 
 QString MainWindow::selectedSystem() const

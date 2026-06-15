@@ -10,15 +10,18 @@
 
 #pragma once
 
+#include "emulator.h"        // for qtui_software_entry (moc'd slot signature)
 #include "gamelistproxy.h"   // for FolderFilter (used by a moc'd slot signature)
 
+#include <QtCore/QVector>
 #include <QtWidgets/QMainWindow>
 
 #include <functional>
+#include <vector>
 
 class QLineEdit;
+class QProgressBar;
 class QPushButton;
-class QSortFilterProxyModel;
 class QSplitter;
 class QTableView;
 class QTimer;
@@ -26,9 +29,12 @@ class QWidget;
 
 namespace osd::qtui {
 
+class AuditManager;
 class FolderTree;
 class GameListModel;
+class SoftwareLoader;
 class SoftwareModel;
+class SoftwareProxy;
 
 //============================================================
 //  The main MAMEUI browser window.
@@ -48,8 +54,11 @@ private slots:
 	void onFolderSelected(const FolderFilter &filter);
 	void onSearchTextChanged(const QString &text);
 	void onStatusFilterChanged();
+	void onSoftwareFilterChanged();
 	void onSystemSelectionChanged();
 	void refreshSoftware();
+	void onSoftwareLoaded(const std::vector<qtui_software_entry> &entries);
+	void onSoftwareAvailabilityReady(const QVector<int> &availability);
 
 private:
 	void createMenus();
@@ -68,7 +77,7 @@ private:
 	QTableView *m_view = nullptr;
 	FolderTree *m_folders = nullptr;
 	SoftwareModel *m_softwareModel = nullptr;
-	QSortFilterProxyModel *m_softwareProxy = nullptr;
+	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
 	QSplitter *m_splitter = nullptr;
 	QWidget *m_softwarePane = nullptr;
@@ -76,8 +85,20 @@ private:
 	QLineEdit *m_softwareSearch = nullptr;
 	QPushButton *m_btnWorking = nullptr;
 	QPushButton *m_btnNotWorking = nullptr;
+	QPushButton *m_btnAvailable = nullptr;
+	QPushButton *m_btnUnavailable = nullptr;
+	QPushButton *m_btnSupported = nullptr;
+	QPushButton *m_btnPartial = nullptr;
+	QPushButton *m_btnUnsupported = nullptr;
+	QPushButton *m_btnSwAvailable = nullptr;
+	QPushButton *m_btnSwUnavailable = nullptr;
 	QTimer *m_softwareTimer = nullptr;
 	QAction *m_playAct = nullptr;
+	QAction *m_auditAct = nullptr;
+	AuditManager *m_audit = nullptr;
+	SoftwareLoader *m_softwareLoader = nullptr;
+	QProgressBar *m_progressBar = nullptr;
+	QPushButton *m_cancelAuditButton = nullptr;
 };
 
 } // namespace osd::qtui

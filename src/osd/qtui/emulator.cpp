@@ -22,6 +22,7 @@
 #include "emuopts.h"
 #include "main.h"
 #include "mameopts.h"
+#include "audit.h"
 
 #include "drivenum.h"
 #include "softlist_dev.h"
@@ -29,6 +30,7 @@
 
 #include "corestr.h"
 
+#include <mutex>
 #include <sstream>
 
 #include "osdepend.h"
@@ -63,6 +65,41 @@
 #if defined(SDLMAME_UNIX) || defined(SDLMAME_WIN32)
 int sdl_entered_debugger;
 #endif
+
+
+//============================================================
+//  Core serialisation
+//
+//  Building machine configurations (software enumeration, ROM auditing) is
+//  not safe to do from two threads at once, and it mutates the process-wide
+//  locale.  This mutex guards every such operation so the background auditor
+//  and the on-selection software enumeration never overlap.
+//============================================================
+
+namespace {
+
+std::mutex g_core_mutex;
+
+// RAII helper: hold the core mutex and force the "C" locale (which the MAME
+// parsers require) for the duration, restoring it on scope exit.
+class core_guard
+{
+public:
+	core_guard() : m_lock(g_core_mutex), m_saved(std::setlocale(LC_ALL, nullptr))
+	{
+		std::setlocale(LC_ALL, "C");
+	}
+	~core_guard()
+	{
+		std::setlocale(LC_ALL, m_saved.c_str());
+	}
+
+private:
+	std::lock_guard<std::mutex> m_lock;
+	std::string m_saved;
+};
+
+} // anonymous namespace
 
 
 void qtui_init_process()
@@ -138,19 +175,24 @@ int qtui_run_software(const std::string &system, const std::string &software)
 }
 
 
-std::vector<qtui_software_entry> qtui_enumerate_software(const std::string &system)
+void qtui_load_software(
+		const std::string &system,
+		const std::atomic<bool> *cancel,
+		const std::function<void (const std::vector<qtui_software_entry> &)> &on_entries,
+		const std::function<void (int, int)> &on_audited)
 {
-	std::vector<qtui_software_entry> out;
-
 	int const index = driver_list::find(system.c_str());
 	if (index < 0)
-		return out;
+	{
+		on_entries({});
+		return;
+	}
 
-	// MAME parsing assumes the "C" locale; QApplication switches the process
-	// to the user's (UTF-8) locale, which breaks ini/XML parsing.  See
-	// qtui_run_args() for the full explanation.
-	std::string const saved_locale = std::setlocale(LC_ALL, nullptr);
-	std::setlocale(LC_ALL, "C");
+	auto cancelled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
+
+	// Serialise with the auditor and force the "C" locale (see qtui_run_args()
+	// for why the locale matters).
+	core_guard guard;
 
 	try
 	{
@@ -162,12 +204,15 @@ std::vector<qtui_software_entry> qtui_enumerate_software(const std::string &syst
 		std::ostringstream errors;
 		mame_options::parse_standard_inis(options, errors, &driver);
 
-		// Build the machine configuration so we can discover its software
-		// list devices.
+		// Build the machine configuration once; both phases walk it in the
+		// same order (get_info() is parsed and cached on first access).
 		driver_enumerator drivlist(options, driver);
 		drivlist.next();
+		device_t &root = drivlist.config()->root_device();
 
-		for (software_list_device &swlistdev : software_list_device_enumerator(drivlist.config()->root_device()))
+		// Phase 1: enumerate entries (fast) and hand them over immediately.
+		std::vector<qtui_software_entry> entries;
+		for (software_list_device &swlistdev : software_list_device_enumerator(root))
 		{
 			for (const software_info &info : swlistdev.get_info())
 			{
@@ -178,17 +223,105 @@ std::vector<qtui_software_entry> qtui_enumerate_software(const std::string &syst
 				entry.year = info.year();
 				entry.publisher = info.publisher();
 				entry.supported = int(info.supported());
-				out.push_back(std::move(entry));
+				entry.availability = QTUI_AVAIL_UNKNOWN;
+				entries.push_back(std::move(entry));
+			}
+		}
+		on_entries(entries);
+
+		// Phase 2: fast-audit each entry's ROMs (slow).
+		media_auditor auditor(drivlist);
+		int i = 0;
+		for (software_list_device &swlistdev : software_list_device_enumerator(root))
+		{
+			for (const software_info &info : swlistdev.get_info())
+			{
+				if (cancelled())
+					return;
+
+				int availability;
+				switch (auditor.audit_software(swlistdev, info, AUDIT_VALIDATE_FAST))
+				{
+				case media_auditor::CORRECT:
+				case media_auditor::BEST_AVAILABLE:
+				case media_auditor::NONE_NEEDED:
+					availability = QTUI_AVAIL_AVAILABLE;
+					break;
+				default:
+					availability = QTUI_AVAIL_UNAVAILABLE;
+					break;
+				}
+				on_audited(i++, availability);
 			}
 		}
 	}
 	catch (...)
 	{
 		// A malformed software list or machine configuration should not take
-		// down the front-end; just report no software.
-		out.clear();
+		// down the front-end.
+	}
+}
+
+
+int qtui_system_count()
+{
+	return int(driver_list::total());
+}
+
+
+void qtui_audit_all(
+		const std::function<void (const std::string &, int)> &progress,
+		const std::atomic<bool> &cancel)
+{
+	// One options set / enumerator for the whole sweep; the enumerator caches
+	// machine configurations as it advances.
+	sdl_options options;
+	{
+		core_guard guard;
+		std::ostringstream errors;
+		mame_options::parse_standard_inis(options, errors);
 	}
 
-	std::setlocale(LC_ALL, saved_locale.c_str());
-	return out;
+	driver_enumerator drivlist(options);
+	media_auditor auditor(drivlist);
+
+	while (!cancel.load(std::memory_order_relaxed))
+	{
+		std::string name;
+		int status = QTUI_AVAIL_UNKNOWN;
+
+		{
+			// Hold the core only for the per-driver work, releasing between
+			// systems so on-demand software enumeration stays responsive.
+			core_guard guard;
+			if (!drivlist.next())
+				break;
+
+			name = drivlist.driver().name;
+			try
+			{
+				switch (auditor.audit_media(AUDIT_VALIDATE_FAST))
+				{
+				case media_auditor::CORRECT:
+				case media_auditor::BEST_AVAILABLE:
+				case media_auditor::NONE_NEEDED:
+					status = QTUI_AVAIL_AVAILABLE;
+					break;
+				case media_auditor::INCORRECT:
+				case media_auditor::NOTFOUND:
+				default:
+					status = QTUI_AVAIL_UNAVAILABLE;
+					break;
+				}
+			}
+			catch (...)
+			{
+				status = QTUI_AVAIL_UNKNOWN;
+			}
+		}
+
+		// Report every system (even UNKNOWN) so progress can reach the total;
+		// the caller ignores UNKNOWN for filtering purposes.
+		progress(name, status);
+	}
 }

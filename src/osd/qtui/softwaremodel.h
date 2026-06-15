@@ -16,6 +16,7 @@
 #include "emulator.h"
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QVector>
 
 #include <vector>
 
@@ -37,9 +38,21 @@ public:
 		COLUMN_COUNT
 	};
 
+	enum Role
+	{
+		// support level: 0 = supported, 1 = partial, 2 = unsupported
+		SupportedRole = Qt::UserRole + 1,
+		// ROM availability: matches qtui_availability (0/1/2)
+		AvailabilityRole
+	};
+
 	explicit SoftwareModel(QObject *parent = nullptr);
 
 	void setEntries(std::vector<qtui_software_entry> entries);
+
+	// Apply availability results (qtui_availability) indexed to match the
+	// current entries, from the background audit phase.
+	void setAvailabilities(const QVector<int> &availability);
 
 	// Software short name for a row, e.g. "smb", or empty if out of range.
 	QString shortNameForRow(int row) const;

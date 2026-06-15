@@ -86,7 +86,18 @@ bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 			return false;
 	}
 
-	// (Availability group is AND'd in here once the audit phase wires it up.)
+	// Availability modifier (AND'd with the emulation group).  OR within the
+	// group; Unknown availability matches neither toggle.
+	int const availGroup = m_status & (StatusAvailable | StatusUnavailable);
+	if (availGroup)
+	{
+		int const avail = index.data(GameListModel::AvailabilityRole).toInt();
+		bool const accept =
+				((avail == GameListModel::Available) && (availGroup & StatusAvailable)) ||
+				((avail == GameListModel::Unavailable) && (availGroup & StatusUnavailable));
+		if (!accept)
+			return false;
+	}
 
 	// Free-text search across description, short name and manufacturer.
 	if (!m_search.isEmpty())

@@ -8,6 +8,8 @@
 
 #include "softwaremodel.h"
 
+#include <QtGui/QBrush>
+
 
 namespace osd::qtui {
 
@@ -21,6 +23,16 @@ void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
 	beginResetModel();
 	m_entries = std::move(entries);
 	endResetModel();
+}
+
+void SoftwareModel::setAvailabilities(const QVector<int> &availability)
+{
+	int const count = qMin(int(m_entries.size()), int(availability.size()));
+	for (int i = 0; i < count; i++)
+		m_entries[i].availability = availability[i];
+
+	if (count > 0)
+		emit dataChanged(index(0, 0), index(count - 1, COLUMN_COUNT - 1));
 }
 
 QString SoftwareModel::shortNameForRow(int row) const
@@ -50,6 +62,20 @@ QVariant SoftwareModel::data(const QModelIndex &index, int role) const
 		return QVariant();
 
 	const qtui_software_entry &entry = m_entries[index.row()];
+
+	if (role == SupportedRole)
+		return entry.supported;
+
+	if (role == AvailabilityRole)
+		return entry.availability;
+
+	if (role == Qt::ForegroundRole)
+	{
+		// Grey out software whose ROMs are missing (matches the system list).
+		if (entry.availability == 2 /* QTUI_AVAIL_UNAVAILABLE */)
+			return QBrush(Qt::gray);
+		return QVariant();
+	}
 
 	if (role == Qt::DisplayRole || role == Qt::ToolTipRole)
 	{

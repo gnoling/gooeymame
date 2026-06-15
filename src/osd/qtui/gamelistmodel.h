@@ -15,8 +15,10 @@
 #pragma once
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QHash>
 #include <QtCore/QStringList>
 
+#include <cstdint>
 #include <vector>
 
 
@@ -56,7 +58,17 @@ public:
 		// normalised manufacturer name (parenthetical notes stripped)
 		ManufacturerRole,
 		// release year as a QString
-		YearRole
+		YearRole,
+		// ROM availability (one of GameListModel::Availability)
+		AvailabilityRole
+	};
+
+	// ROM availability of a system, as determined by the auditor.
+	enum Availability
+	{
+		AvailabilityUnknown = 0,
+		Available = 1,
+		Unavailable = 2
 	};
 
 	explicit GameListModel(QObject *parent = nullptr);
@@ -74,6 +86,10 @@ public:
 	QStringList manufacturers() const;
 	QStringList years() const;
 
+	// Apply a batch of availability results keyed by system short name
+	// (from the auditor or the cache).  Unknown names are ignored.
+	void applyAvailabilityBatch(const QVector<QPair<QString, int>> &results);
+
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
 
@@ -83,6 +99,12 @@ private:
 	// driver_list indices of the rows we expose (the internal "___empty"
 	// dummy driver and BIOS roots are filtered out at build time).
 	std::vector<int> m_rows;
+
+	// Per-row ROM availability (Availability), default AvailabilityUnknown.
+	std::vector<std::int8_t> m_availability;
+
+	// Short name -> row, for applying availability results by name.
+	QHash<QString, int> m_nameToRow;
 };
 
 } // namespace osd::qtui
