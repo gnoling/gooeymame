@@ -29,7 +29,10 @@
 #include "softlist.h"
 
 #include "corestr.h"
+#include "unzip.h"
 
+#include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -384,6 +387,71 @@ bool qtui_write_options(
 	if (out_path)
 		*out_path = path;
 	return ok;
+}
+
+
+std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::string &entry)
+{
+	std::vector<std::uint8_t> out;
+	if (path.empty() || entry.empty())
+		return out;
+
+	std::error_code ec;
+	if (std::filesystem::is_directory(path, ec))
+	{
+		// Plain directory: read <path>/<entry> directly.
+		std::filesystem::path const file = std::filesystem::path(path) / entry;
+		std::ifstream in(file, std::ios::binary | std::ios::ate);
+		if (in.is_open())
+		{
+			std::streamsize const size = in.tellg();
+			if (size > 0)
+			{
+				out.resize(std::size_t(size));
+				in.seekg(0);
+				in.read(reinterpret_cast<char *>(out.data()), size);
+				if (!in)
+					out.clear();
+			}
+		}
+		return out;
+	}
+
+	// Otherwise treat the path as a zip/7z archive (MAME caches open handles,
+	// so repeated lookups into the same big archive are cheap).
+	util::archive_file::ptr archive;
+	std::error_condition err;
+	std::string const lower = path.size() >= 3 ? path.substr(path.size() - 3) : std::string();
+	if (lower == ".7z" || lower == ".7Z")
+		err = util::archive_file::open_7z(path, archive);
+	else
+		err = util::archive_file::open_zip(path, archive);
+	if (err || !archive)
+		return out;
+
+	if (archive->search(entry, false) < 0)
+		return out;
+
+	std::uint64_t const length = archive->current_uncompressed_length();
+	if (length == 0 || length > (256u << 20))   // sanity cap at 256 MiB
+		return out;
+
+	out.resize(std::size_t(length));
+	if (archive->decompress(out.data(), out.size()))
+		out.clear();
+	return out;
+}
+
+
+std::string qtui_parent_of(const std::string &system)
+{
+	int const index = driver_list::find(system.c_str());
+	if (index < 0)
+		return {};
+	const char *parent = driver_list::driver(index).parent;
+	if (parent && parent[0] && std::strcmp(parent, "0") != 0)
+		return parent;
+	return {};
 }
 
 

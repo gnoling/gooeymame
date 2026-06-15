@@ -440,6 +440,10 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/optionsdialog.h",
 		MAME_DIR .. "src/osd/qtui/frontendpaths.cpp",
 		MAME_DIR .. "src/osd/qtui/frontendpaths.h",
+		MAME_DIR .. "src/osd/qtui/artworkpanel.cpp",
+		MAME_DIR .. "src/osd/qtui/artworkpanel.h",
+		MAME_DIR .. "src/osd/qtui/artloader.cpp",
+		MAME_DIR .. "src/osd/qtui/artloader.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",
@@ -449,6 +453,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/softwareloader.moc.cpp",
 		GEN_DIR .. "osd/qtui/auditmanager.moc.cpp",
 		GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp",
+		GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp",
+		GEN_DIR .. "osd/qtui/artloader.moc.cpp",
 	}
 
 	local MOC = qtui_find_moc()
@@ -462,6 +468,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		{ MAME_DIR .. "src/osd/qtui/softwareloader.h", GEN_DIR .. "osd/qtui/softwareloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/auditmanager.h", GEN_DIR .. "osd/qtui/auditmanager.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/optionsdialog.h", GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/artworkpanel.h", GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/artloader.h", GEN_DIR .. "osd/qtui/artloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 	}
 
 

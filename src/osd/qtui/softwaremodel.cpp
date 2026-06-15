@@ -42,6 +42,13 @@ QString SoftwareModel::shortNameForRow(int row) const
 	return QString::fromStdString(m_entries[row].shortname);
 }
 
+QString SoftwareModel::listForRow(int row) const
+{
+	if (row < 0 || row >= int(m_entries.size()))
+		return QString();
+	return QString::fromStdString(m_entries[row].list);
+}
+
 int SoftwareModel::rowCount(const QModelIndex &parent) const
 {
 	if (parent.isValid())

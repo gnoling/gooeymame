@@ -57,6 +57,9 @@ public:
 	// Software short name for a row, e.g. "smb", or empty if out of range.
 	QString shortNameForRow(int row) const;
 
+	// Software list name for a row, e.g. "nes", or empty if out of range.
+	QString listForRow(int row) const;
+
 	int rowCount(const QModelIndex &parent = QModelIndex()) const override;
 	int columnCount(const QModelIndex &parent = QModelIndex()) const override;
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;

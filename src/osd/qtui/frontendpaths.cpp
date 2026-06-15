@@ -18,7 +18,10 @@ namespace osd::qtui {
 // snapshot_directory / artpath and are edited on the options tabs.)
 const FrontendFolder FRONTEND_FOLDERS[] =
 {
+	{ "snap",       "Snapshots",            false },
+	{ "snap_sl",    "Software snapshots",   false },
 	{ "titles",     "Title screens",        false },
+	{ "titles_sl",  "Software titles",      false },
 	{ "cabinets",   "Cabinets",             false },
 	{ "cpanel",     "Control panels",       false },
 	{ "marquees",   "Marquees",             false },

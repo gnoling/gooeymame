@@ -16,6 +16,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <utility>
@@ -117,6 +118,20 @@ std::vector<qtui_option_group> qtui_read_options();
 bool qtui_write_options(
 		const std::vector<std::pair<std::string, std::string>> &changes,
 		std::string *out_path);
+
+
+//============================================================
+//  Artwork / asset loading (MAME EXTRAs)
+//============================================================
+
+// Load an asset (e.g. a PNG) named `entry` from `path`, which may be either a
+// directory or a .zip/.7z archive.  Returns the raw file bytes, or an empty
+// vector if the path or entry does not exist.
+std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::string &entry);
+
+// Short name of a system's parent/clone source (for artwork fallback), or an
+// empty string if it has none.
+std::string qtui_parent_of(const std::string &system);
 
 // ROM availability of a system.
 enum qtui_availability

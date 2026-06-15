@@ -8,6 +8,7 @@
 
 #include "mainwindow.h"
 
+#include "artworkpanel.h"
 #include "auditmanager.h"
 #include "emulator.h"
 #include "foldertree.h"
@@ -149,6 +150,7 @@ void MainWindow::saveSettings() const
 	settings.beginGroup(QStringLiteral("mainwindow"));
 	settings.setValue(QStringLiteral("geometry"), saveGeometry());
 	settings.setValue(QStringLiteral("splitter"), m_splitter->saveState());
+	settings.setValue(QStringLiteral("rightSplitter"), m_rightSplitter->saveState());
 	settings.setValue(QStringLiteral("systemHeader"), m_view->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("softwareHeader"), m_softwareView->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("selected"), selectedSystem());
@@ -167,6 +169,10 @@ void MainWindow::restoreSettings()
 	QByteArray const splitterState = settings.value(QStringLiteral("splitter")).toByteArray();
 	if (!splitterState.isEmpty())
 		m_splitter->restoreState(splitterState);
+
+	QByteArray const rightState = settings.value(QStringLiteral("rightSplitter")).toByteArray();
+	if (!rightState.isEmpty())
+		m_rightSplitter->restoreState(rightState);
 
 	QByteArray const systemHeader = settings.value(QStringLiteral("systemHeader")).toByteArray();
 	if (!systemHeader.isEmpty())
@@ -313,6 +319,8 @@ void MainWindow::createWidgets()
 	m_softwareView->horizontalHeader()->setStretchLastSection(false);
 	m_softwareView->horizontalHeader()->setSectionResizeMode(SoftwareModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
 	connect(m_softwareView, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	connect(m_softwareView->selectionModel(), &QItemSelectionModel::selectionChanged,
+			this, &MainWindow::onSoftwareSelectionChanged);
 
 	m_softwareSearch = new QLineEdit;
 	m_softwareSearch->setClearButtonEnabled(true);
@@ -350,16 +358,26 @@ void MainWindow::createWidgets()
 	softwareLayout->addLayout(softwareBar);
 	softwareLayout->addWidget(m_softwareView);
 
+	// --- artwork panel ---
+	m_artwork = new ArtworkPanel;
+
 	// --- folder tree ---
 	m_folders = new FolderTree(m_model);
 	m_folders->setMaximumWidth(260);
 	connect(m_folders, &FolderTree::folderSelected, this, &MainWindow::onFolderSelected);
 
-	// --- layout: folders | systems | software ---
+	// Right side stacks the artwork (top) over the software pane (bottom).
+	m_rightSplitter = new QSplitter(Qt::Vertical);
+	m_rightSplitter->addWidget(m_artwork);
+	m_rightSplitter->addWidget(m_softwarePane);
+	m_rightSplitter->setStretchFactor(0, 2);
+	m_rightSplitter->setStretchFactor(1, 3);
+
+	// --- layout: folders | systems | (artwork / software) ---
 	m_splitter = new QSplitter(Qt::Horizontal, this);
 	m_splitter->addWidget(m_folders);
 	m_splitter->addWidget(systemPane);
-	m_splitter->addWidget(m_softwarePane);
+	m_splitter->addWidget(m_rightSplitter);
 	m_splitter->setStretchFactor(0, 0);
 	m_splitter->setStretchFactor(1, 3);
 	m_splitter->setStretchFactor(2, 2);
@@ -377,19 +395,9 @@ void MainWindow::createWidgets()
 
 void MainWindow::setSoftwarePaneVisible(bool visible)
 {
-	if (m_softwarePane->isVisible() == visible)
-		return;
-
+	// The software pane lives in the right (vertical) splitter beneath the
+	// artwork; showing/hiding it lets the splitter redistribute the space.
 	m_softwarePane->setVisible(visible);
-
-	// Give the newly-shown software pane a reasonable share of the width;
-	// the stretchable description columns refit to the new pane widths.
-	if (visible)
-	{
-		int const folderWidth = m_folders->width();
-		int const rest = qMax(400, m_splitter->width() - folderWidth);
-		m_splitter->setSizes({ folderWidth, (rest * 3) / 5, (rest * 2) / 5 });
-	}
 }
 
 void MainWindow::onFolderSelected(const FolderFilter &filter)
@@ -440,11 +448,34 @@ void MainWindow::onSoftwareFilterChanged()
 
 void MainWindow::onSystemSelectionChanged()
 {
-	m_playAct->setEnabled(!selectedSystem().isEmpty());
+	QString const system = selectedSystem();
+	m_playAct->setEnabled(!system.isEmpty());
+
+	// Artwork loads quickly (cached zip lookup); update it immediately.
+	m_artwork->setSystem(system);
+
 	// (Re)start the debounce; the software list refreshes once selection
 	// settles.
 	m_softwareModel->setEntries({});
 	m_softwareTimer->start();
+}
+
+void MainWindow::onSoftwareSelectionChanged()
+{
+	QModelIndex const index = m_softwareView->selectionModel()->currentIndex();
+	if (index.isValid())
+	{
+		int const sourceRow = m_softwareProxy->mapToSource(index).row();
+		QString const list = m_softwareModel->listForRow(sourceRow);
+		QString const software = m_softwareModel->shortNameForRow(sourceRow);
+		if (!list.isEmpty() && !software.isEmpty())
+		{
+			m_artwork->setSoftware(list, software);
+			return;
+		}
+	}
+	// Nothing selected: fall back to the system's artwork.
+	m_artwork->setSystem(selectedSystem());
 }
 
 void MainWindow::refreshSoftware()

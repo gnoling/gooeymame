@@ -30,6 +30,7 @@ class QWidget;
 
 namespace osd::qtui {
 
+class ArtworkPanel;
 class AuditManager;
 class FolderTree;
 class GameListModel;
@@ -61,6 +62,7 @@ private slots:
 	void onStatusFilterChanged();
 	void onSoftwareFilterChanged();
 	void onSystemSelectionChanged();
+	void onSoftwareSelectionChanged();
 	void refreshSoftware();
 	void onSoftwareLoaded(const std::vector<qtui_software_entry> &entries);
 	void onSoftwareAvailabilityReady(const QVector<int> &availability);
@@ -87,6 +89,8 @@ private:
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
 	QSplitter *m_splitter = nullptr;
+	QSplitter *m_rightSplitter = nullptr;
+	ArtworkPanel *m_artwork = nullptr;
 	QWidget *m_softwarePane = nullptr;
 	QLineEdit *m_search = nullptr;
 	QLineEdit *m_softwareSearch = nullptr;
