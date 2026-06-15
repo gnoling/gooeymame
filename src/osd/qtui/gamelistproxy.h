@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <QtCore/QSet>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QString>
 
@@ -34,11 +35,13 @@ struct FolderFilter
 		Arcade,         // arcade machines
 		Console,        // consoles / computers / other (non-arcade)
 		Manufacturer,   // a specific manufacturer (value)
-		Year            // a specific release year (value)
+		Year,           // a specific release year (value)
+		Category        // membership in `members` (from a .ini category)
 	};
 
 	Kind kind = All;
-	QString value;      // used by Manufacturer / Year
+	QString value;            // used by Manufacturer / Year
+	QSet<QString> members;    // used by Category (set of short names)
 };
 
 

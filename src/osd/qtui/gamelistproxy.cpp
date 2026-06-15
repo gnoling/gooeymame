@@ -72,6 +72,17 @@ bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 		if (index.data(GameListModel::YearRole).toString() != m_filter.value)
 			return false;
 		break;
+	case FolderFilter::Category:
+	{
+		// A clone inherits its parent's category if not listed itself.
+		if (!m_filter.members.contains(index.data(GameListModel::ShortNameRole).toString()))
+		{
+			QString const parent = index.data(GameListModel::ParentNameRole).toString();
+			if (parent.isEmpty() || !m_filter.members.contains(parent))
+				return false;
+		}
+		break;
+	}
 	}
 
 	// Emulation-status modifier (orthogonal to the folder).  OR within the

@@ -19,6 +19,7 @@
 #include <functional>
 #include <vector>
 
+class QActionGroup;
 class QCloseEvent;
 class QLineEdit;
 class QProgressBar;
@@ -72,6 +73,7 @@ private:
 	void createWidgets();
 	void updateStatusCount();
 	void setSoftwarePaneVisible(bool visible);
+	void applyIconSize(int size);   // icon size + matching row height
 	void saveSettings() const;
 	void restoreSettings();
 
@@ -106,6 +108,7 @@ private:
 	QTimer *m_softwareTimer = nullptr;
 	QAction *m_playAct = nullptr;
 	QAction *m_auditAct = nullptr;
+	QActionGroup *m_iconSizeGroup = nullptr;
 	AuditManager *m_audit = nullptr;
 	SoftwareLoader *m_softwareLoader = nullptr;
 	QProgressBar *m_progressBar = nullptr;

@@ -31,11 +31,15 @@
 #include "corestr.h"
 #include "unzip.h"
 
+#include <zlib.h>
+
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 #include "osdepend.h"
 #include "strconv.h"
@@ -390,11 +394,158 @@ bool qtui_write_options(
 }
 
 
+namespace {
+
+// A minimal index over a *standard* (non-ZIP64) zip: the central directory is
+// parsed once into a name -> entry map for O(1) lookups, with the file kept
+// open.  This sidesteps the linear directory scan in util::archive_file, which
+// is far too slow for per-row icon lookups in a 40k-entry archive.  ZIP64 and
+// 7z archives fall back to util::archive_file.
+
+inline std::uint16_t rd16(const unsigned char *p) { return std::uint16_t(p[0] | (p[1] << 8)); }
+inline std::uint32_t rd32(const unsigned char *p)
+{ return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) | (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24); }
+
+struct zip_entry { std::uint32_t lho, csize, usize; std::uint16_t method; };
+
+struct zip_index
+{
+	std::ifstream file;
+	std::unordered_map<std::string, zip_entry> entries;
+	bool valid = false;
+};
+
+std::unordered_map<std::string, std::shared_ptr<zip_index>> g_zip_cache;   // guarded by s_asset_mutex
+
+std::shared_ptr<zip_index> get_zip_index(const std::string &path)
+{
+	auto cached = g_zip_cache.find(path);
+	if (cached != g_zip_cache.end())
+		return cached->second;
+
+	auto idx = std::make_shared<zip_index>();
+	g_zip_cache.emplace(path, idx);   // cache the result (even if invalid) so we don't retry
+
+	idx->file.open(path, std::ios::binary);
+	if (!idx->file.is_open())
+		return idx;
+
+	idx->file.seekg(0, std::ios::end);
+	std::streamoff const size = idx->file.tellg();
+	std::streamoff const window = std::min<std::streamoff>(size, 65557);   // max EOCD + comment
+	std::vector<unsigned char> tail(static_cast<std::size_t>(window));
+	idx->file.seekg(size - window);
+	idx->file.read(reinterpret_cast<char *>(tail.data()), window);
+	if (!idx->file)
+		return idx;
+
+	std::streamoff eocd = -1;
+	for (std::streamoff i = window - 22; i >= 0; --i)
+		if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 0x05 && tail[i + 3] == 0x06)
+			{ eocd = i; break; }
+	if (eocd < 0)
+		return idx;
+
+	const unsigned char *e = tail.data() + eocd;
+	std::uint16_t const total = rd16(e + 10);
+	std::uint32_t const cdSize = rd32(e + 12);
+	std::uint32_t const cdOffset = rd32(e + 16);
+	if (total == 0xffff || cdSize == 0xffffffffu || cdOffset == 0xffffffffu)
+		return idx;   // ZIP64 - leave invalid, caller falls back
+
+	std::vector<unsigned char> cd(cdSize);
+	idx->file.clear();
+	idx->file.seekg(cdOffset);
+	idx->file.read(reinterpret_cast<char *>(cd.data()), cdSize);
+	if (!idx->file)
+		return idx;
+
+	std::size_t pos = 0;
+	for (std::uint16_t i = 0; i < total; ++i)
+	{
+		if (pos + 46 > cd.size())
+			break;
+		const unsigned char *h = cd.data() + pos;
+		if (!(h[0] == 0x50 && h[1] == 0x4b && h[2] == 0x01 && h[3] == 0x02))
+			break;
+		std::uint16_t const namelen = rd16(h + 28);
+		std::uint16_t const extralen = rd16(h + 30);
+		std::uint16_t const commentlen = rd16(h + 32);
+		if (pos + 46 + namelen > cd.size())
+			break;
+		std::string name(reinterpret_cast<const char *>(h + 46), namelen);
+		idx->entries.emplace(std::move(name),
+				zip_entry{ rd32(h + 42), rd32(h + 20), rd32(h + 24), rd16(h + 10) });
+		pos += std::size_t(46) + namelen + extralen + commentlen;
+	}
+	idx->valid = true;
+	return idx;
+}
+
+std::vector<std::uint8_t> zip_extract(zip_index &idx, const std::string &entry)
+{
+	std::vector<std::uint8_t> out;
+	auto it = idx.entries.find(entry);
+	if (it == idx.entries.end())
+		return out;
+	const zip_entry &z = it->second;
+	if (z.usize == 0 || z.usize > (256u << 20))
+		return out;
+
+	unsigned char lh[30];
+	idx.file.clear();
+	idx.file.seekg(z.lho);
+	idx.file.read(reinterpret_cast<char *>(lh), 30);
+	if (!idx.file || !(lh[0] == 0x50 && lh[1] == 0x4b && lh[2] == 0x03 && lh[3] == 0x04))
+		return out;
+	std::streamoff const dataoff = std::streamoff(z.lho) + 30 + rd16(lh + 26) + rd16(lh + 28);
+
+	std::vector<unsigned char> comp(z.csize);
+	idx.file.clear();
+	idx.file.seekg(dataoff);
+	idx.file.read(reinterpret_cast<char *>(comp.data()), z.csize);
+	if (!idx.file)
+		return out;
+
+	if (z.method == 0)   // stored
+	{
+		out.assign(comp.begin(), comp.end());
+		return out;
+	}
+	if (z.method != 8)   // only deflate supported here
+		return out;
+
+	out.resize(z.usize);
+	z_stream strm{};
+	if (inflateInit2(&strm, -MAX_WBITS) != Z_OK)
+	{
+		out.clear();
+		return out;
+	}
+	strm.next_in = comp.data();
+	strm.avail_in = uInt(z.csize);
+	strm.next_out = out.data();
+	strm.avail_out = uInt(z.usize);
+	int const r = inflate(&strm, Z_FINISH);
+	inflateEnd(&strm);
+	if (r != Z_STREAM_END)
+		out.clear();
+	return out;
+}
+
+} // anonymous namespace
+
+
 std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::string &entry)
 {
 	std::vector<std::uint8_t> out;
 	if (path.empty() || entry.empty())
 		return out;
+
+	// Serialise asset reads (artwork + icon worker threads) so concurrent
+	// access to MAME's archive cache is safe.
+	static std::mutex s_asset_mutex;
+	std::lock_guard<std::mutex> lk(s_asset_mutex);
 
 	std::error_code ec;
 	if (std::filesystem::is_directory(path, ec))
@@ -417,15 +568,23 @@ std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::st
 		return out;
 	}
 
-	// Otherwise treat the path as a zip/7z archive (MAME caches open handles,
-	// so repeated lookups into the same big archive are cheap).
-	util::archive_file::ptr archive;
-	std::error_condition err;
 	std::string const lower = path.size() >= 3 ? path.substr(path.size() - 3) : std::string();
-	if (lower == ".7z" || lower == ".7Z")
-		err = util::archive_file::open_7z(path, archive);
-	else
-		err = util::archive_file::open_zip(path, archive);
+	bool const sevenZip = (lower == ".7z" || lower == ".7Z");
+
+	// Fast path: a standard zip is indexed once and read directly.
+	if (!sevenZip)
+	{
+		std::shared_ptr<zip_index> idx = get_zip_index(path);
+		if (idx->valid)
+			return zip_extract(*idx, entry);
+		// Not a standard zip (e.g. ZIP64) - fall back to util::archive_file.
+	}
+
+	// Fallback: util::archive_file (handles ZIP64 and 7z).
+	util::archive_file::ptr archive;
+	std::error_condition const err = sevenZip
+			? util::archive_file::open_7z(path, archive)
+			: util::archive_file::open_zip(path, archive);
 	if (err || !archive)
 		return out;
 

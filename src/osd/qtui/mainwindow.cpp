@@ -23,6 +23,7 @@
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
+#include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QHBoxLayout>
@@ -182,8 +183,15 @@ void MainWindow::restoreSettings()
 	if (!softwareHeader.isEmpty())
 		m_softwareView->horizontalHeader()->restoreState(softwareHeader);
 
+	int const iconSize = settings.value(QStringLiteral("iconSize"), 24).toInt();
 	QString const selected = settings.value(QStringLiteral("selected")).toString();
 	settings.endGroup();
+
+	// Apply the saved icon size and tick the matching menu entry.
+	applyIconSize(iconSize);
+	for (QAction *act : m_iconSizeGroup->actions())
+		if (act->data().toInt() == iconSize)
+			act->setChecked(true);
 
 	// Re-select the last system, if it is still visible under the current
 	// folder/filters.
@@ -218,6 +226,24 @@ void MainWindow::createMenus()
 	QAction *exitAct = fileMenu->addAction(tr("E&xit"));
 	exitAct->setShortcut(QKeySequence::Quit);
 	connect(exitAct, &QAction::triggered, this, &QWidget::close);
+
+	QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+	QMenu *iconMenu = viewMenu->addMenu(tr("&Icon Size"));
+	m_iconSizeGroup = new QActionGroup(this);
+	struct { const char *label; int size; } const iconSizes[] = {
+		{ "Small (16)", 16 }, { "Medium (24)", 24 }, { "Large (32)", 32 }, { "Extra Large (48)", 48 }
+	};
+	for (const auto &choice : iconSizes)
+	{
+		QAction *act = iconMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.size);
+		m_iconSizeGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, size = choice.size] {
+			applyIconSize(size);
+			QSettings().setValue(QStringLiteral("mainwindow/iconSize"), size);
+		});
+	}
 
 	QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
 	QAction *optionsAct = toolsMenu->addAction(tr("&Options…"));
@@ -391,6 +417,12 @@ void MainWindow::createWidgets()
 	m_softwareTimer->setSingleShot(true);
 	m_softwareTimer->setInterval(SOFTWARE_DEBOUNCE_MS);
 	connect(m_softwareTimer, &QTimer::timeout, this, &MainWindow::refreshSoftware);
+}
+
+void MainWindow::applyIconSize(int size)
+{
+	m_view->setIconSize(QSize(size, size));
+	m_view->verticalHeader()->setDefaultSectionSize(size + 6);
 }
 
 void MainWindow::setSoftwarePaneVisible(bool visible)

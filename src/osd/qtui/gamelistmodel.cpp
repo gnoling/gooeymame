@@ -12,10 +12,15 @@
 
 #include "drivenum.h"
 
+#include "frontendpaths.h"
+#include "iconloader.h"
+
 #include <QtCore/QSet>
 #include <QtGui/QBrush>
+#include <QtGui/QPixmap>
 
 #include <algorithm>
+#include <cstring>
 
 
 namespace osd::qtui {
@@ -44,6 +49,11 @@ GameListModel::GameListModel(QObject *parent) :
 	m_nameToRow.reserve(int(m_rows.size()));
 	for (int row = 0; row < int(m_rows.size()); row++)
 		m_nameToRow.insert(QString::fromLatin1(driver_list::driver(m_rows[row]).name), row);
+
+	// Row icons (icons.zip) are loaded lazily on a worker thread.
+	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
+	m_iconLoader = new IconLoader(this);
+	connect(m_iconLoader, &IconLoader::loaded, this, &GameListModel::onIconLoaded);
 }
 
 int GameListModel::rowCount(const QModelIndex &parent) const
@@ -70,6 +80,49 @@ int GameListModel::driverIndexForRow(int row) const
 const game_driver &GameListModel::driverForRow(int row) const
 {
 	return driver_list::driver(m_rows[row]);
+}
+
+QVariant GameListModel::iconForRow(int row) const
+{
+	if (m_iconsPath.isEmpty())
+		return QVariant();
+
+	auto it = m_iconCache.constFind(row);
+	if (it != m_iconCache.constEnd())
+		return it.value();
+
+	// Not cached yet: queue a one-time async load (system icon, parent
+	// fallback) and show nothing until it arrives.
+	if (!m_iconRequested.contains(row))
+	{
+		m_iconRequested.insert(row);
+		const game_driver &drv = driverForRow(row);
+		QStringList entries;
+		entries << QString::fromLatin1(drv.name) + QStringLiteral(".ico");
+		if (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
+			entries << QString::fromLatin1(drv.parent) + QStringLiteral(".ico");
+		m_iconLoader->request(row, m_iconsPath, entries);
+	}
+	return QVariant();
+}
+
+void GameListModel::onIconLoaded(int row, const QByteArray &bytes)
+{
+	QIcon icon;
+	if (!bytes.isEmpty())
+	{
+		QPixmap pixmap;
+		if (pixmap.loadFromData(bytes))
+			icon = QIcon(pixmap);
+	}
+
+	// Cache (even an empty icon) so we neither re-request nor re-decode.
+	m_iconCache.insert(row, icon);
+	if (!icon.isNull())
+	{
+		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
+		emit dataChanged(idx, idx, { Qt::DecorationRole });
+	}
 }
 
 QVariant GameListModel::data(const QModelIndex &index, int role) const
@@ -101,6 +154,16 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 
 	case AvailabilityRole:
 		return int(m_availability[index.row()]);
+
+	case ParentNameRole:
+		return (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
+				? QString::fromLatin1(drv.parent) : QString();
+
+	case Qt::DecorationRole:
+		// Show the system icon at the start of the Description column.
+		if (index.column() == COLUMN_DESCRIPTION)
+			return iconForRow(index.row());
+		return QVariant();
 
 	case Qt::ForegroundRole:
 		// Grey out systems whose ROMs are known to be missing.

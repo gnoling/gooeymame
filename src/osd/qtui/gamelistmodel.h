@@ -16,7 +16,9 @@
 
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QHash>
+#include <QtCore/QSet>
 #include <QtCore/QStringList>
+#include <QtGui/QIcon>
 
 #include <cstdint>
 #include <vector>
@@ -25,6 +27,8 @@
 class game_driver;
 
 namespace osd::qtui {
+
+class IconLoader;
 
 //============================================================
 //  GameListModel - one row per playable driver.
@@ -60,7 +64,9 @@ public:
 		// release year as a QString
 		YearRole,
 		// ROM availability (one of GameListModel::Availability)
-		AvailabilityRole
+		AvailabilityRole,
+		// parent/clone source short name, or empty
+		ParentNameRole
 	};
 
 	// ROM availability of a system, as determined by the auditor.
@@ -93,8 +99,12 @@ public:
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
 
+private slots:
+	void onIconLoaded(int row, const QByteArray &bytes);
+
 private:
 	const game_driver &driverForRow(int row) const;
+	QVariant iconForRow(int row) const;   // lazily requests/caches the icon
 
 	// driver_list indices of the rows we expose (the internal "___empty"
 	// dummy driver and BIOS roots are filtered out at build time).
@@ -105,6 +115,12 @@ private:
 
 	// Short name -> row, for applying availability results by name.
 	QHash<QString, int> m_nameToRow;
+
+	// Lazy, cached row icons from icons.zip (loaded on a worker thread).
+	IconLoader *m_iconLoader = nullptr;
+	QString m_iconsPath;
+	mutable QHash<int, QIcon> m_iconCache;
+	mutable QSet<int> m_iconRequested;
 };
 
 } // namespace osd::qtui

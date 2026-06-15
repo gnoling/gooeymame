@@ -16,7 +16,11 @@
 
 #include "gamelistproxy.h"
 
+#include <QtCore/QSet>
+#include <QtCore/QString>
 #include <QtWidgets/QTreeWidget>
+
+#include <vector>
 
 namespace osd::qtui {
 
@@ -38,6 +42,19 @@ private slots:
 private:
 	QTreeWidgetItem *addFolder(QTreeWidgetItem *parent, const QString &label,
 			FolderFilter::Kind kind, const QString &value = QString());
+
+	// Build the category subtrees (Category/Genre/Series/...) from the
+	// configured folder of MAME EXTRAs .ini files.  Section names are split
+	// on ':' and '/' into a nested hierarchy.
+	void loadCategories();
+	void addCategoryIni(const QString &dir, const QString &file, const QString &title);
+
+	// Union the member sets of an item and all of its descendants, so that
+	// selecting a parent category shows everything beneath it.
+	void collectMembers(const QTreeWidgetItem *item, QSet<QString> &out) const;
+
+	// Member sets for category nodes, referenced by index stored on the item.
+	std::vector<QSet<QString>> m_categorySets;
 };
 
 } // namespace osd::qtui

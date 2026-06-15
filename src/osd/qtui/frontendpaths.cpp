@@ -37,6 +37,7 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 	{ "gameover",   "Game over screens",    false },
 	{ "howto",      "How-to screens",       false },
 	{ "artpreview", "Artwork previews",     false },
+	{ "categories", "Category folders (folder of .ini files)", false },
 	{ "history",    "History (history.xml)", true },
 	{ "mameinfo",   "MAME info (mameinfo.dat)", true },
 	{ "messinfo",   "MESS info (messinfo.dat)", true },
