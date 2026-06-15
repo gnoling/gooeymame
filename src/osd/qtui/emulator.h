@@ -18,6 +18,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // One-time process initialisation (stdio buffering, crash diagnostics).
@@ -71,6 +72,51 @@ void qtui_load_software(
 
 // Total number of systems in the build (for audit progress reporting).
 int qtui_system_count();
+
+
+//============================================================
+//  Emulator options (mame.ini) access
+//============================================================
+
+// Editable option kinds (mirrors the meaningful core_options::option_type
+// values; HEADER/COMMAND/INVALID are not exposed as editable rows).
+enum qtui_option_type
+{
+	QTUI_OPT_BOOLEAN = 0,
+	QTUI_OPT_INTEGER,
+	QTUI_OPT_FLOAT,
+	QTUI_OPT_STRING,
+	QTUI_OPT_PATH,
+	QTUI_OPT_MULTIPATH
+};
+
+struct qtui_option
+{
+	std::string name;
+	std::string description;
+	std::string value;
+	std::string default_value;
+	std::string minimum;
+	std::string maximum;
+	int         type;       // qtui_option_type
+};
+
+// A group of options under one ini header (e.g. "CORE SEARCH PATH OPTIONS").
+struct qtui_option_group
+{
+	std::string header;
+	std::vector<qtui_option> options;
+};
+
+// Read all editable emulator options, grouped by ini header, with their
+// current values loaded from the standard ini files.
+std::vector<qtui_option_group> qtui_read_options();
+
+// Apply name/value changes and write the full mame.ini back out.  Returns
+// true on success; *out_path (when non-null) receives the file written.
+bool qtui_write_options(
+		const std::vector<std::pair<std::string, std::string>> &changes,
+		std::string *out_path);
 
 // ROM availability of a system.
 enum qtui_availability

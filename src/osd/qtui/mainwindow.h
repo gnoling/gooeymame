@@ -19,6 +19,7 @@
 #include <functional>
 #include <vector>
 
+class QCloseEvent;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
@@ -47,8 +48,12 @@ public:
 	MainWindow(QWidget *parent = nullptr);
 	virtual ~MainWindow();
 
+protected:
+	void closeEvent(QCloseEvent *event) override;
+
 private slots:
 	void showAbout();
+	void openOptions();
 	void launchSelectedSystem();
 	void launchSelectedSoftware();
 	void onFolderSelected(const FolderFilter &filter);
@@ -65,6 +70,8 @@ private:
 	void createWidgets();
 	void updateStatusCount();
 	void setSoftwarePaneVisible(bool visible);
+	void saveSettings() const;
+	void restoreSettings();
 
 	// Short name of the currently selected system, or empty if none.
 	QString selectedSystem() const;

@@ -30,6 +30,7 @@
 
 #include "corestr.h"
 
+#include <fstream>
 #include <mutex>
 #include <sstream>
 
@@ -266,6 +267,123 @@ void qtui_load_software(
 int qtui_system_count()
 {
 	return int(driver_list::total());
+}
+
+
+namespace {
+
+// Map a core_options entry type to the editable qtui_option_type, or -1 if it
+// is not an editable option (header/command/invalid).
+int qtui_map_option_type(core_options::option_type type)
+{
+	switch (type)
+	{
+	case core_options::option_type::BOOLEAN:   return QTUI_OPT_BOOLEAN;
+	case core_options::option_type::INTEGER:   return QTUI_OPT_INTEGER;
+	case core_options::option_type::FLOAT:     return QTUI_OPT_FLOAT;
+	case core_options::option_type::STRING:    return QTUI_OPT_STRING;
+	case core_options::option_type::PATH:      return QTUI_OPT_PATH;
+	case core_options::option_type::MULTIPATH: return QTUI_OPT_MULTIPATH;
+	default:                                   return -1;
+	}
+}
+
+} // anonymous namespace
+
+
+std::vector<qtui_option_group> qtui_read_options()
+{
+	std::vector<qtui_option_group> groups;
+
+	core_guard guard;
+
+	sdl_options options;
+	std::ostringstream errors;
+	mame_options::parse_standard_inis(options, errors);
+
+	qtui_option_group *current = nullptr;
+	for (const auto &entry : options.entries())
+	{
+		if (entry->type() == core_options::option_type::HEADER)
+		{
+			groups.emplace_back();
+			current = &groups.back();
+			current->header = entry->description() ? entry->description() : "";
+			continue;
+		}
+
+		int const mapped = qtui_map_option_type(entry->type());
+		if (mapped < 0 || entry->names().empty())
+			continue;
+
+		// Skip internal/positional entries like "<UNADORNED0>" (the system and
+		// software names) which are not real ini settings.
+		if (!entry->name().empty() && entry->name().front() == '<')
+			continue;
+
+		// Options before the first header land in an unnamed leading group.
+		if (!current)
+		{
+			groups.emplace_back();
+			current = &groups.back();
+		}
+
+		qtui_option opt;
+		opt.name = entry->name();
+		opt.description = entry->description() ? entry->description() : "";
+		opt.value = entry->value() ? entry->value() : "";
+		// Note: entry::default_value() abort()s on entries that don't support
+		// it, so it is intentionally not read here.
+		opt.minimum = entry->minimum() ? entry->minimum() : "";
+		opt.maximum = entry->maximum() ? entry->maximum() : "";
+		opt.type = mapped;
+		current->options.push_back(std::move(opt));
+	}
+
+	return groups;
+}
+
+
+bool qtui_write_options(
+		const std::vector<std::pair<std::string, std::string>> &changes,
+		std::string *out_path)
+{
+	core_guard guard;
+
+	sdl_options options;
+	std::ostringstream errors;
+	mame_options::parse_standard_inis(options, errors);
+
+	for (const auto &change : changes)
+	{
+		core_options::entry::shared_ptr e = options.get_entry(change.first);
+		if (e)
+			e->set_value(std::string(change.second), OPTION_PRIORITY_HIGH);
+	}
+
+	// Write the full ini to the first configured ini directory.
+	std::string dir;
+	if (options.value("inipath"))
+	{
+		std::string const inipath = options.value("inipath");
+		std::string::size_type const sep = inipath.find(';');
+		dir = (sep == std::string::npos) ? inipath : inipath.substr(0, sep);
+	}
+	if (dir.empty())
+		dir = ".";
+
+	std::string const path = dir + "/mame.ini";
+
+	std::ofstream file(path, std::ios::out | std::ios::trunc);
+	if (!file.is_open())
+		return false;
+	file << options.output_ini();
+	bool const ok = file.good();
+	file.close();
+
+	if (out_path)
+		*out_path = path;
+	return ok;
 }
 
 

@@ -13,13 +13,16 @@
 #include "foldertree.h"
 #include "gamelistmodel.h"
 #include "gamelistproxy.h"
+#include "optionsdialog.h"
 #include "softwareloader.h"
 #include "softwaremodel.h"
 #include "softwareproxy.h"
 
 #include <QtCore/QItemSelectionModel>
+#include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QTimer>
+#include <QtGui/QCloseEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -118,6 +121,77 @@ MainWindow::MainWindow(QWidget *parent) :
 		m_auditAct->setEnabled(false);
 		m_audit->startAudit();
 	}
+
+	restoreSettings();
+}
+
+void MainWindow::openOptions()
+{
+	OptionsDialog dialog(this);
+	if (dialog.exec() == QDialog::Accepted)
+	{
+		// Path changes can affect availability; suggest a re-audit.
+		statusBar()->showMessage(
+				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),
+				6000);
+	}
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+	saveSettings();
+	QMainWindow::closeEvent(event);
+}
+
+void MainWindow::saveSettings() const
+{
+	QSettings settings;
+	settings.beginGroup(QStringLiteral("mainwindow"));
+	settings.setValue(QStringLiteral("geometry"), saveGeometry());
+	settings.setValue(QStringLiteral("splitter"), m_splitter->saveState());
+	settings.setValue(QStringLiteral("systemHeader"), m_view->horizontalHeader()->saveState());
+	settings.setValue(QStringLiteral("softwareHeader"), m_softwareView->horizontalHeader()->saveState());
+	settings.setValue(QStringLiteral("selected"), selectedSystem());
+	settings.endGroup();
+}
+
+void MainWindow::restoreSettings()
+{
+	QSettings settings;
+	settings.beginGroup(QStringLiteral("mainwindow"));
+
+	QByteArray const geometry = settings.value(QStringLiteral("geometry")).toByteArray();
+	if (!geometry.isEmpty())
+		restoreGeometry(geometry);
+
+	QByteArray const splitterState = settings.value(QStringLiteral("splitter")).toByteArray();
+	if (!splitterState.isEmpty())
+		m_splitter->restoreState(splitterState);
+
+	QByteArray const systemHeader = settings.value(QStringLiteral("systemHeader")).toByteArray();
+	if (!systemHeader.isEmpty())
+		m_view->horizontalHeader()->restoreState(systemHeader);
+
+	QByteArray const softwareHeader = settings.value(QStringLiteral("softwareHeader")).toByteArray();
+	if (!softwareHeader.isEmpty())
+		m_softwareView->horizontalHeader()->restoreState(softwareHeader);
+
+	QString const selected = settings.value(QStringLiteral("selected")).toString();
+	settings.endGroup();
+
+	// Re-select the last system, if it is still visible under the current
+	// folder/filters.
+	if (!selected.isEmpty())
+	{
+		QModelIndexList const hits = m_proxy->match(
+				m_proxy->index(0, GameListModel::COLUMN_NAME),
+				GameListModel::ShortNameRole, selected, 1, Qt::MatchExactly);
+		if (!hits.isEmpty())
+		{
+			m_view->setCurrentIndex(hits.first());
+			m_view->scrollTo(hits.first(), QAbstractItemView::PositionAtCenter);
+		}
+	}
 }
 
 MainWindow::~MainWindow()
@@ -140,6 +214,9 @@ void MainWindow::createMenus()
 	connect(exitAct, &QAction::triggered, this, &QWidget::close);
 
 	QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+	QAction *optionsAct = toolsMenu->addAction(tr("&Options…"));
+	connect(optionsAct, &QAction::triggered, this, &MainWindow::openOptions);
+	toolsMenu->addSeparator();
 	m_auditAct = toolsMenu->addAction(tr("&Refresh ROM Availability"));
 	connect(m_auditAct, &QAction::triggered, this, [this] {
 		if (m_audit && !m_audit->isRunning())
