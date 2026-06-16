@@ -29,6 +29,7 @@ class game_driver;
 namespace osd::qtui {
 
 class IconLoader;
+class ThumbnailLoader;
 
 //============================================================
 //  GameListModel - one row per playable driver.
@@ -99,12 +100,18 @@ public:
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
 
+	// Choose the image set used for grid thumbnails (a frontendpaths machine
+	// key, e.g. "snap"); invalidates the cache and reloads on demand.
+	void setThumbnailSource(const QString &machineKey);
+
 private slots:
 	void onIconLoaded(int row, const QByteArray &bytes);
+	void onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes);
 
 private:
 	const game_driver &driverForRow(int row) const;
 	QVariant iconForRow(int row) const;   // lazily requests/caches the icon
+	QVariant thumbnailForRow(int row) const;   // lazily requests/caches the thumbnail
 
 	// driver_list indices of the rows we expose (the internal "___empty"
 	// dummy driver and BIOS roots are filtered out at build time).
@@ -121,6 +128,15 @@ private:
 	QString m_iconsPath;
 	mutable QHash<int, QIcon> m_iconCache;
 	mutable QSet<int> m_iconRequested;
+
+	// Lazy, cached grid thumbnails for the selected image set (worker thread).
+	// A generation counter invalidates in-flight loads when the source changes.
+	ThumbnailLoader *m_thumbLoader = nullptr;
+	QString m_thumbKey;     // frontendpaths machine key ("" = none)
+	QString m_thumbPath;    // resolved folder/zip for m_thumbKey
+	quint64 m_thumbGen = 0;
+	mutable QHash<int, QPixmap> m_thumbCache;
+	mutable QSet<int> m_thumbRequested;
 };
 
 } // namespace osd::qtui

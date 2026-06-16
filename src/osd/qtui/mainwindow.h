@@ -22,10 +22,13 @@
 
 class QActionGroup;
 class QCloseEvent;
+class QComboBox;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QSlider;
 class QSplitter;
+class QStackedWidget;
 class QTableView;
 class QTimer;
 class QWidget;
@@ -34,8 +37,10 @@ namespace osd::qtui {
 
 class ArtworkPanel;
 class AuditManager;
+class CheckableComboBox;
 class FolderTree;
 class GameListModel;
+class GridView;
 class SoftwareLoader;
 class SoftwareModel;
 class SoftwareProxy;
@@ -59,6 +64,7 @@ private slots:
 	void openOptions();
 	void openProperties();
 	void showSystemContextMenu(const QPoint &pos);
+	void showSoftwareContextMenu(const QPoint &pos);
 	void launchSelectedSystem();
 	void launchSelectedSoftware();
 	void onFolderSelected(const FolderFilter &filter);
@@ -81,6 +87,13 @@ private:
 	void setSoftwarePaneVisible(bool visible);
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
+
+	// Grid/thumbnail view (per pane: machine list and software list).
+	QWidget *buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption);
+	void setMachineGridMode(bool grid);
+	void setSoftwareGridMode(bool grid);
+	void applyMachineThumbSource();
+	void applySoftwareThumbSource();
 	void saveSettings() const;
 	void restoreSettings();
 
@@ -100,10 +113,24 @@ private:
 	GameListModel *m_model = nullptr;
 	GameListProxy *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
+	GridView *m_grid = nullptr;
+	QStackedWidget *m_systemStack = nullptr;
+	QWidget *m_gridBar = nullptr;
+	QSlider *m_gridSize = nullptr;
+	QComboBox *m_gridSource = nullptr;
+	CheckableComboBox *m_gridCaption = nullptr;
+	QPushButton *m_gridToggle = nullptr;
 	FolderTree *m_folders = nullptr;
 	SoftwareModel *m_softwareModel = nullptr;
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
+	GridView *m_softwareGrid = nullptr;
+	QStackedWidget *m_softwareStack = nullptr;
+	QWidget *m_softwareGridBar = nullptr;
+	QSlider *m_softwareGridSize = nullptr;
+	QComboBox *m_softwareGridSource = nullptr;
+	CheckableComboBox *m_softwareGridCaption = nullptr;
+	QPushButton *m_softwareGridToggle = nullptr;
 	QSplitter *m_splitter = nullptr;
 	QSplitter *m_rightSplitter = nullptr;
 	ArtworkPanel *m_artwork = nullptr;

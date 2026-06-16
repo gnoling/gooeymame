@@ -14,6 +14,7 @@
 
 #include "frontendpaths.h"
 #include "iconloader.h"
+#include "thumbnailloader.h"
 
 #include <QtCore/QSet>
 #include <QtGui/QBrush>
@@ -54,6 +55,64 @@ GameListModel::GameListModel(QObject *parent) :
 	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
 	m_iconLoader = new IconLoader(this);
 	connect(m_iconLoader, &IconLoader::loaded, this, &GameListModel::onIconLoaded);
+
+	// Grid thumbnails (image set chosen at runtime) load on their own thread.
+	m_thumbLoader = new ThumbnailLoader(this);
+	connect(m_thumbLoader, &ThumbnailLoader::loaded, this, &GameListModel::onThumbnailLoaded);
+}
+
+void GameListModel::setThumbnailSource(const QString &machineKey)
+{
+	if (machineKey == m_thumbKey)
+		return;
+	m_thumbKey = machineKey;
+	m_thumbPath = machineKey.isEmpty() ? QString() : frontendFolderPath(machineKey);
+	++m_thumbGen;   // discard any in-flight results for the previous source
+	m_thumbCache.clear();
+	m_thumbRequested.clear();
+	if (!m_rows.empty())
+		emit dataChanged(index(0, COLUMN_DESCRIPTION),
+				index(int(m_rows.size()) - 1, COLUMN_DESCRIPTION), { kThumbnailRole });
+}
+
+QVariant GameListModel::thumbnailForRow(int row) const
+{
+	if (m_thumbPath.isEmpty())
+		return QVariant();
+
+	auto it = m_thumbCache.constFind(row);
+	if (it != m_thumbCache.constEnd())
+		return it.value();
+
+	if (!m_thumbRequested.contains(row))
+	{
+		m_thumbRequested.insert(row);
+		const game_driver &drv = driverForRow(row);
+		ArtCandidates candidates;
+		candidates.append({ m_thumbPath, QString::fromLatin1(drv.name) + QStringLiteral(".png") });
+		if (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
+			candidates.append({ m_thumbPath, QString::fromLatin1(drv.parent) + QStringLiteral(".png") });
+		m_thumbLoader->request(row, m_thumbGen, candidates);
+	}
+	return QVariant();
+}
+
+void GameListModel::onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes)
+{
+	if (generation != m_thumbGen)
+		return;   // stale: the source changed after this request
+
+	QPixmap pixmap;
+	if (!bytes.isEmpty())
+		pixmap.loadFromData(bytes);
+
+	// Cache even a null pixmap so we neither re-request nor re-decode.
+	m_thumbCache.insert(row, pixmap);
+	if (!pixmap.isNull())
+	{
+		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
+		emit dataChanged(idx, idx, { kThumbnailRole });
+	}
 }
 
 int GameListModel::rowCount(const QModelIndex &parent) const
@@ -158,6 +217,10 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 	case ParentNameRole:
 		return (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
 				? QString::fromLatin1(drv.parent) : QString();
+
+	case kThumbnailRole:
+		// Grid thumbnail for the row (lazily loaded for the chosen image set).
+		return thumbnailForRow(index.row());
 
 	case Qt::DecorationRole:
 		// Show the system icon at the start of the Description column.

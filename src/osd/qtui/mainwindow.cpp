@@ -12,8 +12,10 @@
 #include "auditmanager.h"
 #include "emulator.h"
 #include "foldertree.h"
+#include "frontendpaths.h"
 #include "gamelistmodel.h"
 #include "gamelistproxy.h"
+#include "gridview.h"
 #include "optionsdialog.h"
 #include "softwareloader.h"
 #include "softwaremodel.h"
@@ -30,6 +32,7 @@
 #include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
@@ -39,7 +42,9 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QSlider>
 #include <QtWidgets/QSplitter>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QVBoxLayout>
@@ -75,6 +80,24 @@ void pairExclusive(QPushButton *a, QPushButton *b)
 	QObject::connect(b, &QPushButton::toggled, a, [a] (bool on) {
 		if (on) { QSignalBlocker block(a); a->setChecked(false); }
 	});
+}
+
+// Caption field ids (0..3) pack into a bitmask for persistence.
+int captionMask(const QList<int> &ids)
+{
+	int mask = 0;
+	for (int id : ids)
+		mask |= (1 << id);
+	return mask;
+}
+
+QList<int> captionIds(int mask)
+{
+	QList<int> ids;
+	for (int id = 0; id < 4; id++)
+		if (mask & (1 << id))
+			ids << id;
+	return ids;
 }
 
 } // anonymous namespace
@@ -162,17 +185,43 @@ void MainWindow::openProperties()
 
 void MainWindow::showSystemContextMenu(const QPoint &pos)
 {
+	// Works for whichever system view (table or grid) emitted the request.
+	auto *view = qobject_cast<QAbstractItemView *>(sender());
+	if (!view)
+		view = m_view;
+
 	// Right-click selects the row under the cursor so the actions apply to it.
-	QModelIndex const index = m_view->indexAt(pos);
+	QModelIndex const index = view->indexAt(pos);
 	if (index.isValid())
-		m_view->setCurrentIndex(index);
+		view->setCurrentIndex(index);
 	if (selectedSystem().isEmpty())
 		return;
 
 	QMenu menu(this);
 	menu.addAction(m_playAct);
 	menu.addAction(m_propertiesAct);
-	menu.exec(m_view->viewport()->mapToGlobal(pos));
+	menu.exec(view->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showSoftwareContextMenu(const QPoint &pos)
+{
+	auto *view = qobject_cast<QAbstractItemView *>(sender());
+	if (!view)
+		view = m_softwareView;
+
+	QModelIndex const index = view->indexAt(pos);
+	if (index.isValid())
+		view->setCurrentIndex(index);
+
+	int const sourceRow = index.isValid() ? m_softwareProxy->mapToSource(index).row() : -1;
+	if (sourceRow < 0 || m_softwareModel->shortNameForRow(sourceRow).isEmpty())
+		return;
+
+	QMenu menu(this);
+	menu.addAction(tr("Play"), this, &MainWindow::launchSelectedSoftware);
+	// MAME has no per-software ini; options are overridden at the host machine.
+	menu.addAction(tr("Machine Properties…"), this, &MainWindow::openProperties);
+	menu.exec(view->viewport()->mapToGlobal(pos));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -273,6 +322,17 @@ void MainWindow::restoreSettings()
 	for (QAction *act : m_iconSizeGroup->actions())
 		if (act->data().toInt() == iconSize)
 			act->setChecked(true);
+
+	// Restore per-pane grid view state (group already ended, so use full keys).
+	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
+	m_gridSource->setCurrentIndex(settings.value(QStringLiteral("view/machineSource"), 0).toInt());
+	m_gridCaption->setCheckedIds(captionIds(settings.value(QStringLiteral("view/machineCaption"), 1).toInt()));
+	m_gridToggle->setChecked(settings.value(QStringLiteral("view/machineMode"), false).toBool());
+
+	m_softwareGridSize->setValue(settings.value(QStringLiteral("view/softwareThumb"), 128).toInt());
+	m_softwareGridSource->setCurrentIndex(settings.value(QStringLiteral("view/softwareSource"), 0).toInt());
+	m_softwareGridCaption->setCheckedIds(captionIds(settings.value(QStringLiteral("view/softwareCaption"), 1).toInt()));
+	m_softwareGridToggle->setChecked(settings.value(QStringLiteral("view/softwareMode"), false).toBool());
 
 	// Re-select the last system, if it is still visible under the current
 	// folder/filters.
@@ -423,6 +483,35 @@ void MainWindow::createWidgets()
 	for (QPushButton *button : { m_btnWorking, m_btnNotWorking, m_btnAvailable, m_btnUnavailable })
 		connect(button, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
 
+	// Grid (thumbnail) view sharing the proxy and selection model with the table.
+	m_grid = new GridView;
+	m_grid->setModel(m_proxy);
+	m_grid->setSelectionModel(m_view->selectionModel());
+	connect(m_grid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSystem);
+	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_grid, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
+
+	m_systemStack = new QStackedWidget;
+	m_systemStack->addWidget(m_view);   // index 0 = list
+	m_systemStack->addWidget(m_grid);   // index 1 = grid
+
+	m_gridToggle = makeToggle(tr("Grid"), tr("Show systems as a thumbnail grid"));
+	connect(m_gridToggle, &QPushButton::toggled, this, &MainWindow::setMachineGridMode);
+	m_gridBar = buildGridBar(m_gridSize, m_gridSource, m_gridCaption);
+	m_gridBar->setVisible(false);
+	connect(m_gridSize, &QSlider::valueChanged, this, [this] (int v) {
+		m_grid->setThumbnailSize(v);
+		QSettings().setValue(QStringLiteral("view/machineThumb"), v);
+	});
+	connect(m_gridSource, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
+		applyMachineThumbSource();
+		QSettings().setValue(QStringLiteral("view/machineSource"), i);
+	});
+	connect(m_gridCaption, &CheckableComboBox::checkedChanged, this, [this] {
+		m_grid->setCaptionColumns(m_gridCaption->checkedIds());
+		QSettings().setValue(QStringLiteral("view/machineCaption"), captionMask(m_gridCaption->checkedIds()));
+	});
+
 	m_systemPane = new QWidget;
 	QVBoxLayout *systemLayout = new QVBoxLayout(m_systemPane);
 	systemLayout->setContentsMargins(0, 0, 0, 0);
@@ -434,8 +523,10 @@ void MainWindow::createWidgets()
 	systemBar->addWidget(m_btnNotWorking);
 	systemBar->addWidget(m_btnAvailable);
 	systemBar->addWidget(m_btnUnavailable);
+	systemBar->addWidget(m_gridToggle);
 	systemLayout->addLayout(systemBar);
-	systemLayout->addWidget(m_view);
+	systemLayout->addWidget(m_gridBar);
+	systemLayout->addWidget(m_systemStack);
 
 	// --- software list pane: quick-filter bar over the table ---
 	m_softwareModel = new SoftwareModel(this);
@@ -457,6 +548,21 @@ void MainWindow::createWidgets()
 	connect(m_softwareView, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
 	connect(m_softwareView->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSoftwareSelectionChanged);
+	m_softwareView->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_softwareView, &QWidget::customContextMenuRequested,
+			this, &MainWindow::showSoftwareContextMenu);
+
+	m_softwareGrid = new GridView;
+	m_softwareGrid->setModel(m_softwareProxy);
+	m_softwareGrid->setSelectionModel(m_softwareView->selectionModel());
+	connect(m_softwareGrid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	m_softwareGrid->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_softwareGrid, &QWidget::customContextMenuRequested,
+			this, &MainWindow::showSoftwareContextMenu);
+
+	m_softwareStack = new QStackedWidget;
+	m_softwareStack->addWidget(m_softwareView);   // index 0 = list
+	m_softwareStack->addWidget(m_softwareGrid);   // index 1 = grid
 
 	m_softwareSearch = new QLineEdit;
 	m_softwareSearch->setClearButtonEnabled(true);
@@ -481,6 +587,23 @@ void MainWindow::createWidgets()
 	for (QPushButton *button : { m_btnSupported, m_btnPartial, m_btnUnsupported, m_btnSwAvailable, m_btnSwUnavailable })
 		connect(button, &QPushButton::toggled, this, &MainWindow::onSoftwareFilterChanged);
 
+	m_softwareGridToggle = makeToggle(tr("Grid"), tr("Show software as a thumbnail grid"));
+	connect(m_softwareGridToggle, &QPushButton::toggled, this, &MainWindow::setSoftwareGridMode);
+	m_softwareGridBar = buildGridBar(m_softwareGridSize, m_softwareGridSource, m_softwareGridCaption);
+	m_softwareGridBar->setVisible(false);
+	connect(m_softwareGridSize, &QSlider::valueChanged, this, [this] (int v) {
+		m_softwareGrid->setThumbnailSize(v);
+		QSettings().setValue(QStringLiteral("view/softwareThumb"), v);
+	});
+	connect(m_softwareGridSource, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
+		applySoftwareThumbSource();
+		QSettings().setValue(QStringLiteral("view/softwareSource"), i);
+	});
+	connect(m_softwareGridCaption, &CheckableComboBox::checkedChanged, this, [this] {
+		m_softwareGrid->setCaptionColumns(m_softwareGridCaption->checkedIds());
+		QSettings().setValue(QStringLiteral("view/softwareCaption"), captionMask(m_softwareGridCaption->checkedIds()));
+	});
+
 	m_softwarePane = new QWidget;
 	QVBoxLayout *softwareLayout = new QVBoxLayout(m_softwarePane);
 	softwareLayout->setContentsMargins(0, 0, 0, 0);
@@ -491,8 +614,10 @@ void MainWindow::createWidgets()
 	softwareBar->addWidget(m_btnUnsupported);
 	softwareBar->addWidget(m_btnSwAvailable);
 	softwareBar->addWidget(m_btnSwUnavailable);
+	softwareBar->addWidget(m_softwareGridToggle);
 	softwareLayout->addLayout(softwareBar);
-	softwareLayout->addWidget(m_softwareView);
+	softwareLayout->addWidget(m_softwareGridBar);
+	softwareLayout->addWidget(m_softwareStack);
 
 	// --- artwork panel ---
 	m_artwork = new ArtworkPanel;
@@ -521,6 +646,79 @@ void MainWindow::applyIconSize(int size)
 {
 	m_view->setIconSize(QSize(size, size));
 	m_view->verticalHeader()->setDefaultSectionSize(size + 6);
+}
+
+QWidget *MainWindow::buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption)
+{
+	QWidget *bar = new QWidget;
+	QHBoxLayout *h = new QHBoxLayout(bar);
+	h->setContentsMargins(0, 0, 0, 0);
+
+	h->addWidget(new QLabel(tr("Size:")));
+	size = new QSlider(Qt::Horizontal);
+	size->setRange(64, 256);
+	size->setValue(128);
+	size->setMaximumWidth(140);
+	h->addWidget(size);
+
+	h->addWidget(new QLabel(tr("Image:")));
+	source = new QComboBox;
+	for (std::size_t i = 0; i < THUMBNAIL_SOURCE_COUNT; i++)
+		source->addItem(tr(THUMBNAIL_SOURCES[i].label));
+	h->addWidget(source);
+
+	h->addWidget(new QLabel(tr("Caption:")));
+	caption = new CheckableComboBox;
+	caption->addCheckItem(tr("Description"), 0, true);
+	caption->addCheckItem(tr("Short name"), 1, false);
+	caption->addCheckItem(tr("Year"), 2, false);
+	caption->addCheckItem(tr("Maker"), 3, false);
+	h->addWidget(caption);
+
+	h->addStretch();
+	return bar;
+}
+
+void MainWindow::applyMachineThumbSource()
+{
+	int const i = m_gridSource->currentIndex();
+	if (i >= 0 && i < int(THUMBNAIL_SOURCE_COUNT))
+		m_model->setThumbnailSource(QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey));
+}
+
+void MainWindow::applySoftwareThumbSource()
+{
+	int const i = m_softwareGridSource->currentIndex();
+	if (i >= 0 && i < int(THUMBNAIL_SOURCE_COUNT))
+		m_softwareModel->setThumbnailSource(
+				QString::fromLatin1(THUMBNAIL_SOURCES[i].softwareKey),
+				QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey));
+}
+
+void MainWindow::setMachineGridMode(bool grid)
+{
+	m_systemStack->setCurrentIndex(grid ? 1 : 0);
+	m_gridBar->setVisible(grid);
+	if (grid)
+	{
+		m_grid->setThumbnailSize(m_gridSize->value());
+		m_grid->setCaptionColumns(m_gridCaption->checkedIds());
+		applyMachineThumbSource();
+	}
+	QSettings().setValue(QStringLiteral("view/machineMode"), grid);
+}
+
+void MainWindow::setSoftwareGridMode(bool grid)
+{
+	m_softwareStack->setCurrentIndex(grid ? 1 : 0);
+	m_softwareGridBar->setVisible(grid);
+	if (grid)
+	{
+		m_softwareGrid->setThumbnailSize(m_softwareGridSize->value());
+		m_softwareGrid->setCaptionColumns(m_softwareGridCaption->checkedIds());
+		applySoftwareThumbSource();
+	}
+	QSettings().setValue(QStringLiteral("view/softwareMode"), grid);
 }
 
 void MainWindow::applyMainLayout(int layout)
@@ -679,6 +877,7 @@ void MainWindow::onSoftwareLoaded(const std::vector<qtui_software_entry> &entrie
 {
 	bool const hasSoftware = !entries.empty();
 	m_softwareModel->setEntries(entries);
+	m_softwareModel->setHostSystem(m_softwareLoadSystem);   // for thumbnail fallback art
 	setSoftwarePaneVisible(hasSoftware);
 	if (!hasSoftware)
 		return;

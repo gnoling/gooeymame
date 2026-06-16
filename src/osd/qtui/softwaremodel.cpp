@@ -8,6 +8,9 @@
 
 #include "softwaremodel.h"
 
+#include "frontendpaths.h"
+#include "thumbnailloader.h"
+
 #include <QtGui/QBrush>
 
 
@@ -16,13 +19,94 @@ namespace osd::qtui {
 SoftwareModel::SoftwareModel(QObject *parent) :
 	QAbstractTableModel(parent)
 {
+	m_thumbLoader = new ThumbnailLoader(this);
+	connect(m_thumbLoader, &ThumbnailLoader::loaded, this, &SoftwareModel::onThumbnailLoaded);
 }
 
 void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
 {
 	beginResetModel();
 	m_entries = std::move(entries);
+	++m_thumbGen;   // entries replaced: invalidate thumbnails
+	m_thumbCache.clear();
+	m_thumbRequested.clear();
 	endResetModel();
+}
+
+void SoftwareModel::setHostSystem(const QString &system)
+{
+	if (system == m_hostSystem)
+		return;
+	m_hostSystem = system;
+	std::string const parent = qtui_parent_of(system.toStdString());
+	m_hostParent = QString::fromStdString(parent);
+	// New host: any machine-fallback thumbnails are stale.
+	++m_thumbGen;
+	m_thumbCache.clear();
+	m_thumbRequested.clear();
+}
+
+void SoftwareModel::setThumbnailSource(const QString &softwareKey, const QString &machineKey)
+{
+	if (softwareKey == m_thumbSwKey && machineKey == m_thumbMachineKey)
+		return;
+	m_thumbSwKey = softwareKey;
+	m_thumbMachineKey = machineKey;
+	m_thumbSwPath = softwareKey.isEmpty() ? QString() : frontendFolderPath(softwareKey);
+	m_thumbMachinePath = machineKey.isEmpty() ? QString() : frontendFolderPath(machineKey);
+	++m_thumbGen;
+	m_thumbCache.clear();
+	m_thumbRequested.clear();
+	if (!m_entries.empty())
+		emit dataChanged(index(0, COLUMN_DESCRIPTION),
+				index(int(m_entries.size()) - 1, COLUMN_DESCRIPTION), { kThumbnailRole });
+}
+
+QVariant SoftwareModel::thumbnailForRow(int row) const
+{
+	if (m_thumbSwPath.isEmpty() && m_thumbMachinePath.isEmpty())
+		return QVariant();
+
+	auto it = m_thumbCache.constFind(row);
+	if (it != m_thumbCache.constEnd())
+		return it.value();
+
+	if (!m_thumbRequested.contains(row))
+	{
+		m_thumbRequested.insert(row);
+		const qtui_software_entry &entry = m_entries[row];
+		ArtCandidates candidates;
+		if (!m_thumbSwPath.isEmpty() && !entry.list.empty() && !entry.shortname.empty())
+			candidates.append({ m_thumbSwPath,
+					QString::fromStdString(entry.list) + QLatin1Char('/')
+							+ QString::fromStdString(entry.shortname) + QStringLiteral(".png") });
+		if (!m_thumbMachinePath.isEmpty() && !m_hostSystem.isEmpty())
+		{
+			candidates.append({ m_thumbMachinePath, m_hostSystem + QStringLiteral(".png") });
+			if (!m_hostParent.isEmpty())
+				candidates.append({ m_thumbMachinePath, m_hostParent + QStringLiteral(".png") });
+		}
+		if (!candidates.isEmpty())
+			m_thumbLoader->request(row, m_thumbGen, candidates);
+	}
+	return QVariant();
+}
+
+void SoftwareModel::onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes)
+{
+	if (generation != m_thumbGen)
+		return;   // stale
+
+	QPixmap pixmap;
+	if (!bytes.isEmpty())
+		pixmap.loadFromData(bytes);
+
+	m_thumbCache.insert(row, pixmap);
+	if (!pixmap.isNull())
+	{
+		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
+		emit dataChanged(idx, idx, { kThumbnailRole });
+	}
 }
 
 void SoftwareModel::setAvailabilities(const QVector<int> &availability)
@@ -75,6 +159,9 @@ QVariant SoftwareModel::data(const QModelIndex &index, int role) const
 
 	if (role == AvailabilityRole)
 		return entry.availability;
+
+	if (role == kThumbnailRole)
+		return thumbnailForRow(index.row());
 
 	if (role == Qt::ForegroundRole)
 	{

@@ -32,6 +32,19 @@ struct FrontendFolder
 extern const FrontendFolder FRONTEND_FOLDERS[];
 extern const std::size_t FRONTEND_FOLDER_COUNT;
 
+// Image types offered as grid/thumbnail sources.  machineKey/softwareKey are
+// frontendpaths folder keys ("" = not available for that scope; software then
+// falls back to the host machine's image).
+struct ThumbnailSource
+{
+	const char *label;
+	const char *machineKey;
+	const char *softwareKey;
+};
+
+extern const ThumbnailSource THUMBNAIL_SOURCES[];
+extern const std::size_t THUMBNAIL_SOURCE_COUNT;
+
 // Read/write a configured front-end folder path (empty if unset).
 QString frontendFolderPath(const QString &key);
 void setFrontendFolderPath(const QString &key, const QString &path);

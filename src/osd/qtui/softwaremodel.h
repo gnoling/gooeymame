@@ -16,11 +16,17 @@
 #include "emulator.h"
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QHash>
+#include <QtCore/QSet>
+#include <QtCore/QString>
 #include <QtCore/QVector>
+#include <QtGui/QPixmap>
 
 #include <vector>
 
 namespace osd::qtui {
+
+class ThumbnailLoader;
 
 class SoftwareModel : public QAbstractTableModel
 {
@@ -50,6 +56,13 @@ public:
 
 	void setEntries(std::vector<qtui_software_entry> entries);
 
+	// Host machine for the current entries (used for thumbnail fallback art).
+	void setHostSystem(const QString &system);
+
+	// Choose the image set for grid thumbnails: a software (_SL) key plus the
+	// host-machine key to fall back to.  Either may be empty.
+	void setThumbnailSource(const QString &softwareKey, const QString &machineKey);
+
 	// Apply availability results (qtui_availability) indexed to match the
 	// current entries, from the background audit phase.
 	void setAvailabilities(const QVector<int> &availability);
@@ -65,8 +78,22 @@ public:
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 	QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
+private slots:
+	void onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes);
+
 private:
+	QVariant thumbnailForRow(int row) const;
+
 	std::vector<qtui_software_entry> m_entries;
+
+	// Grid thumbnails: software (_SL) art with host-machine fallback.
+	ThumbnailLoader *m_thumbLoader = nullptr;
+	QString m_thumbSwKey,  m_thumbSwPath;       // software image set
+	QString m_thumbMachineKey, m_thumbMachinePath;   // host-machine fallback set
+	QString m_hostSystem, m_hostParent;
+	quint64 m_thumbGen = 0;
+	mutable QHash<int, QPixmap> m_thumbCache;
+	mutable QSet<int> m_thumbRequested;
 };
 
 } // namespace osd::qtui

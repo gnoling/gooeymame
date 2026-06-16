@@ -58,6 +58,19 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 
 const std::size_t FRONTEND_FOLDER_COUNT = sizeof(FRONTEND_FOLDERS) / sizeof(FRONTEND_FOLDERS[0]);
 
+const ThumbnailSource THUMBNAIL_SOURCES[] =
+{
+	{ "Snapshot", "snap",       "snap_sl"   },
+	{ "Title",    "titles",     "titles_sl" },
+	{ "Cover",    "",           "covers"    },
+	{ "Flyer",    "flyers",     ""          },
+	{ "Cabinet",  "cabinets",   ""          },
+	{ "Marquee",  "marquees",   ""          },
+	{ "Artwork",  "artpreview", "artpreview"},
+};
+
+const std::size_t THUMBNAIL_SOURCE_COUNT = sizeof(THUMBNAIL_SOURCES) / sizeof(THUMBNAIL_SOURCES[0]);
+
 QString frontendFolderPath(const QString &key)
 {
 	QSettings settings;
