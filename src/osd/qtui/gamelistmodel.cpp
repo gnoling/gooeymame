@@ -302,6 +302,18 @@ int GameListModel::rowForName(const QString &shortName) const
 	return m_nameToRow.value(shortName, -1);
 }
 
+void GameListModel::setVersionOverride(int row, const QString &memberShortName)
+{
+	if (row < 0 || row >= int(m_familyRoot.size()))
+		return;
+	QString const rootName = QString::fromLatin1(driver_list::driver(m_rows[m_familyRoot[row]]).name);
+	QSettings settings;
+	settings.beginGroup(QStringLiteral("versions/overrides"));
+	settings.setValue(rootName, memberShortName);
+	settings.endGroup();
+	reloadVersionSettings();
+}
+
 int GameListModel::rowCount(const QModelIndex &parent) const
 {
 	if (parent.isValid())

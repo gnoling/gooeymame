@@ -134,6 +134,8 @@ public:
 	int representativeRow(int row) const;       // representative of row's family
 	QList<int> familyMemberRows(int row) const; // representative first
 	int rowForName(const QString &shortName) const;   // -1 if unknown
+	// Persist a per-family default-version override for the family of `row`.
+	void setVersionOverride(int row, const QString &memberShortName);
 
 	// Choose the image set used for grid thumbnails (a frontendpaths machine
 	// key, e.g. "snap"); invalidates the cache and reloads on demand.

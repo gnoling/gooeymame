@@ -203,6 +203,31 @@ void MainWindow::showSystemContextMenu(const QPoint &pos)
 	QMenu menu(this);
 	menu.addAction(m_playAct);
 	menu.addAction(m_propertiesAct);
+
+	// Alternate versions (clone family): pick which one is the default.
+	int const sourceRow = index.isValid() ? m_proxy->mapToSource(index).row() : -1;
+	if (sourceRow >= 0)
+	{
+		QList<int> const members = m_model->familyMemberRows(sourceRow);
+		if (members.size() > 1)
+		{
+			int const rep = m_model->representativeRow(sourceRow);
+			QMenu *versions = menu.addMenu(tr("Versions"));
+			for (int member : members)
+			{
+				QString const desc = m_model->index(member, GameListModel::COLUMN_DESCRIPTION)
+						.data(Qt::DisplayRole).toString();
+				QString const name = m_model->index(member, 0).data(GameListModel::ShortNameRole).toString();
+				QAction *act = versions->addAction(desc);
+				act->setCheckable(true);
+				act->setChecked(member == rep);
+				connect(act, &QAction::triggered, this, [this, sourceRow, name] {
+					m_model->setVersionOverride(sourceRow, name);
+				});
+			}
+		}
+	}
+
 	menu.exec(view->viewport()->mapToGlobal(pos));
 }
 
@@ -224,6 +249,27 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 	menu.addAction(tr("Play"), this, &MainWindow::launchSelectedSoftware);
 	// MAME has no per-software ini; options are overridden at the host machine.
 	menu.addAction(tr("Machine Properties…"), this, &MainWindow::openProperties);
+
+	// Alternate versions (clone family) for this software item.
+	QList<int> const members = m_softwareModel->familyMemberRows(sourceRow);
+	if (members.size() > 1)
+	{
+		int const rep = m_softwareModel->representativeRow(sourceRow);
+		QMenu *versions = menu.addMenu(tr("Versions"));
+		for (int member : members)
+		{
+			QString const desc = m_softwareModel->index(member, SoftwareModel::COLUMN_DESCRIPTION)
+					.data(Qt::DisplayRole).toString();
+			QString const name = m_softwareModel->shortNameForRow(member);
+			QAction *act = versions->addAction(desc);
+			act->setCheckable(true);
+			act->setChecked(member == rep);
+			connect(act, &QAction::triggered, this, [this, sourceRow, name] {
+				m_softwareModel->setVersionOverride(sourceRow, name);
+			});
+		}
+	}
+
 	menu.exec(view->viewport()->mapToGlobal(pos));
 }
 
