@@ -31,19 +31,24 @@ class QSplitter;
 class QStackedWidget;
 class QTableView;
 class QTimer;
+class QTreeView;
 class QWidget;
+class QAbstractItemView;
+class QModelIndex;
 
 namespace osd::qtui {
 
 class ArtworkPanel;
 class AuditManager;
 class CheckableComboBox;
+class FamilyTreeModel;
 class FolderTree;
 class GameListModel;
 class GridView;
 class SoftwareLoader;
 class SoftwareModel;
 class SoftwareProxy;
+class TreeFilterProxy;
 
 //============================================================
 //  The main MAMEUI browser window.
@@ -92,12 +97,20 @@ private:
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
 
-	// Grid/thumbnail view (per pane: machine list and software list).
+	// List / Grouped / Grid view modes (per pane).
+	enum ViewMode { ViewList = 0, ViewGrouped = 1, ViewGrid = 2 };
 	QWidget *buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption);
-	void setMachineGridMode(bool grid);
-	void setSoftwareGridMode(bool grid);
+	void setMachineViewMode(int mode);
+	void setSoftwareViewMode(int mode);
 	void applyMachineThumbSource();
 	void applySoftwareThumbSource();
+
+	// Active view + source-row mapping (the three machine views differ).
+	QAbstractItemView *activeMachineView() const;
+	QAbstractItemView *activeSoftwareView() const;
+	int machineSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const;
+	int softwareSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const;
+	void selectSystemInActiveView(const QString &shortName);
 	void saveSettings() const;
 	void restoreSettings();
 
@@ -118,23 +131,29 @@ private:
 	GameListProxy *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
 	GridView *m_grid = nullptr;
+	QTreeView *m_tree = nullptr;
+	FamilyTreeModel *m_treeModel = nullptr;
+	TreeFilterProxy *m_treeProxy = nullptr;
 	QStackedWidget *m_systemStack = nullptr;
 	QWidget *m_gridBar = nullptr;
 	QSlider *m_gridSize = nullptr;
 	QComboBox *m_gridSource = nullptr;
 	CheckableComboBox *m_gridCaption = nullptr;
-	QPushButton *m_gridToggle = nullptr;
+	QComboBox *m_viewMode = nullptr;
 	FolderTree *m_folders = nullptr;
 	SoftwareModel *m_softwareModel = nullptr;
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
 	GridView *m_softwareGrid = nullptr;
+	QTreeView *m_softwareTree = nullptr;
+	FamilyTreeModel *m_swTreeModel = nullptr;
+	TreeFilterProxy *m_swTreeProxy = nullptr;
 	QStackedWidget *m_softwareStack = nullptr;
 	QWidget *m_softwareGridBar = nullptr;
 	QSlider *m_softwareGridSize = nullptr;
 	QComboBox *m_softwareGridSource = nullptr;
 	CheckableComboBox *m_softwareGridCaption = nullptr;
-	QPushButton *m_softwareGridToggle = nullptr;
+	QComboBox *m_softwareViewMode = nullptr;
 	QSplitter *m_splitter = nullptr;
 	QSplitter *m_rightSplitter = nullptr;
 	ArtworkPanel *m_artwork = nullptr;

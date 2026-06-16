@@ -81,6 +81,7 @@ public:
 	bool isRepresentative(int row) const;
 	int representativeRow(int row) const;
 	QList<int> familyMemberRows(int row) const;   // representative first
+	QList<int> groupRows() const;                 // one representative row per family
 	// Persist a per-family default-version override for the family of `row`.
 	void setVersionOverride(int row, const QString &memberShortName);
 

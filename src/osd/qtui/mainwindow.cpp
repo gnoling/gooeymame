@@ -11,6 +11,7 @@
 #include "artworkpanel.h"
 #include "auditmanager.h"
 #include "emulator.h"
+#include "familytreemodel.h"
 #include "foldertree.h"
 #include "frontendpaths.h"
 #include "gamelistmodel.h"
@@ -49,6 +50,7 @@
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QToolButton>
+#include <QtWidgets/QTreeView>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
@@ -62,14 +64,6 @@ namespace {
 // expensive, so we debounce rapid keyboard navigation.
 constexpr int SOFTWARE_DEBOUNCE_MS = 200;
 
-// Create a compact checkable quick-filter button.
-QPushButton *makeToggle(const QString &text, const QString &tip)
-{
-	QPushButton *button = new QPushButton(text);
-	button->setCheckable(true);
-	button->setToolTip(tip);
-	return button;
-}
 
 // Make two checkable actions mutually exclusive (either, or neither).
 void actionsExclusive(QAction *a, QAction *b)
@@ -176,9 +170,9 @@ void MainWindow::openProperties()
 	if (system.isEmpty())
 		return;
 
-	QModelIndex const cur = m_view->selectionModel()->currentIndex();
-	QString const description = cur.isValid()
-			? cur.sibling(cur.row(), GameListModel::COLUMN_DESCRIPTION).data(Qt::DisplayRole).toString()
+	int const row = m_model->rowForName(system);
+	QString const description = (row >= 0)
+			? m_model->index(row, GameListModel::COLUMN_DESCRIPTION).data(Qt::DisplayRole).toString()
 			: QString();
 
 	OptionsDialog dialog(system, description, this);
@@ -205,7 +199,7 @@ void MainWindow::showSystemContextMenu(const QPoint &pos)
 	menu.addAction(m_propertiesAct);
 
 	// Alternate versions (clone family): pick which one is the default.
-	int const sourceRow = index.isValid() ? m_proxy->mapToSource(index).row() : -1;
+	int const sourceRow = machineSourceRow(view, index);
 	if (sourceRow >= 0)
 	{
 		QList<int> const members = m_model->familyMemberRows(sourceRow);
@@ -241,7 +235,7 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 	if (index.isValid())
 		view->setCurrentIndex(index);
 
-	int const sourceRow = index.isValid() ? m_softwareProxy->mapToSource(index).row() : -1;
+	int const sourceRow = softwareSourceRow(view, index);
 	if (sourceRow < 0 || m_softwareModel->shortNameForRow(sourceRow).isEmpty())
 		return;
 
@@ -296,12 +290,13 @@ void MainWindow::saveSettings() const
 
 	// Currently selected software item (re-selected when its list reloads).
 	QString swList, swName;
-	QModelIndex const swIndex = m_softwareView->selectionModel()->currentIndex();
-	if (swIndex.isValid())
+	QAbstractItemView *swView = activeSoftwareView();
+	int const swSourceRow = (swView && swView->selectionModel())
+			? softwareSourceRow(swView, swView->selectionModel()->currentIndex()) : -1;
+	if (swSourceRow >= 0)
 	{
-		int const sourceRow = m_softwareProxy->mapToSource(swIndex).row();
-		swList = m_softwareModel->listForRow(sourceRow);
-		swName = m_softwareModel->shortNameForRow(sourceRow);
+		swList = m_softwareModel->listForRow(swSourceRow);
+		swName = m_softwareModel->shortNameForRow(swSourceRow);
 	}
 	settings.setValue(QStringLiteral("softwareList"), swList);
 	settings.setValue(QStringLiteral("softwareName"), swName);
@@ -394,12 +389,20 @@ void MainWindow::restoreSettings()
 	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
 	m_gridSource->setCurrentIndex(settings.value(QStringLiteral("view/machineSource"), 0).toInt());
 	m_gridCaption->setCheckedIds(captionIds(settings.value(QStringLiteral("view/machineCaption"), 1).toInt()));
-	m_gridToggle->setChecked(settings.value(QStringLiteral("view/machineMode"), false).toBool());
+	{
+		int const idx = m_viewMode->findData(settings.value(QStringLiteral("view/machineMode"), int(ViewList)).toInt());
+		m_viewMode->setCurrentIndex(idx >= 0 ? idx : 0);
+		setMachineViewMode(m_viewMode->currentData().toInt());
+	}
 
 	m_softwareGridSize->setValue(settings.value(QStringLiteral("view/softwareThumb"), 128).toInt());
 	m_softwareGridSource->setCurrentIndex(settings.value(QStringLiteral("view/softwareSource"), 0).toInt());
 	m_softwareGridCaption->setCheckedIds(captionIds(settings.value(QStringLiteral("view/softwareCaption"), 1).toInt()));
-	m_softwareGridToggle->setChecked(settings.value(QStringLiteral("view/softwareMode"), false).toBool());
+	{
+		int const idx = m_softwareViewMode->findData(settings.value(QStringLiteral("view/softwareMode"), int(ViewList)).toInt());
+		m_softwareViewMode->setCurrentIndex(idx >= 0 ? idx : 0);
+		setSoftwareViewMode(m_softwareViewMode->currentData().toInt());
+	}
 
 	// Restore all machine-list filters.  Block signals while setting the action
 	// states so an early toggle doesn't write back the not-yet-restored others,
@@ -448,19 +451,9 @@ void MainWindow::restoreSettings()
 	if (!folderPath.isEmpty())
 		m_folders->selectPath(folderPath);
 
-	// Re-select the last system, if it is still visible under the current
-	// folder/filters.
+	// Re-select the last system in whichever view mode is active.
 	if (!selected.isEmpty())
-	{
-		QModelIndexList const hits = m_proxy->match(
-				m_proxy->index(0, GameListModel::COLUMN_NAME),
-				GameListModel::ShortNameRole, selected, 1, Qt::MatchExactly);
-		if (!hits.isEmpty())
-		{
-			m_view->setCurrentIndex(hits.first());
-			m_view->scrollTo(hits.first(), QAbstractItemView::PositionAtCenter);
-		}
-	}
+		selectSystemInActiveView(selected);
 }
 
 MainWindow::~MainWindow()
@@ -680,12 +673,46 @@ void MainWindow::createWidgets()
 	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_grid, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
 
-	m_systemStack = new QStackedWidget;
-	m_systemStack->addWidget(m_view);   // index 0 = list
-	m_systemStack->addWidget(m_grid);   // index 1 = grid
+	// Grouped (tree) view: families as expandable groups, filtered in lock-step
+	// with the flat proxy.
+	m_treeModel = new FamilyTreeModel(m_model,
+			[this] { return m_model->groupRows(); },
+			[this] (int rep) { QList<int> m = m_model->familyMemberRows(rep); if (!m.isEmpty()) m.removeFirst(); return m; },
+			this);
+	m_treeProxy = new TreeFilterProxy(m_treeModel, m_proxy, m_model, this);
+	m_tree = new QTreeView;
+	m_tree->setModel(m_treeProxy);
+	m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_tree->setSortingEnabled(true);
+	m_tree->setAlternatingRowColors(true);
+	m_tree->setUniformRowHeights(true);
+	m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_tree->sortByColumn(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
+	m_tree->header()->setSectionResizeMode(GameListModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	connect(m_tree, &QTreeView::doubleClicked, this, &MainWindow::launchSelectedSystem);
+	connect(m_tree->selectionModel(), &QItemSelectionModel::selectionChanged,
+			this, &MainWindow::onSystemSelectionChanged);
+	m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_tree, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
+	// Rebuild the grouping when representatives change.
+	connect(m_model, &GameListModel::versionsChanged, this, [this] {
+		m_treeModel->rebuild();
+		m_treeProxy->invalidate();
+	});
 
-	m_gridToggle = makeToggle(tr("Grid"), tr("Show systems as a thumbnail grid"));
-	connect(m_gridToggle, &QPushButton::toggled, this, &MainWindow::setMachineGridMode);
+	m_systemStack = new QStackedWidget;
+	m_systemStack->addWidget(m_view);   // index 0 = List
+	m_systemStack->addWidget(m_tree);   // index 1 = Grouped
+	m_systemStack->addWidget(m_grid);   // index 2 = Grid
+
+	m_viewMode = new QComboBox;
+	m_viewMode->addItem(tr("List"), ViewList);
+	m_viewMode->addItem(tr("Grouped"), ViewGrouped);
+	m_viewMode->addItem(tr("Grid"), ViewGrid);
+	connect(m_viewMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
+		setMachineViewMode(m_viewMode->itemData(i).toInt());
+	});
 	m_gridBar = buildGridBar(m_gridSize, m_gridSource, m_gridCaption);
 	m_gridBar->setVisible(false);
 	connect(m_gridSize, &QSlider::valueChanged, this, [this] (int v) {
@@ -709,7 +736,7 @@ void MainWindow::createWidgets()
 	QHBoxLayout *systemBar = new QHBoxLayout;
 	systemBar->addWidget(m_search, 1);
 	systemBar->addWidget(filtersButton);
-	systemBar->addWidget(m_gridToggle);
+	systemBar->addWidget(m_viewMode);
 	systemLayout->addLayout(systemBar);
 	systemLayout->addWidget(m_gridBar);
 	systemLayout->addWidget(m_systemStack);
@@ -750,15 +777,49 @@ void MainWindow::createWidgets()
 	connect(m_softwareGrid, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
 
+	// Grouped (tree) view for software.
+	m_swTreeModel = new FamilyTreeModel(m_softwareModel,
+			[this] { return m_softwareModel->groupRows(); },
+			[this] (int rep) { QList<int> m = m_softwareModel->familyMemberRows(rep); if (!m.isEmpty()) m.removeFirst(); return m; },
+			this);
+	m_swTreeProxy = new TreeFilterProxy(m_swTreeModel, m_softwareProxy, m_softwareModel, this);
+	m_softwareTree = new QTreeView;
+	m_softwareTree->setModel(m_swTreeProxy);
+	m_softwareTree->setSelectionBehavior(QAbstractItemView::SelectRows);
+	m_softwareTree->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_softwareTree->setSortingEnabled(true);
+	m_softwareTree->setAlternatingRowColors(true);
+	m_softwareTree->setUniformRowHeights(true);
+	m_softwareTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+	m_softwareTree->header()->setSectionResizeMode(SoftwareModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	connect(m_softwareTree, &QTreeView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	connect(m_softwareTree->selectionModel(), &QItemSelectionModel::selectionChanged,
+			this, &MainWindow::onSoftwareSelectionChanged);
+	m_softwareTree->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_softwareTree, &QWidget::customContextMenuRequested,
+			this, &MainWindow::showSoftwareContextMenu);
+	// Rebuild the software grouping when its list reloads or representatives change.
+	connect(m_softwareModel, &QAbstractItemModel::modelReset, this, [this] {
+		m_swTreeModel->rebuild();
+		m_swTreeProxy->invalidate();
+	});
+	connect(m_softwareModel, &SoftwareModel::versionsChanged, this, [this] {
+		m_swTreeModel->rebuild();
+		m_swTreeProxy->invalidate();
+	});
+
 	m_softwareStack = new QStackedWidget;
-	m_softwareStack->addWidget(m_softwareView);   // index 0 = list
-	m_softwareStack->addWidget(m_softwareGrid);   // index 1 = grid
+	m_softwareStack->addWidget(m_softwareView);   // index 0 = List
+	m_softwareStack->addWidget(m_softwareTree);   // index 1 = Grouped
+	m_softwareStack->addWidget(m_softwareGrid);   // index 2 = Grid
 
 	m_softwareSearch = new QLineEdit;
 	m_softwareSearch->setClearButtonEnabled(true);
 	m_softwareSearch->setPlaceholderText(tr("Search software…"));
 	connect(m_softwareSearch, &QLineEdit::textChanged, this, [this] (const QString &text) {
 		m_softwareProxy->setSearchText(text);
+		if (m_swTreeProxy)
+			m_swTreeProxy->invalidate();
 	});
 
 	// Software runs through a background loader so per-entry ROM auditing
@@ -785,8 +846,13 @@ void MainWindow::createWidgets()
 	swBarFiltersMenu->addAction(m_actSwHidePrototypes);
 	swFiltersButton->setMenu(swBarFiltersMenu);
 
-	m_softwareGridToggle = makeToggle(tr("Grid"), tr("Show software as a thumbnail grid"));
-	connect(m_softwareGridToggle, &QPushButton::toggled, this, &MainWindow::setSoftwareGridMode);
+	m_softwareViewMode = new QComboBox;
+	m_softwareViewMode->addItem(tr("List"), ViewList);
+	m_softwareViewMode->addItem(tr("Grouped"), ViewGrouped);
+	m_softwareViewMode->addItem(tr("Grid"), ViewGrid);
+	connect(m_softwareViewMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
+		setSoftwareViewMode(m_softwareViewMode->itemData(i).toInt());
+	});
 	m_softwareGridBar = buildGridBar(m_softwareGridSize, m_softwareGridSource, m_softwareGridCaption);
 	m_softwareGridBar->setVisible(false);
 	connect(m_softwareGridSize, &QSlider::valueChanged, this, [this] (int v) {
@@ -808,7 +874,7 @@ void MainWindow::createWidgets()
 	QHBoxLayout *softwareBar = new QHBoxLayout;
 	softwareBar->addWidget(m_softwareSearch, 1);
 	softwareBar->addWidget(swFiltersButton);
-	softwareBar->addWidget(m_softwareGridToggle);
+	softwareBar->addWidget(m_softwareViewMode);
 	softwareLayout->addLayout(softwareBar);
 	softwareLayout->addWidget(m_softwareGridBar);
 	softwareLayout->addWidget(m_softwareStack);
@@ -889,30 +955,82 @@ void MainWindow::applySoftwareThumbSource()
 				QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey));
 }
 
-void MainWindow::setMachineGridMode(bool grid)
+void MainWindow::setMachineViewMode(int mode)
 {
-	m_systemStack->setCurrentIndex(grid ? 1 : 0);
-	m_gridBar->setVisible(grid);
-	if (grid)
+	QString const keep = selectedSystem();   // carry selection across modes
+	m_systemStack->setCurrentIndex(mode);
+	m_gridBar->setVisible(mode == ViewGrid);
+	if (mode == ViewGrid)
 	{
 		m_grid->setThumbnailSize(m_gridSize->value());
 		m_grid->setCaptionColumns(m_gridCaption->checkedIds());
 		applyMachineThumbSource();
 	}
-	QSettings().setValue(QStringLiteral("view/machineMode"), grid);
+	if (!keep.isEmpty())
+		selectSystemInActiveView(keep);
+	QSettings().setValue(QStringLiteral("view/machineMode"), mode);
+	onSystemSelectionChanged();
 }
 
-void MainWindow::setSoftwareGridMode(bool grid)
+void MainWindow::setSoftwareViewMode(int mode)
 {
-	m_softwareStack->setCurrentIndex(grid ? 1 : 0);
-	m_softwareGridBar->setVisible(grid);
-	if (grid)
+	m_softwareStack->setCurrentIndex(mode);
+	m_softwareGridBar->setVisible(mode == ViewGrid);
+	if (mode == ViewGrid)
 	{
 		m_softwareGrid->setThumbnailSize(m_softwareGridSize->value());
 		m_softwareGrid->setCaptionColumns(m_softwareGridCaption->checkedIds());
 		applySoftwareThumbSource();
 	}
-	QSettings().setValue(QStringLiteral("view/softwareMode"), grid);
+	QSettings().setValue(QStringLiteral("view/softwareMode"), mode);
+}
+
+QAbstractItemView *MainWindow::activeMachineView() const
+{
+	return qobject_cast<QAbstractItemView *>(m_systemStack->currentWidget());
+}
+
+QAbstractItemView *MainWindow::activeSoftwareView() const
+{
+	return qobject_cast<QAbstractItemView *>(m_softwareStack->currentWidget());
+}
+
+int MainWindow::machineSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const
+{
+	if (!viewIndex.isValid())
+		return -1;
+	if (view == m_tree)
+		return m_treeModel->sourceRow(m_treeProxy->mapToSource(viewIndex));
+	return m_proxy->mapToSource(viewIndex).row();   // table or grid (share m_proxy)
+}
+
+int MainWindow::softwareSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const
+{
+	if (!viewIndex.isValid())
+		return -1;
+	if (view == m_softwareTree)
+		return m_swTreeModel->sourceRow(m_swTreeProxy->mapToSource(viewIndex));
+	return m_softwareProxy->mapToSource(viewIndex).row();
+}
+
+void MainWindow::selectSystemInActiveView(const QString &shortName)
+{
+	int const row = m_model->rowForName(shortName);
+	if (row < 0)
+		return;
+	QAbstractItemView *view = activeMachineView();
+	if (!view)
+		return;
+	QModelIndex viewIndex;
+	if (view == m_tree)
+		viewIndex = m_treeProxy->mapFromSource(m_treeModel->indexForSourceRow(row));
+	else
+		viewIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+	if (viewIndex.isValid())
+	{
+		view->setCurrentIndex(viewIndex);
+		view->scrollTo(viewIndex, QAbstractItemView::PositionAtCenter);
+	}
 }
 
 void MainWindow::applyMainLayout(int layout)
@@ -975,12 +1093,16 @@ void MainWindow::setSoftwarePaneVisible(bool visible)
 void MainWindow::onFolderSelected(const FolderFilter &filter)
 {
 	m_proxy->setFolderFilter(filter);
+	if (m_treeProxy)
+		m_treeProxy->invalidate();
 	updateStatusCount();
 }
 
 void MainWindow::onSearchTextChanged(const QString &text)
 {
 	m_proxy->setSearchText(text);
+	if (m_treeProxy)
+		m_treeProxy->invalidate();
 	updateStatusCount();
 }
 
@@ -996,6 +1118,8 @@ void MainWindow::onStatusFilterChanged()
 	if (m_actUnavailable->isChecked())
 		flags |= StatusUnavailable;
 	m_proxy->setStatusFilter(flags);
+	if (m_treeProxy)
+		m_treeProxy->invalidate();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
@@ -1012,6 +1136,8 @@ void MainWindow::onVersionFilterChanged()
 	m_proxy->setHideBootlegs(m_actHideBootlegs->isChecked());
 	m_proxy->setHideHacks(m_actHideHacks->isChecked());
 	m_proxy->setHidePrototypes(m_actHidePrototypes->isChecked());
+	if (m_treeProxy)
+		m_treeProxy->invalidate();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/hideClones"), m_actHideClones->isChecked());
@@ -1044,6 +1170,8 @@ void MainWindow::onSoftwareFilterChanged()
 	m_softwareProxy->setHideBootlegs(m_actSwHideBootlegs->isChecked());
 	m_softwareProxy->setHideHacks(m_actSwHideHacks->isChecked());
 	m_softwareProxy->setHidePrototypes(m_actSwHidePrototypes->isChecked());
+	if (m_swTreeProxy)
+		m_swTreeProxy->invalidate();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/swSupported"), m_actSwSupported->isChecked());
@@ -1077,22 +1205,27 @@ void MainWindow::selectPendingSoftware()
 	if (m_pendingSoftwareName.isEmpty())
 		return;
 
-	for (int row = 0; row < m_softwareModel->rowCount(); row++)
+	QAbstractItemView *view = activeSoftwareView();
+	for (int row = 0; view && row < m_softwareModel->rowCount(); row++)
 	{
 		if (m_softwareModel->shortNameForRow(row) == m_pendingSoftwareName
 				&& m_softwareModel->listForRow(row) == m_pendingSoftwareList)
 		{
-			QModelIndex const proxyIndex = m_softwareProxy->mapFromSource(
-					m_softwareModel->index(row, SoftwareModel::COLUMN_DESCRIPTION));
-			if (proxyIndex.isValid())
+			QModelIndex viewIndex;
+			if (view == m_softwareTree)
+				viewIndex = m_swTreeProxy->mapFromSource(m_swTreeModel->indexForSourceRow(row));
+			else
+				viewIndex = m_softwareProxy->mapFromSource(
+						m_softwareModel->index(row, SoftwareModel::COLUMN_DESCRIPTION));
+			if (viewIndex.isValid())
 			{
-				m_softwareView->setCurrentIndex(proxyIndex);
+				view->setCurrentIndex(viewIndex);
 				// Defer the scroll: the just-shown view hasn't laid out its rows
 				// yet (large lists), so an immediate scrollTo lands off-target.
-				QPersistentModelIndex const persistent(proxyIndex);
-				QTimer::singleShot(0, this, [this, persistent] {
+				QPersistentModelIndex const persistent(viewIndex);
+				QTimer::singleShot(0, this, [this, view, persistent] {
 					if (persistent.isValid())
-						m_softwareView->scrollTo(persistent, QAbstractItemView::PositionAtCenter);
+						view->scrollTo(persistent, QAbstractItemView::PositionAtCenter);
 				});
 			}
 			break;
@@ -1106,10 +1239,11 @@ void MainWindow::selectPendingSoftware()
 
 void MainWindow::onSoftwareSelectionChanged()
 {
-	QModelIndex const index = m_softwareView->selectionModel()->currentIndex();
-	if (index.isValid())
+	QAbstractItemView *view = activeSoftwareView();
+	int const sourceRow = (view && view->selectionModel())
+			? softwareSourceRow(view, view->selectionModel()->currentIndex()) : -1;
+	if (sourceRow >= 0)
 	{
-		int const sourceRow = m_softwareProxy->mapToSource(index).row();
 		QString const list = m_softwareModel->listForRow(sourceRow);
 		QString const software = m_softwareModel->shortNameForRow(sourceRow);
 		if (!list.isEmpty() && !software.isEmpty())
@@ -1175,14 +1309,15 @@ void MainWindow::onSoftwareAvailabilityReady(const QVector<int> &availability)
 
 QString MainWindow::selectedSystem() const
 {
-	if (!m_view)
+	if (!m_systemStack)
 		return QString();
-
-	QModelIndex const index = m_view->selectionModel()->currentIndex();
-	if (!index.isValid())
+	QAbstractItemView *view = activeMachineView();
+	if (!view || !view->selectionModel())
 		return QString();
-
-	return index.data(GameListModel::ShortNameRole).toString();
+	int const row = machineSourceRow(view, view->selectionModel()->currentIndex());
+	if (row < 0)
+		return QString();
+	return m_model->index(row, 0).data(GameListModel::ShortNameRole).toString();
 }
 
 void MainWindow::runModal(const QString &label, const std::function<int ()> &runner)
@@ -1229,12 +1364,12 @@ void MainWindow::launchSelectedSoftware()
 	if (system.isEmpty())
 		return;
 
-	QModelIndex const index = m_softwareView->selectionModel()->currentIndex();
-	if (!index.isValid())
+	QAbstractItemView *view = activeSoftwareView();
+	if (!view || !view->selectionModel())
 		return;
-
-	// The view sits behind a sort proxy; map back to the source row.
-	int const sourceRow = m_softwareProxy->mapToSource(index).row();
+	int const sourceRow = softwareSourceRow(view, view->selectionModel()->currentIndex());
+	if (sourceRow < 0)
+		return;
 	QString const software = m_softwareModel->shortNameForRow(sourceRow);
 	if (software.isEmpty())
 		return;

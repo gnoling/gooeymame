@@ -216,6 +216,15 @@ QList<int> SoftwareModel::familyMemberRows(int row) const
 	return out;
 }
 
+QList<int> SoftwareModel::groupRows() const
+{
+	QList<int> out;
+	out.reserve(int(m_familyMembers.size()));
+	for (const auto &entry : m_familyMembers)
+		out << m_representative[entry.first];
+	return out;
+}
+
 void SoftwareModel::setVersionOverride(int row, const QString &memberShortName)
 {
 	if (row < 0 || row >= int(m_familyRoot.size()))

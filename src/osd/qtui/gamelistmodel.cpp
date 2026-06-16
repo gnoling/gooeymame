@@ -297,6 +297,15 @@ QList<int> GameListModel::familyMemberRows(int row) const
 	return out;
 }
 
+QList<int> GameListModel::groupRows() const
+{
+	QList<int> out;
+	out.reserve(int(m_familyMembers.size()));
+	for (const auto &entry : m_familyMembers)
+		out << m_representative[entry.first];
+	return out;
+}
+
 int GameListModel::rowForName(const QString &shortName) const
 {
 	return m_nameToRow.value(shortName, -1);
