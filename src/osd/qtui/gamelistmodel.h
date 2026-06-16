@@ -16,11 +16,14 @@
 
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QHash>
+#include <QtCore/QList>
 #include <QtCore/QSet>
+#include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtGui/QIcon>
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 
@@ -67,7 +70,15 @@ public:
 		// ROM availability (one of GameListModel::Availability)
 		AvailabilityRole,
 		// parent/clone source short name, or empty
-		ParentNameRole
+		ParentNameRole,
+		// true if this driver is a clone (has a non-BIOS parent)
+		IsCloneRole,
+		// true if this driver is its clone family's representative
+		IsRepresentativeRole,
+		// canonical region inferred from the description ("" if none)
+		RegionRole,
+		// VersionFlag bitmask (bootleg/hack/prototype)
+		VersionFlagsRole
 	};
 
 	// ROM availability of a system, as determined by the auditor.
@@ -77,6 +88,12 @@ public:
 		Available = 1,
 		Unavailable = 2
 	};
+
+	// How the representative ("primary") member of a clone family is chosen.
+	enum VersionMode { MatchParent = 0, PromoteRegion = 1 };
+
+	// Version classification flags (from MACHINE_UNOFFICIAL + description tags).
+	enum VersionFlag { VersionBootleg = 0x1, VersionHack = 0x2, VersionPrototype = 0x4 };
 
 	explicit GameListModel(QObject *parent = nullptr);
 
@@ -100,6 +117,24 @@ public:
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
 
+signals:
+	// Emitted when clone-family representatives change (after a version setting
+	// or per-family override changes), so proxies can re-filter.
+	void versionsChanged();
+
+public:
+
+	// Re-read the clone "version" preference (versions/* in QSettings) and
+	// recompute each family's representative; emits versionsChanged().
+	void reloadVersionSettings();
+
+	// Clone-family queries (rows are model rows, not driver_list indices).
+	bool isClone(int row) const;
+	bool isRepresentative(int row) const;
+	int representativeRow(int row) const;       // representative of row's family
+	QList<int> familyMemberRows(int row) const; // representative first
+	int rowForName(const QString &shortName) const;   // -1 if unknown
+
 	// Choose the image set used for grid thumbnails (a frontendpaths machine
 	// key, e.g. "snap"); invalidates the cache and reloads on demand.
 	void setThumbnailSource(const QString &machineKey);
@@ -122,6 +157,24 @@ private:
 
 	// Short name -> row, for applying availability results by name.
 	QHash<QString, int> m_nameToRow;
+
+	// Clone families.  m_familyRoot[row] is the parent row (or row itself for a
+	// parent/standalone); m_familyMembers maps a root row to its members (root
+	// first); m_representative[row] is the chosen "primary" row of its family.
+	std::vector<int> m_familyRoot;
+	std::unordered_map<int, std::vector<int>> m_familyMembers;
+	std::vector<int> m_representative;
+	std::vector<QString> m_region;               // canonical region per row
+	std::vector<std::uint8_t> m_versionFlags;    // VersionFlag bitmask per row
+
+	// "Version" preference (read from versions/* in QSettings).
+	int m_versionMode = MatchParent;
+	bool m_useSystemRegion = false;
+	QStringList m_regionOrder;
+	QHash<QString, QString> m_overrides;         // family root name -> member name
+
+	void buildFamilies();           // one-time: families, region, version flags
+	void computeRepresentatives();  // (re)derive m_representative from settings
 
 	// Lazy, cached row icons from icons.zip (loaded on a worker thread).
 	IconLoader *m_iconLoader = nullptr;

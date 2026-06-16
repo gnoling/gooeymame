@@ -14,13 +14,16 @@
 
 #include "frontendpaths.h"
 #include "iconloader.h"
+#include "regions.h"
 #include "thumbnailloader.h"
 
 #include <QtCore/QSet>
+#include <QtCore/QSettings>
 #include <QtGui/QBrush>
 #include <QtGui/QPixmap>
 
 #include <algorithm>
+#include <climits>
 #include <cstring>
 
 
@@ -50,6 +53,11 @@ GameListModel::GameListModel(QObject *parent) :
 	m_nameToRow.reserve(int(m_rows.size()));
 	for (int row = 0; row < int(m_rows.size()); row++)
 		m_nameToRow.insert(QString::fromLatin1(driver_list::driver(m_rows[row]).name), row);
+
+	// Clone families + region/version classification (one-time), then the
+	// representative selection from the saved version preference.
+	buildFamilies();
+	reloadVersionSettings();
 
 	// Row icons (icons.zip) are loaded lazily on a worker thread.
 	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
@@ -113,6 +121,185 @@ void GameListModel::onThumbnailLoaded(int row, quint64 generation, const QByteAr
 		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
 		emit dataChanged(idx, idx, { kThumbnailRole });
 	}
+}
+
+void GameListModel::buildFamilies()
+{
+	int const n = int(m_rows.size());
+	m_familyRoot.assign(n, -1);
+	m_region.assign(n, QString());
+	m_versionFlags.assign(n, 0);
+	m_representative.assign(n, -1);
+	m_familyMembers.clear();
+
+	// driver_list index -> our row, to resolve parents to rows.
+	std::unordered_map<int, int> idxToRow;
+	idxToRow.reserve(n * 2);
+	for (int row = 0; row < n; row++)
+		idxToRow.emplace(m_rows[row], row);
+
+	for (int row = 0; row < n; row++)
+	{
+		int const di = m_rows[row];
+		const game_driver &drv = driver_list::driver(di);
+
+		int rootRow = row;
+		int const parentIdx = driver_list::non_bios_clone(di);
+		if (parentIdx >= 0)
+		{
+			auto it = idxToRow.find(parentIdx);
+			if (it != idxToRow.end())
+				rootRow = it->second;
+		}
+		m_familyRoot[row] = rootRow;
+
+		QString const desc = QString::fromUtf8(drv.type.fullname());
+		m_region[row] = extractRegion(desc);
+
+		std::uint8_t flags = 0;
+		QString const lower = desc.toLower();
+		if (drv.flags & machine_flags::UNOFFICIAL)
+			flags |= VersionHack;
+		if (lower.contains(QStringLiteral("bootleg")))
+			flags |= VersionBootleg;
+		if (lower.contains(QStringLiteral("hack")))
+			flags |= VersionHack;
+		if (lower.contains(QStringLiteral("prototype")) || (drv.flags & machine_flags::IS_INCOMPLETE))
+			flags |= VersionPrototype;
+		m_versionFlags[row] = flags;
+	}
+
+	for (int row = 0; row < n; row++)
+		m_familyMembers[m_familyRoot[row]].push_back(row);
+
+	// Ensure each family lists its root first (parents are not guaranteed to
+	// precede their clones in driver_list order).
+	for (auto &entry : m_familyMembers)
+	{
+		std::vector<int> &members = entry.second;
+		for (std::size_t i = 1; i < members.size(); i++)
+		{
+			if (members[i] == entry.first)
+			{
+				std::swap(members[0], members[i]);
+				break;
+			}
+		}
+	}
+}
+
+void GameListModel::computeRepresentatives()
+{
+	// Effective priority order; the system region jumps to the front when the
+	// auto toggle is on.
+	QStringList order = m_regionOrder;
+	if (m_useSystemRegion)
+	{
+		QString const sys = systemRegion();
+		if (!sys.isEmpty())
+		{
+			order.removeAll(sys);
+			order.prepend(sys);
+		}
+	}
+	QHash<QString, int> rank;
+	for (int i = 0; i < order.size(); i++)
+		rank.insert(order[i], i);
+
+	for (auto &entry : m_familyMembers)
+	{
+		int const root = entry.first;
+		const std::vector<int> &members = entry.second;
+		int rep = root;   // default: MAME's parent
+
+		QString const rootName = QString::fromLatin1(driver_list::driver(m_rows[root]).name);
+		auto ov = m_overrides.constFind(rootName);
+		if (ov != m_overrides.constEnd())
+		{
+			int const r = rowForName(ov.value());
+			if (r >= 0 && r < int(m_familyRoot.size()) && m_familyRoot[r] == root)
+				rep = r;
+		}
+		else if (m_versionMode == PromoteRegion)
+		{
+			int bestRank = INT_MAX;
+			int bestRow = root;   // members lists root first, so it wins ties
+			for (int member : members)
+			{
+				int const rk = m_region[member].isEmpty()
+						? INT_MAX : rank.value(m_region[member], INT_MAX);
+				if (rk < bestRank)
+				{
+					bestRank = rk;
+					bestRow = member;
+				}
+			}
+			rep = bestRow;
+		}
+
+		for (int member : members)
+			m_representative[member] = rep;
+	}
+}
+
+void GameListModel::reloadVersionSettings()
+{
+	QSettings settings;
+	m_versionMode = settings.value(QStringLiteral("versions/mode"), int(MatchParent)).toInt();
+	m_useSystemRegion = settings.value(QStringLiteral("versions/useSystemRegion"), false).toBool();
+	QStringList const order = settings.value(QStringLiteral("versions/order")).toStringList();
+	m_regionOrder = order.isEmpty() ? defaultRegionOrder() : order;
+
+	m_overrides.clear();
+	settings.beginGroup(QStringLiteral("versions/overrides"));
+	const QStringList keys = settings.childKeys();
+	for (const QString &key : keys)
+		m_overrides.insert(key, settings.value(key).toString());
+	settings.endGroup();
+
+	computeRepresentatives();
+
+	if (!m_rows.empty())
+		emit dataChanged(index(0, 0), index(int(m_rows.size()) - 1, COLUMN_COUNT - 1),
+				{ IsRepresentativeRole, IsCloneRole });
+	emit versionsChanged();
+}
+
+bool GameListModel::isClone(int row) const
+{
+	return row >= 0 && row < int(m_familyRoot.size()) && m_familyRoot[row] != row;
+}
+
+bool GameListModel::isRepresentative(int row) const
+{
+	return row >= 0 && row < int(m_representative.size()) && m_representative[row] == row;
+}
+
+int GameListModel::representativeRow(int row) const
+{
+	return (row >= 0 && row < int(m_representative.size())) ? m_representative[row] : row;
+}
+
+QList<int> GameListModel::familyMemberRows(int row) const
+{
+	QList<int> out;
+	if (row < 0 || row >= int(m_familyRoot.size()))
+		return out;
+	auto it = m_familyMembers.find(m_familyRoot[row]);
+	if (it == m_familyMembers.end())
+		return out;
+	int const rep = m_representative[m_familyRoot[row]];
+	if (rep >= 0)
+		out << rep;   // representative first
+	for (int member : it->second)
+		if (member != rep)
+			out << member;
+	return out;
+}
+
+int GameListModel::rowForName(const QString &shortName) const
+{
+	return m_nameToRow.value(shortName, -1);
 }
 
 int GameListModel::rowCount(const QModelIndex &parent) const
@@ -217,6 +404,18 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 	case ParentNameRole:
 		return (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
 				? QString::fromLatin1(drv.parent) : QString();
+
+	case IsCloneRole:
+		return isClone(index.row());
+
+	case IsRepresentativeRole:
+		return isRepresentative(index.row());
+
+	case RegionRole:
+		return m_region.empty() ? QString() : m_region[index.row()];
+
+	case VersionFlagsRole:
+		return m_versionFlags.empty() ? 0 : int(m_versionFlags[index.row()]);
 
 	case kThumbnailRole:
 		// Grid thumbnail for the row (lazily loaded for the chosen image set).
