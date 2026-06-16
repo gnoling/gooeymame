@@ -154,4 +154,29 @@ bool TreeFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceP
 	return m_flatProxy->mapFromSource(m_flatModel->index(row, 0)).isValid();
 }
 
+
+//============================================================
+//  RepresentativeProxy
+//============================================================
+
+RepresentativeProxy::RepresentativeProxy(QAbstractItemModel *source, QSortFilterProxyModel *flatProxy,
+		std::function<bool(int)> isRepresentative, QObject *parent) :
+	QSortFilterProxyModel(parent),
+	m_source(source),
+	m_flatProxy(flatProxy),
+	m_isRepresentative(std::move(isRepresentative))
+{
+	setSortCaseSensitivity(Qt::CaseInsensitive);
+	setSortLocaleAware(true);
+	setSourceModel(source);
+}
+
+bool RepresentativeProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
+{
+	if (!m_isRepresentative(sourceRow))
+		return false;
+	// Defer the remaining filters to the flat proxy's acceptance of this row.
+	return m_flatProxy->mapFromSource(m_source->index(sourceRow, 0, sourceParent)).isValid();
+}
+
 } // namespace osd::qtui

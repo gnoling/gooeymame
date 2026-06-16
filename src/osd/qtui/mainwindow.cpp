@@ -217,6 +217,10 @@ void MainWindow::showSystemContextMenu(const QPoint &pos)
 				act->setChecked(member == rep);
 				connect(act, &QAction::triggered, this, [this, sourceRow, name] {
 					m_model->setVersionOverride(sourceRow, name);
+					// Follow the family to its new representative's sorted position.
+					int const newRep = m_model->representativeRow(sourceRow);
+					selectSystemInActiveView(
+							m_model->index(newRep, 0).data(GameListModel::ShortNameRole).toString());
 				});
 			}
 		}
@@ -260,6 +264,7 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 			act->setChecked(member == rep);
 			connect(act, &QAction::triggered, this, [this, sourceRow, name] {
 				m_softwareModel->setVersionOverride(sourceRow, name);
+				selectSoftwareRow(m_softwareModel->representativeRow(sourceRow));
 			});
 		}
 	}
@@ -611,6 +616,7 @@ void MainWindow::createWidgets()
 	// Re-filter when clone-family representatives change (version preference).
 	connect(m_model, &GameListModel::versionsChanged, this, [this] {
 		m_proxy->invalidate();
+		invalidateMachineViews();
 		updateStatusCount();
 	});
 
@@ -665,11 +671,16 @@ void MainWindow::createWidgets()
 	barFiltersMenu->addAction(m_actHidePrototypes);
 	filtersButton->setMenu(barFiltersMenu);
 
-	// Grid (thumbnail) view sharing the proxy and selection model with the table.
+	// Grid (thumbnail) view: one tile per clone family (representatives only),
+	// via a proxy that defers the rest of the filtering to the flat proxy.
+	m_gridProxy = new RepresentativeProxy(m_model, m_proxy,
+			[this] (int row) { return m_model->isRepresentative(row); }, this);
+	m_gridProxy->sort(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_grid = new GridView;
-	m_grid->setModel(m_proxy);
-	m_grid->setSelectionModel(m_view->selectionModel());
+	m_grid->setModel(m_gridProxy);
 	connect(m_grid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSystem);
+	connect(m_grid->selectionModel(), &QItemSelectionModel::selectionChanged,
+			this, &MainWindow::onSystemSelectionChanged);
 	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_grid, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
 
@@ -769,10 +780,15 @@ void MainWindow::createWidgets()
 	connect(m_softwareView, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
 
+	// Software grid: one tile per family (representatives only).
+	m_swGridProxy = new RepresentativeProxy(m_softwareModel, m_softwareProxy,
+			[this] (int row) { return m_softwareModel->isRepresentative(row); }, this);
+	m_swGridProxy->sort(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_softwareGrid = new GridView;
-	m_softwareGrid->setModel(m_softwareProxy);
-	m_softwareGrid->setSelectionModel(m_softwareView->selectionModel());
+	m_softwareGrid->setModel(m_swGridProxy);
 	connect(m_softwareGrid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	connect(m_softwareGrid->selectionModel(), &QItemSelectionModel::selectionChanged,
+			this, &MainWindow::onSoftwareSelectionChanged);
 	m_softwareGrid->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_softwareGrid, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
@@ -801,11 +817,11 @@ void MainWindow::createWidgets()
 	// Rebuild the software grouping when its list reloads or representatives change.
 	connect(m_softwareModel, &QAbstractItemModel::modelReset, this, [this] {
 		m_swTreeModel->rebuild();
-		m_swTreeProxy->invalidate();
+		invalidateSoftwareViews();
 	});
 	connect(m_softwareModel, &SoftwareModel::versionsChanged, this, [this] {
 		m_swTreeModel->rebuild();
-		m_swTreeProxy->invalidate();
+		invalidateSoftwareViews();
 	});
 
 	m_softwareStack = new QStackedWidget;
@@ -818,8 +834,7 @@ void MainWindow::createWidgets()
 	m_softwareSearch->setPlaceholderText(tr("Search software…"));
 	connect(m_softwareSearch, &QLineEdit::textChanged, this, [this] (const QString &text) {
 		m_softwareProxy->setSearchText(text);
-		if (m_swTreeProxy)
-			m_swTreeProxy->invalidate();
+		invalidateSoftwareViews();
 	});
 
 	// Software runs through a background loader so per-entry ROM auditing
@@ -1001,7 +1016,9 @@ int MainWindow::machineSourceRow(QAbstractItemView *view, const QModelIndex &vie
 		return -1;
 	if (view == m_tree)
 		return m_treeModel->sourceRow(m_treeProxy->mapToSource(viewIndex));
-	return m_proxy->mapToSource(viewIndex).row();   // table or grid (share m_proxy)
+	if (view == m_grid)
+		return m_gridProxy->mapToSource(viewIndex).row();
+	return m_proxy->mapToSource(viewIndex).row();   // table
 }
 
 int MainWindow::softwareSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const
@@ -1010,12 +1027,14 @@ int MainWindow::softwareSourceRow(QAbstractItemView *view, const QModelIndex &vi
 		return -1;
 	if (view == m_softwareTree)
 		return m_swTreeModel->sourceRow(m_swTreeProxy->mapToSource(viewIndex));
+	if (view == m_softwareGrid)
+		return m_swGridProxy->mapToSource(viewIndex).row();
 	return m_softwareProxy->mapToSource(viewIndex).row();
 }
 
 void MainWindow::selectSystemInActiveView(const QString &shortName)
 {
-	int const row = m_model->rowForName(shortName);
+	int row = m_model->rowForName(shortName);
 	if (row < 0)
 		return;
 	QAbstractItemView *view = activeMachineView();
@@ -1023,14 +1042,67 @@ void MainWindow::selectSystemInActiveView(const QString &shortName)
 		return;
 	QModelIndex viewIndex;
 	if (view == m_tree)
+	{
 		viewIndex = m_treeProxy->mapFromSource(m_treeModel->indexForSourceRow(row));
+	}
+	else if (view == m_grid)
+	{
+		row = m_model->representativeRow(row);   // grid shows representatives only
+		viewIndex = m_gridProxy->mapFromSource(m_model->index(row, 0));
+	}
 	else
+	{
 		viewIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+	}
 	if (viewIndex.isValid())
 	{
 		view->setCurrentIndex(viewIndex);
 		view->scrollTo(viewIndex, QAbstractItemView::PositionAtCenter);
 	}
+}
+
+void MainWindow::selectSoftwareRow(int sourceRow)
+{
+	if (sourceRow < 0)
+		return;
+	QAbstractItemView *view = activeSoftwareView();
+	if (!view)
+		return;
+	QModelIndex viewIndex;
+	if (view == m_softwareTree)
+	{
+		viewIndex = m_swTreeProxy->mapFromSource(m_swTreeModel->indexForSourceRow(sourceRow));
+	}
+	else if (view == m_softwareGrid)
+	{
+		sourceRow = m_softwareModel->representativeRow(sourceRow);
+		viewIndex = m_swGridProxy->mapFromSource(m_softwareModel->index(sourceRow, 0));
+	}
+	else
+	{
+		viewIndex = m_softwareProxy->mapFromSource(m_softwareModel->index(sourceRow, 0));
+	}
+	if (viewIndex.isValid())
+	{
+		view->setCurrentIndex(viewIndex);
+		view->scrollTo(viewIndex, QAbstractItemView::PositionAtCenter);
+	}
+}
+
+void MainWindow::invalidateMachineViews()
+{
+	if (m_treeProxy)
+		m_treeProxy->invalidate();
+	if (m_gridProxy)
+		m_gridProxy->invalidate();
+}
+
+void MainWindow::invalidateSoftwareViews()
+{
+	if (m_swTreeProxy)
+		m_swTreeProxy->invalidate();
+	if (m_swGridProxy)
+		m_swGridProxy->invalidate();
 }
 
 void MainWindow::applyMainLayout(int layout)
@@ -1093,16 +1165,14 @@ void MainWindow::setSoftwarePaneVisible(bool visible)
 void MainWindow::onFolderSelected(const FolderFilter &filter)
 {
 	m_proxy->setFolderFilter(filter);
-	if (m_treeProxy)
-		m_treeProxy->invalidate();
+	invalidateMachineViews();
 	updateStatusCount();
 }
 
 void MainWindow::onSearchTextChanged(const QString &text)
 {
 	m_proxy->setSearchText(text);
-	if (m_treeProxy)
-		m_treeProxy->invalidate();
+	invalidateMachineViews();
 	updateStatusCount();
 }
 
@@ -1118,8 +1188,7 @@ void MainWindow::onStatusFilterChanged()
 	if (m_actUnavailable->isChecked())
 		flags |= StatusUnavailable;
 	m_proxy->setStatusFilter(flags);
-	if (m_treeProxy)
-		m_treeProxy->invalidate();
+	invalidateMachineViews();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
@@ -1136,8 +1205,7 @@ void MainWindow::onVersionFilterChanged()
 	m_proxy->setHideBootlegs(m_actHideBootlegs->isChecked());
 	m_proxy->setHideHacks(m_actHideHacks->isChecked());
 	m_proxy->setHidePrototypes(m_actHidePrototypes->isChecked());
-	if (m_treeProxy)
-		m_treeProxy->invalidate();
+	invalidateMachineViews();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/hideClones"), m_actHideClones->isChecked());
@@ -1170,8 +1238,7 @@ void MainWindow::onSoftwareFilterChanged()
 	m_softwareProxy->setHideBootlegs(m_actSwHideBootlegs->isChecked());
 	m_softwareProxy->setHideHacks(m_actSwHideHacks->isChecked());
 	m_softwareProxy->setHidePrototypes(m_actSwHidePrototypes->isChecked());
-	if (m_swTreeProxy)
-		m_swTreeProxy->invalidate();
+	invalidateSoftwareViews();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/swSupported"), m_actSwSupported->isChecked());

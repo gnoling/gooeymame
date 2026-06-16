@@ -88,6 +88,27 @@ private:
 	QAbstractItemModel *m_flatModel = nullptr;
 };
 
+
+// Flat proxy that shows only clone-family representatives (one row per family),
+// deferring the rest of the filtering to a flat proxy's acceptance — used by
+// the grid views so each family collapses to a single tile.
+class RepresentativeProxy : public QSortFilterProxyModel
+{
+	Q_OBJECT
+
+public:
+	RepresentativeProxy(QAbstractItemModel *source, QSortFilterProxyModel *flatProxy,
+			std::function<bool(int)> isRepresentative, QObject *parent = nullptr);
+
+protected:
+	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
+
+private:
+	QAbstractItemModel *m_source = nullptr;
+	QSortFilterProxyModel *m_flatProxy = nullptr;
+	std::function<bool(int)> m_isRepresentative;
+};
+
 } // namespace osd::qtui
 
 #endif // MAME_OSD_QTUI_FAMILYTREEMODEL_H

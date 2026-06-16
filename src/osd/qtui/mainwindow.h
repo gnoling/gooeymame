@@ -45,6 +45,7 @@ class FamilyTreeModel;
 class FolderTree;
 class GameListModel;
 class GridView;
+class RepresentativeProxy;
 class SoftwareLoader;
 class SoftwareModel;
 class SoftwareProxy;
@@ -111,6 +112,9 @@ private:
 	int machineSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const;
 	int softwareSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const;
 	void selectSystemInActiveView(const QString &shortName);
+	void selectSoftwareRow(int sourceRow);   // select a source row in the active software view
+	void invalidateMachineViews();           // re-filter the tree + grid proxies
+	void invalidateSoftwareViews();
 	void saveSettings() const;
 	void restoreSettings();
 
@@ -131,6 +135,7 @@ private:
 	GameListProxy *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
 	GridView *m_grid = nullptr;
+	RepresentativeProxy *m_gridProxy = nullptr;
 	QTreeView *m_tree = nullptr;
 	FamilyTreeModel *m_treeModel = nullptr;
 	TreeFilterProxy *m_treeProxy = nullptr;
@@ -145,6 +150,7 @@ private:
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
 	GridView *m_softwareGrid = nullptr;
+	RepresentativeProxy *m_swGridProxy = nullptr;
 	QTreeView *m_softwareTree = nullptr;
 	FamilyTreeModel *m_swTreeModel = nullptr;
 	TreeFilterProxy *m_swTreeProxy = nullptr;
