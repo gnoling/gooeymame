@@ -192,9 +192,10 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
 	buildUi();
 }
 
-OptionsDialog::OptionsDialog(const QString &system, QWidget *parent) :
+OptionsDialog::OptionsDialog(const QString &system, const QString &description, QWidget *parent) :
 	QDialog(parent),
-	m_system(system)
+	m_system(system),
+	m_systemDescription(description)
 {
 	buildUi();
 }
@@ -202,7 +203,12 @@ OptionsDialog::OptionsDialog(const QString &system, QWidget *parent) :
 void OptionsDialog::buildUi()
 {
 	bool const gameMode = !m_system.isEmpty();
-	setWindowTitle(gameMode ? tr("Properties: %1").arg(m_system) : tr("Options"));
+	if (!gameMode)
+		setWindowTitle(tr("Options"));
+	else if (m_systemDescription.isEmpty())
+		setWindowTitle(tr("Properties: %1").arg(m_system));
+	else
+		setWindowTitle(tr("Properties: %1 (%2)").arg(m_systemDescription, m_system));
 	resize(820, 620);
 
 	m_categoryList = new QListWidget(this);

@@ -58,6 +58,7 @@ private slots:
 	void showAbout();
 	void openOptions();
 	void openProperties();
+	void showSystemContextMenu(const QPoint &pos);
 	void launchSelectedSystem();
 	void launchSelectedSoftware();
 	void onFolderSelected(const FolderFilter &filter);

@@ -150,9 +150,29 @@ void MainWindow::openProperties()
 	if (system.isEmpty())
 		return;
 
-	OptionsDialog dialog(system, this);
+	QModelIndex const cur = m_view->selectionModel()->currentIndex();
+	QString const description = cur.isValid()
+			? cur.sibling(cur.row(), GameListModel::COLUMN_DESCRIPTION).data(Qt::DisplayRole).toString()
+			: QString();
+
+	OptionsDialog dialog(system, description, this);
 	if (dialog.exec() == QDialog::Accepted)
 		statusBar()->showMessage(tr("Saved properties for %1.").arg(system), 4000);
+}
+
+void MainWindow::showSystemContextMenu(const QPoint &pos)
+{
+	// Right-click selects the row under the cursor so the actions apply to it.
+	QModelIndex const index = m_view->indexAt(pos);
+	if (index.isValid())
+		m_view->setCurrentIndex(index);
+	if (selectedSystem().isEmpty())
+		return;
+
+	QMenu menu(this);
+	menu.addAction(m_playAct);
+	menu.addAction(m_propertiesAct);
+	menu.exec(m_view->viewport()->mapToGlobal(pos));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -380,6 +400,9 @@ void MainWindow::createWidgets()
 	connect(m_view, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSystem);
 	connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSystemSelectionChanged);
+	m_view->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_view, &QWidget::customContextMenuRequested,
+			this, &MainWindow::showSystemContextMenu);
 
 	m_search = new QLineEdit;
 	m_search->setClearButtonEnabled(true);
