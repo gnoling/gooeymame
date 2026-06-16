@@ -99,7 +99,7 @@ private:
 	void applyIconSize(int size);   // icon size + matching row height
 
 	// List / Grouped / Grid view modes (per pane).
-	enum ViewMode { ViewList = 0, ViewGrouped = 1, ViewGrid = 2 };
+	enum ViewMode { ViewList = 0, ViewGrouped = 1, ViewGrid = 2, ViewGridGrouped = 3 };
 	QWidget *buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption);
 	void setMachineViewMode(int mode);
 	void setSoftwareViewMode(int mode);
@@ -134,7 +134,8 @@ private:
 	GameListModel *m_model = nullptr;
 	GameListProxy *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
-	GridView *m_grid = nullptr;
+	GridView *m_grid = nullptr;          // flat grid (every member)
+	GridView *m_gridGrouped = nullptr;   // one tile per family (representatives)
 	RepresentativeProxy *m_gridProxy = nullptr;
 	QTreeView *m_tree = nullptr;
 	FamilyTreeModel *m_treeModel = nullptr;
@@ -149,7 +150,8 @@ private:
 	SoftwareModel *m_softwareModel = nullptr;
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
-	GridView *m_softwareGrid = nullptr;
+	GridView *m_softwareGrid = nullptr;          // flat grid
+	GridView *m_swGridGrouped = nullptr;         // one tile per family
 	RepresentativeProxy *m_swGridProxy = nullptr;
 	QTreeView *m_softwareTree = nullptr;
 	FamilyTreeModel *m_swTreeModel = nullptr;

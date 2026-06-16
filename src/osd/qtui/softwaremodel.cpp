@@ -35,8 +35,8 @@ void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
 	buildFamilies();
-	reloadVersionSettings();   // reads versions/* and computes representatives
-	endResetModel();
+	applyVersionSettings();   // compute representatives without emitting mid-reset
+	endResetModel();          // endResetModel signals the change to proxies
 }
 
 QString SoftwareModel::familyKey(int rootRow) const
@@ -161,7 +161,7 @@ void SoftwareModel::computeRepresentatives()
 	}
 }
 
-void SoftwareModel::reloadVersionSettings()
+void SoftwareModel::applyVersionSettings()
 {
 	QSettings settings;
 	m_versionMode = settings.value(QStringLiteral("versions/mode"), int(MatchParent)).toInt();
@@ -177,6 +177,11 @@ void SoftwareModel::reloadVersionSettings()
 	settings.endGroup();
 
 	computeRepresentatives();
+}
+
+void SoftwareModel::reloadVersionSettings()
+{
+	applyVersionSettings();
 
 	if (!m_entries.empty())
 		emit dataChanged(index(0, 0), index(int(m_entries.size()) - 1, COLUMN_COUNT - 1),

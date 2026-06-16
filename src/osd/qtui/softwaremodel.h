@@ -117,6 +117,7 @@ private:
 	QVariant thumbnailForRow(int row) const;
 	void buildFamilies();           // families + region + version flags
 	void computeRepresentatives();  // (re)derive representatives from settings
+	void applyVersionSettings();    // read versions/* + computeRepresentatives (no emit)
 	QString familyKey(int rootRow) const;   // "list\x1froot" for overrides
 
 	std::vector<qtui_software_entry> m_entries;

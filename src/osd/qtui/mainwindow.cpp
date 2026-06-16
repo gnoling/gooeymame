@@ -630,11 +630,12 @@ void MainWindow::createWidgets()
 	m_view->setShowGrid(false);
 	m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_view->verticalHeader()->setVisible(false);
-	// Let the description column absorb width changes (e.g. when the software
-	// pane appears/disappears); keep the rest interactive at sane widths.
-	m_view->horizontalHeader()->setStretchLastSection(false);
-	m_view->horizontalHeader()->setSectionResizeMode(GameListModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	// All columns interactively resizable (including Description); the last
+	// section absorbs leftover width so the row still fills the pane.
+	m_view->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+	m_view->horizontalHeader()->setStretchLastSection(true);
 	m_view->sortByColumn(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
+	m_view->setColumnWidth(GameListModel::COLUMN_DESCRIPTION, 320);
 	m_view->setColumnWidth(GameListModel::COLUMN_NAME, 100);
 	m_view->setColumnWidth(GameListModel::COLUMN_YEAR, 56);
 	m_view->setColumnWidth(GameListModel::COLUMN_MANUFACTURER, 200);
@@ -671,18 +672,26 @@ void MainWindow::createWidgets()
 	barFiltersMenu->addAction(m_actHidePrototypes);
 	filtersButton->setMenu(barFiltersMenu);
 
-	// Grid (thumbnail) view: one tile per clone family (representatives only),
-	// via a proxy that defers the rest of the filtering to the flat proxy.
+	// Flat grid: every member as a tile (shares the flat proxy + selection).
+	m_grid = new GridView;
+	m_grid->setModel(m_proxy);
+	m_grid->setSelectionModel(m_view->selectionModel());
+	connect(m_grid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSystem);
+	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_grid, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
+
+	// Grouped grid: one tile per clone family (representatives only), via a
+	// proxy that defers the rest of the filtering to the flat proxy.
 	m_gridProxy = new RepresentativeProxy(m_model, m_proxy,
 			[this] (int row) { return m_model->isRepresentative(row); }, this);
 	m_gridProxy->sort(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
-	m_grid = new GridView;
-	m_grid->setModel(m_gridProxy);
-	connect(m_grid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSystem);
-	connect(m_grid->selectionModel(), &QItemSelectionModel::selectionChanged,
+	m_gridGrouped = new GridView;
+	m_gridGrouped->setModel(m_gridProxy);
+	connect(m_gridGrouped, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSystem);
+	connect(m_gridGrouped->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSystemSelectionChanged);
-	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
-	connect(m_grid, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
+	m_gridGrouped->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_gridGrouped, &QWidget::customContextMenuRequested, this, &MainWindow::showSystemContextMenu);
 
 	// Grouped (tree) view: families as expandable groups, filtered in lock-step
 	// with the flat proxy.
@@ -700,7 +709,8 @@ void MainWindow::createWidgets()
 	m_tree->setUniformRowHeights(true);
 	m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_tree->sortByColumn(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
-	m_tree->header()->setSectionResizeMode(GameListModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	m_tree->header()->setStretchLastSection(true);
+	m_tree->setColumnWidth(GameListModel::COLUMN_DESCRIPTION, 320);
 	connect(m_tree, &QTreeView::doubleClicked, this, &MainWindow::launchSelectedSystem);
 	connect(m_tree->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSystemSelectionChanged);
@@ -713,14 +723,16 @@ void MainWindow::createWidgets()
 	});
 
 	m_systemStack = new QStackedWidget;
-	m_systemStack->addWidget(m_view);   // index 0 = List
-	m_systemStack->addWidget(m_tree);   // index 1 = Grouped
-	m_systemStack->addWidget(m_grid);   // index 2 = Grid
+	m_systemStack->addWidget(m_view);          // index 0 = List
+	m_systemStack->addWidget(m_tree);          // index 1 = Grouped
+	m_systemStack->addWidget(m_grid);          // index 2 = Grid
+	m_systemStack->addWidget(m_gridGrouped);   // index 3 = Grid Grouped
 
 	m_viewMode = new QComboBox;
 	m_viewMode->addItem(tr("List"), ViewList);
 	m_viewMode->addItem(tr("Grouped"), ViewGrouped);
 	m_viewMode->addItem(tr("Grid"), ViewGrid);
+	m_viewMode->addItem(tr("Grid Grouped"), ViewGridGrouped);
 	connect(m_viewMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
 		setMachineViewMode(m_viewMode->itemData(i).toInt());
 	});
@@ -728,6 +740,7 @@ void MainWindow::createWidgets()
 	m_gridBar->setVisible(false);
 	connect(m_gridSize, &QSlider::valueChanged, this, [this] (int v) {
 		m_grid->setThumbnailSize(v);
+		m_gridGrouped->setThumbnailSize(v);
 		QSettings().setValue(QStringLiteral("view/machineThumb"), v);
 	});
 	connect(m_gridSource, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
@@ -736,6 +749,7 @@ void MainWindow::createWidgets()
 	});
 	connect(m_gridCaption, &CheckableComboBox::checkedChanged, this, [this] {
 		m_grid->setCaptionColumns(m_gridCaption->checkedIds());
+		m_gridGrouped->setCaptionColumns(m_gridCaption->checkedIds());
 		QSettings().setValue(QStringLiteral("view/machineCaption"), captionMask(m_gridCaption->checkedIds()));
 	});
 
@@ -771,8 +785,9 @@ void MainWindow::createWidgets()
 	m_softwareView->setShowGrid(false);
 	m_softwareView->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_softwareView->verticalHeader()->setVisible(false);
-	m_softwareView->horizontalHeader()->setStretchLastSection(false);
-	m_softwareView->horizontalHeader()->setSectionResizeMode(SoftwareModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	m_softwareView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+	m_softwareView->horizontalHeader()->setStretchLastSection(true);
+	m_softwareView->setColumnWidth(SoftwareModel::COLUMN_DESCRIPTION, 280);
 	connect(m_softwareView, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
 	connect(m_softwareView->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSoftwareSelectionChanged);
@@ -780,17 +795,26 @@ void MainWindow::createWidgets()
 	connect(m_softwareView, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
 
-	// Software grid: one tile per family (representatives only).
+	// Flat software grid: every member as a tile (shares the flat proxy).
+	m_softwareGrid = new GridView;
+	m_softwareGrid->setModel(m_softwareProxy);
+	m_softwareGrid->setSelectionModel(m_softwareView->selectionModel());
+	connect(m_softwareGrid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	m_softwareGrid->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_softwareGrid, &QWidget::customContextMenuRequested,
+			this, &MainWindow::showSoftwareContextMenu);
+
+	// Grouped software grid: one tile per family (representatives only).
 	m_swGridProxy = new RepresentativeProxy(m_softwareModel, m_softwareProxy,
 			[this] (int row) { return m_softwareModel->isRepresentative(row); }, this);
 	m_swGridProxy->sort(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
-	m_softwareGrid = new GridView;
-	m_softwareGrid->setModel(m_swGridProxy);
-	connect(m_softwareGrid, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
-	connect(m_softwareGrid->selectionModel(), &QItemSelectionModel::selectionChanged,
+	m_swGridGrouped = new GridView;
+	m_swGridGrouped->setModel(m_swGridProxy);
+	connect(m_swGridGrouped, &QAbstractItemView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
+	connect(m_swGridGrouped->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSoftwareSelectionChanged);
-	m_softwareGrid->setContextMenuPolicy(Qt::CustomContextMenu);
-	connect(m_softwareGrid, &QWidget::customContextMenuRequested,
+	m_swGridGrouped->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(m_swGridGrouped, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
 
 	// Grouped (tree) view for software.
@@ -807,7 +831,8 @@ void MainWindow::createWidgets()
 	m_softwareTree->setAlternatingRowColors(true);
 	m_softwareTree->setUniformRowHeights(true);
 	m_softwareTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
-	m_softwareTree->header()->setSectionResizeMode(SoftwareModel::COLUMN_DESCRIPTION, QHeaderView::Stretch);
+	m_softwareTree->header()->setStretchLastSection(true);
+	m_softwareTree->setColumnWidth(SoftwareModel::COLUMN_DESCRIPTION, 280);
 	connect(m_softwareTree, &QTreeView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
 	connect(m_softwareTree->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSoftwareSelectionChanged);
@@ -825,9 +850,10 @@ void MainWindow::createWidgets()
 	});
 
 	m_softwareStack = new QStackedWidget;
-	m_softwareStack->addWidget(m_softwareView);   // index 0 = List
-	m_softwareStack->addWidget(m_softwareTree);   // index 1 = Grouped
-	m_softwareStack->addWidget(m_softwareGrid);   // index 2 = Grid
+	m_softwareStack->addWidget(m_softwareView);     // index 0 = List
+	m_softwareStack->addWidget(m_softwareTree);     // index 1 = Grouped
+	m_softwareStack->addWidget(m_softwareGrid);     // index 2 = Grid
+	m_softwareStack->addWidget(m_swGridGrouped);    // index 3 = Grid Grouped
 
 	m_softwareSearch = new QLineEdit;
 	m_softwareSearch->setClearButtonEnabled(true);
@@ -865,6 +891,7 @@ void MainWindow::createWidgets()
 	m_softwareViewMode->addItem(tr("List"), ViewList);
 	m_softwareViewMode->addItem(tr("Grouped"), ViewGrouped);
 	m_softwareViewMode->addItem(tr("Grid"), ViewGrid);
+	m_softwareViewMode->addItem(tr("Grid Grouped"), ViewGridGrouped);
 	connect(m_softwareViewMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
 		setSoftwareViewMode(m_softwareViewMode->itemData(i).toInt());
 	});
@@ -872,6 +899,7 @@ void MainWindow::createWidgets()
 	m_softwareGridBar->setVisible(false);
 	connect(m_softwareGridSize, &QSlider::valueChanged, this, [this] (int v) {
 		m_softwareGrid->setThumbnailSize(v);
+		m_swGridGrouped->setThumbnailSize(v);
 		QSettings().setValue(QStringLiteral("view/softwareThumb"), v);
 	});
 	connect(m_softwareGridSource, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] (int i) {
@@ -880,6 +908,7 @@ void MainWindow::createWidgets()
 	});
 	connect(m_softwareGridCaption, &CheckableComboBox::checkedChanged, this, [this] {
 		m_softwareGrid->setCaptionColumns(m_softwareGridCaption->checkedIds());
+		m_swGridGrouped->setCaptionColumns(m_softwareGridCaption->checkedIds());
 		QSettings().setValue(QStringLiteral("view/softwareCaption"), captionMask(m_softwareGridCaption->checkedIds()));
 	});
 
@@ -974,11 +1003,15 @@ void MainWindow::setMachineViewMode(int mode)
 {
 	QString const keep = selectedSystem();   // carry selection across modes
 	m_systemStack->setCurrentIndex(mode);
-	m_gridBar->setVisible(mode == ViewGrid);
-	if (mode == ViewGrid)
+	bool const gridMode = (mode == ViewGrid || mode == ViewGridGrouped);
+	m_gridBar->setVisible(gridMode);
+	if (gridMode)
 	{
-		m_grid->setThumbnailSize(m_gridSize->value());
-		m_grid->setCaptionColumns(m_gridCaption->checkedIds());
+		for (GridView *g : { m_grid, m_gridGrouped })
+		{
+			g->setThumbnailSize(m_gridSize->value());
+			g->setCaptionColumns(m_gridCaption->checkedIds());
+		}
 		applyMachineThumbSource();
 	}
 	if (!keep.isEmpty())
@@ -990,11 +1023,15 @@ void MainWindow::setMachineViewMode(int mode)
 void MainWindow::setSoftwareViewMode(int mode)
 {
 	m_softwareStack->setCurrentIndex(mode);
-	m_softwareGridBar->setVisible(mode == ViewGrid);
-	if (mode == ViewGrid)
+	bool const gridMode = (mode == ViewGrid || mode == ViewGridGrouped);
+	m_softwareGridBar->setVisible(gridMode);
+	if (gridMode)
 	{
-		m_softwareGrid->setThumbnailSize(m_softwareGridSize->value());
-		m_softwareGrid->setCaptionColumns(m_softwareGridCaption->checkedIds());
+		for (GridView *g : { m_softwareGrid, m_swGridGrouped })
+		{
+			g->setThumbnailSize(m_softwareGridSize->value());
+			g->setCaptionColumns(m_softwareGridCaption->checkedIds());
+		}
 		applySoftwareThumbSource();
 	}
 	QSettings().setValue(QStringLiteral("view/softwareMode"), mode);
@@ -1016,9 +1053,9 @@ int MainWindow::machineSourceRow(QAbstractItemView *view, const QModelIndex &vie
 		return -1;
 	if (view == m_tree)
 		return m_treeModel->sourceRow(m_treeProxy->mapToSource(viewIndex));
-	if (view == m_grid)
+	if (view == m_gridGrouped)
 		return m_gridProxy->mapToSource(viewIndex).row();
-	return m_proxy->mapToSource(viewIndex).row();   // table
+	return m_proxy->mapToSource(viewIndex).row();   // table or flat grid
 }
 
 int MainWindow::softwareSourceRow(QAbstractItemView *view, const QModelIndex &viewIndex) const
@@ -1027,7 +1064,7 @@ int MainWindow::softwareSourceRow(QAbstractItemView *view, const QModelIndex &vi
 		return -1;
 	if (view == m_softwareTree)
 		return m_swTreeModel->sourceRow(m_swTreeProxy->mapToSource(viewIndex));
-	if (view == m_softwareGrid)
+	if (view == m_swGridGrouped)
 		return m_swGridProxy->mapToSource(viewIndex).row();
 	return m_softwareProxy->mapToSource(viewIndex).row();
 }
@@ -1045,14 +1082,14 @@ void MainWindow::selectSystemInActiveView(const QString &shortName)
 	{
 		viewIndex = m_treeProxy->mapFromSource(m_treeModel->indexForSourceRow(row));
 	}
-	else if (view == m_grid)
+	else if (view == m_gridGrouped)
 	{
-		row = m_model->representativeRow(row);   // grid shows representatives only
+		row = m_model->representativeRow(row);   // grouped grid shows representatives only
 		viewIndex = m_gridProxy->mapFromSource(m_model->index(row, 0));
 	}
 	else
 	{
-		viewIndex = m_proxy->mapFromSource(m_model->index(row, 0));
+		viewIndex = m_proxy->mapFromSource(m_model->index(row, 0));   // table or flat grid
 	}
 	if (viewIndex.isValid())
 	{
@@ -1073,7 +1110,7 @@ void MainWindow::selectSoftwareRow(int sourceRow)
 	{
 		viewIndex = m_swTreeProxy->mapFromSource(m_swTreeModel->indexForSourceRow(sourceRow));
 	}
-	else if (view == m_softwareGrid)
+	else if (view == m_swGridGrouped)
 	{
 		sourceRow = m_softwareModel->representativeRow(sourceRow);
 		viewIndex = m_swGridProxy->mapFromSource(m_softwareModel->index(sourceRow, 0));
