@@ -51,6 +51,7 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 	{ "gameinit",   "Game init (gameinit.dat)", true },
 	{ "sysinfo",    "System info (sysinfo.dat)", true },
 	{ "story",      "Story (story.dat)",     true },
+	{ "topscores",  "Top scores (MARP scores3.htm)", true },
 	{ "manuals",    "Manuals (folder or .zip of PDFs)",        false },
 	{ "manuals_sl", "Software manuals (folder or .zip of PDFs)", false },
 };

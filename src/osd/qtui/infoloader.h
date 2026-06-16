@@ -34,7 +34,7 @@ class InfoLoader : public QObject
 
 public:
 	// Text databases the loader knows about (index into the source table).
-	enum Source { History = 0, MameInfo, MessInfo, Command, GameInit, SysInfo, Story, SourceCount };
+	enum Source { History = 0, MameInfo, MessInfo, Command, GameInit, SysInfo, Story, TopScores, SourceCount };
 
 	explicit InfoLoader(QObject *parent = nullptr);
 	~InfoLoader() override;

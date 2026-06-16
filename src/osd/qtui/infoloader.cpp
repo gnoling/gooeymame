@@ -17,19 +17,32 @@ namespace osd::qtui {
 
 namespace {
 
-// Maps each Source to its frontendpaths key and whether it is XML (history.xml)
-// or the line-based "$info=" dat format (mameinfo/messinfo/command).
-struct SourceDef { const char *key; bool xml; };
+// Parse format of each text database.
+enum Fmt { FmtXml, FmtDat, FmtScores };
+
+// Maps each Source to its frontendpaths key and parse format.
+struct SourceDef { const char *key; int fmt; };
 const SourceDef kSources[InfoLoader::SourceCount] =
 {
-	{ "history",  true  },   // History
-	{ "mameinfo", false },   // MameInfo
-	{ "messinfo", false },   // MessInfo
-	{ "command",  false },   // Command
-	{ "gameinit", false },   // GameInit
-	{ "sysinfo",  false },   // SysInfo
-	{ "story",    false },   // Story
+	{ "history",   FmtXml    },   // History (history.xml)
+	{ "mameinfo",  FmtDat    },   // MameInfo
+	{ "messinfo",  FmtDat    },   // MessInfo
+	{ "command",   FmtDat    },   // Command
+	{ "gameinit",  FmtDat    },   // GameInit
+	{ "sysinfo",   FmtDat    },   // SysInfo
+	{ "story",     FmtDat    },   // Story
+	{ "topscores", FmtScores },   // TopScores (scores3.htm, MARP)
 };
+
+// Escape text for display inside an HTML <pre> block.
+QString htmlEscape(const QString &in)
+{
+	QString out = in;
+	out.replace(QLatin1Char('&'), QLatin1String("&amp;"));   // first
+	out.replace(QLatin1Char('<'), QLatin1String("&lt;"));
+	out.replace(QLatin1Char('>'), QLatin1String("&gt;"));
+	return out;
+}
 
 // Unescape the XML entities that appear in history.xml <text> bodies.
 QString unescape(const QString &in)
@@ -161,6 +174,41 @@ void buildDatIndex(const QByteArray &data, QHash<QString, QPair<int, int>> &inde
 	}
 }
 
+// Parse the MARP scores3.htm leaderboard.  Each game's block begins with a
+// line whose pre-colon field is a non-empty, space-free short name; following
+// lines for the same game have a blank pre-colon field.  Maps short name ->
+// the block's byte range (header line through the line before the next game).
+void buildScoresIndex(const QByteArray &data, QHash<QString, QPair<int, int>> &index)
+{
+	int pos = 0;
+	int blockStart = -1;
+	QByteArray key;
+	while (pos < data.size())
+	{
+		int lineEnd = data.indexOf('\n', pos);
+		if (lineEnd < 0)
+			lineEnd = data.size();
+
+		int const colon = data.indexOf(':', pos);
+		if (colon >= 0 && colon < lineEnd)
+		{
+			QByteArray const left = data.mid(pos, colon - pos).trimmed();
+			if (!left.isEmpty() && !left.contains(' '))
+			{
+				// New game header: close the previous block.
+				if (blockStart >= 0 && !key.isEmpty())
+					index.insert(QString::fromLatin1(key), { blockStart, pos - blockStart });
+				key = left;
+				blockStart = pos;
+			}
+		}
+
+		pos = lineEnd + 1;
+	}
+	if (blockStart >= 0 && !key.isEmpty())
+		index.insert(QString::fromLatin1(key), { blockStart, data.size() - blockStart });
+}
+
 } // anonymous namespace
 
 InfoLoader::InfoLoader(QObject *parent) :
@@ -207,10 +255,12 @@ void InfoLoader::buildIndex(int source)
 	db.data = file.readAll();
 	file.close();
 
-	if (kSources[source].xml)
-		buildXmlIndex(db.data, db.index);
-	else
-		buildDatIndex(db.data, db.index);
+	switch (kSources[source].fmt)
+	{
+	case FmtXml:    buildXmlIndex(db.data, db.index);    break;
+	case FmtScores: buildScoresIndex(db.data, db.index); break;
+	default:        buildDatIndex(db.data, db.index);    break;
+	}
 }
 
 void InfoLoader::run()
@@ -244,7 +294,19 @@ void InfoLoader::run()
 		{
 			QByteArray const raw = db.data.mid(it.value().first, it.value().second);
 			QString const decoded = QString::fromUtf8(raw);
-			text = (kSources[source].xml ? unescape(decoded) : decoded).trimmed();
+			switch (kSources[source].fmt)
+			{
+			case FmtXml:
+				text = unescape(decoded).trimmed();
+				break;
+			case FmtScores:
+				// Preserve the column alignment with a monospaced <pre> block.
+				text = QStringLiteral("<pre>") + htmlEscape(decoded.trimmed()) + QStringLiteral("</pre>");
+				break;
+			default:
+				text = decoded.trimmed();
+				break;
+			}
 		}
 
 		emit loaded(epoch, source, text);

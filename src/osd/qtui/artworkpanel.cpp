@@ -69,6 +69,7 @@ const InfoDef kInfoTabs[] =
 	{ "Init",      InfoLoader::GameInit, "gameinit" },
 	{ "System",    InfoLoader::SysInfo,  "sysinfo"  },
 	{ "Story",     InfoLoader::Story,    "story"    },
+	{ "Top Scores",InfoLoader::TopScores,"topscores"},
 };
 
 // QLabel and QTextBrowser both have setText(), but as a QWidget* the view must
