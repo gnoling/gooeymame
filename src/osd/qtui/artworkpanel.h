@@ -40,6 +40,7 @@ class ArtLoader;
 class InfoLoader;
 class VideoTab;
 class SoundtrackTab;
+class ManualTab;
 
 class ArtworkPanel : public QWidget
 {
@@ -97,6 +98,7 @@ private:
 	InfoLoader *m_info = nullptr;
 	VideoTab *m_videoTab = nullptr;
 	SoundtrackTab *m_soundtrackTab = nullptr;
+	ManualTab *m_manualTab = nullptr;
 	std::vector<Tab> m_views;
 	int m_layout = Split;
 

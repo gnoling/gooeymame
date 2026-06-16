@@ -13,6 +13,7 @@
 #include "emulator.h"        // for qtui_software_entry (moc'd slot signature)
 #include "gamelistproxy.h"   // for FolderFilter (used by a moc'd slot signature)
 
+#include <QtCore/QHash>
 #include <QtCore/QVector>
 #include <QtWidgets/QMainWindow>
 
@@ -81,6 +82,13 @@ private:
 	void saveSettings() const;
 	void restoreSettings();
 
+	// Per-system software ROM-availability cache (avoids re-auditing on every
+	// re-selection); persisted to disk and invalidated on a ROM re-audit.
+	QString softwareCachePath() const;
+	void loadSoftwareCache();
+	void saveSoftwareCache() const;
+	void clearSoftwareCache();
+
 	// Short name of the currently selected system, or empty if none.
 	QString selectedSystem() const;
 
@@ -120,6 +128,9 @@ private:
 	SoftwareLoader *m_softwareLoader = nullptr;
 	QProgressBar *m_progressBar = nullptr;
 	QPushButton *m_cancelAuditButton = nullptr;
+
+	QHash<QString, QVector<int>> m_softwareAvail;   // system -> availability
+	QString m_softwareLoadSystem;                   // system of the active load
 };
 
 } // namespace osd::qtui

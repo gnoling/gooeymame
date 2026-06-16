@@ -32,20 +32,27 @@ function maintargetosdoptions(_target,_subtarget)
 
 	-- The qtui front-end uses Qt Multimedia for its video/soundtrack tabs.
 	-- (osdmodulestargetconf already added the Qt -L path and Core/Gui/Widgets.)
+	-- Qt PDF (QtPdf + QtPdfWidgets) backs the manual viewer tab.
 	if _OPTIONS["targetos"]=="windows" then
 		links {
 			"Qt6Multimedia.dll",
 			"Qt6MultimediaWidgets.dll",
+			"Qt6Pdf.dll",
+			"Qt6PdfWidgets.dll",
 		}
 	elseif _OPTIONS["targetos"]=="macosx" then
 		links {
 			"QtMultimedia.framework",
 			"QtMultimediaWidgets.framework",
+			"QtPdf.framework",
+			"QtPdfWidgets.framework",
 		}
 	else
 		links {
 			"Qt6Multimedia",
 			"Qt6MultimediaWidgets",
+			"Qt6Pdf",
+			"Qt6PdfWidgets",
 		}
 	end
 
@@ -468,6 +475,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/infoloader.h",
 		MAME_DIR .. "src/osd/qtui/mediatabs.cpp",
 		MAME_DIR .. "src/osd/qtui/mediatabs.h",
+		MAME_DIR .. "src/osd/qtui/manualtab.cpp",
+		MAME_DIR .. "src/osd/qtui/manualtab.h",
 		MAME_DIR .. "src/osd/qtui/iconloader.cpp",
 		MAME_DIR .. "src/osd/qtui/iconloader.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",

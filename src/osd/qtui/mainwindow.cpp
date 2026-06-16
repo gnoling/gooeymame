@@ -19,9 +19,13 @@
 #include "softwaremodel.h"
 #include "softwareproxy.h"
 
+#include <QtCore/QDataStream>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
@@ -124,6 +128,7 @@ MainWindow::MainWindow(QWidget *parent) :
 		m_audit->startAudit();
 	}
 
+	loadSoftwareCache();
 	restoreSettings();
 }
 
@@ -142,6 +147,7 @@ void MainWindow::openOptions()
 void MainWindow::closeEvent(QCloseEvent *event)
 {
 	saveSettings();
+	saveSoftwareCache();
 	QMainWindow::closeEvent(event);
 }
 
@@ -157,6 +163,41 @@ void MainWindow::saveSettings() const
 	settings.setValue(QStringLiteral("softwareHeader"), m_softwareView->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("selected"), selectedSystem());
 	settings.endGroup();
+}
+
+QString MainWindow::softwareCachePath() const
+{
+	QString const dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+	QDir().mkpath(dir);
+	return dir + QStringLiteral("/software_availability.cache");
+}
+
+void MainWindow::loadSoftwareCache()
+{
+	QFile file(softwareCachePath());
+	if (!file.open(QIODevice::ReadOnly))
+		return;
+	QDataStream in(&file);
+	quint32 magic = 0, version = 0;
+	in >> magic >> version;
+	if (magic != 0x53574156u /* "SWAV" */ || version != 1u)
+		return;
+	in >> m_softwareAvail;
+}
+
+void MainWindow::saveSoftwareCache() const
+{
+	QFile file(softwareCachePath());
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+		return;
+	QDataStream out(&file);
+	out << quint32(0x53574156u) << quint32(1u) << m_softwareAvail;
+}
+
+void MainWindow::clearSoftwareCache()
+{
+	m_softwareAvail.clear();
+	QFile::remove(softwareCachePath());
 }
 
 void MainWindow::restoreSettings()
@@ -281,6 +322,8 @@ void MainWindow::createMenus()
 	connect(m_auditAct, &QAction::triggered, this, [this] {
 		if (m_audit && !m_audit->isRunning())
 		{
+			// ROMs may have changed; the cached software availability is stale.
+			clearSoftwareCache();
 			m_auditAct->setEnabled(false);
 			m_audit->startAudit();
 		}
@@ -588,6 +631,7 @@ void MainWindow::refreshSoftware()
 	}
 
 	// Enumerate + audit on a worker thread; results arrive in onSoftwareLoaded.
+	m_softwareLoadSystem = system;
 	m_softwareLoader->load(system);
 }
 
@@ -595,18 +639,33 @@ void MainWindow::onSoftwareLoaded(const std::vector<qtui_software_entry> &entrie
 {
 	bool const hasSoftware = !entries.empty();
 	m_softwareModel->setEntries(entries);
-	if (hasSoftware)
-	{
-		m_softwareSearch->clear();   // start fresh for the new system
-		statusBar()->showMessage(tr("Checking software availability…"));
-	}
 	setSoftwarePaneVisible(hasSoftware);
+	if (!hasSoftware)
+		return;
+
+	m_softwareSearch->clear();   // start fresh for the new system
+
+	// If this system's availability is already cached (and still aligns with
+	// the freshly enumerated list), apply it immediately and skip the audit.
+	auto const it = m_softwareAvail.constFind(m_softwareLoadSystem);
+	if (it != m_softwareAvail.constEnd() && it->size() == int(entries.size()))
+	{
+		m_softwareLoader->cancel();   // stop the redundant background audit
+		m_softwareModel->setAvailabilities(*it);
+		updateStatusCount();
+		return;
+	}
+
+	statusBar()->showMessage(tr("Checking software availability…"));
 }
 
 void MainWindow::onSoftwareAvailabilityReady(const QVector<int> &availability)
 {
 	m_softwareModel->setAvailabilities(availability);
 	updateStatusCount();
+	// Cache for instant re-selection (and persistence across sessions).
+	if (!m_softwareLoadSystem.isEmpty() && !availability.isEmpty())
+		m_softwareAvail.insert(m_softwareLoadSystem, availability);
 }
 
 QString MainWindow::selectedSystem() const

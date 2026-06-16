@@ -12,6 +12,7 @@
 #include "emulator.h"
 #include "frontendpaths.h"
 #include "infoloader.h"
+#include "manualtab.h"
 #include "mediatabs.h"
 
 #include <QtCore/QDir>
@@ -151,12 +152,10 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 		m_views.push_back({ KindText, QString(), QString(), def.source, browser, false, QPixmap() });
 	}
 
-	// Manual tab: a placeholder until the PDF viewer is implemented.
-	{
-		QTextBrowser *browser = new QTextBrowser(m_infoTabs);
-		m_infoTabs->addTab(browser, tr("Manual"));
-		m_views.push_back({ KindManual, QString(), QString(), 0, browser, false, QPixmap() });
-	}
+	// Manual tab: a PDF viewer (manuals / manuals_SL).
+	m_manualTab = new ManualTab(m_infoTabs);
+	m_infoTabs->addTab(m_manualTab, tr("Manual"));
+	m_views.push_back({ KindManual, QString(), QString(), 0, m_manualTab, false, QPixmap() });
 
 	connect(m_artTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
 	connect(m_infoTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
@@ -374,14 +373,35 @@ void ArtworkPanel::loadTab(int index)
 		return;
 	}
 
-	// Manual tab: placeholder until a PDF viewer is implemented.
+	// Manual tab: resolve a PDF (software first, then machine + clone parent).
 	if (tab.kind == KindManual)
 	{
-		bool const configured = !frontendFolderPath(QStringLiteral("manuals")).isEmpty()
-				|| !frontendFolderPath(QStringLiteral("manuals_sl")).isEmpty();
-		setViewText(tab.view, configured
-				? tr("PDF manual viewing is not implemented yet.")
-				: tr("Manuals folder not configured."));
+		QString const base = frontendFolderPath(QStringLiteral("manuals"));
+		QString const slBase = frontendFolderPath(QStringLiteral("manuals_sl"));
+		if (base.isEmpty() && slBase.isEmpty())
+		{
+			m_manualTab->setMessage(tr("Manuals folder not configured."));
+			return;
+		}
+
+		ArtCandidates candidates;
+		if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
+			candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".pdf") });
+		if (!base.isEmpty() && !m_system.isEmpty())
+		{
+			candidates.append({ base, m_system + QStringLiteral(".pdf") });
+			std::string const parent = qtui_parent_of(m_system.toStdString());
+			if (!parent.empty())
+				candidates.append({ base, QString::fromStdString(parent) + QStringLiteral(".pdf") });
+		}
+
+		if (candidates.isEmpty())
+		{
+			m_manualTab->setMessage(tr("No manual"));
+			return;
+		}
+		m_manualTab->setMessage(tr("Loading…"));
+		m_loader->request(m_epoch, index, candidates);
 		return;
 	}
 
@@ -471,6 +491,14 @@ void ArtworkPanel::onLoaded(quint64 epoch, int tab, const QByteArray &bytes)
 		return;   // stale
 
 	Tab &t = m_views[tab];
+
+	// Manuals are PDFs, not images: hand the bytes to the viewer.
+	if (t.kind == KindManual)
+	{
+		m_manualTab->setPdf(bytes);
+		return;
+	}
+
 	if (bytes.isEmpty())
 	{
 		t.original = QPixmap();
