@@ -144,6 +144,17 @@ void MainWindow::openOptions()
 	}
 }
 
+void MainWindow::openProperties()
+{
+	QString const system = selectedSystem();
+	if (system.isEmpty())
+		return;
+
+	OptionsDialog dialog(system, this);
+	if (dialog.exec() == QDialog::Accepted)
+		statusBar()->showMessage(tr("Saved properties for %1.").arg(system), 4000);
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
 	saveSettings();
@@ -270,6 +281,11 @@ void MainWindow::createMenus()
 	m_playAct->setShortcut(Qt::Key_Return);
 	m_playAct->setEnabled(false);
 	connect(m_playAct, &QAction::triggered, this, &MainWindow::launchSelectedSystem);
+
+	m_propertiesAct = fileMenu->addAction(tr("P&roperties…"));
+	m_propertiesAct->setShortcut(Qt::ALT | Qt::Key_Return);
+	m_propertiesAct->setEnabled(false);
+	connect(m_propertiesAct, &QAction::triggered, this, &MainWindow::openProperties);
 
 	fileMenu->addSeparator();
 
@@ -591,6 +607,7 @@ void MainWindow::onSystemSelectionChanged()
 {
 	QString const system = selectedSystem();
 	m_playAct->setEnabled(!system.isEmpty());
+	m_propertiesAct->setEnabled(!system.isEmpty());
 
 	// Artwork loads quickly (cached zip lookup); update it immediately.
 	m_artwork->setSystem(system);

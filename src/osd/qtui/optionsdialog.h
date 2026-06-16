@@ -17,6 +17,7 @@
 #include <QtWidgets/QDialog>
 
 #include <QtCore/QHash>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 
 #include <vector>
@@ -39,7 +40,10 @@ class OptionsDialog : public QDialog
 	Q_OBJECT
 
 public:
+	// Global mame.ini editor.
 	explicit OptionsDialog(QWidget *parent = nullptr);
+	// Per-machine properties editor (writes <inipath>/<system>.ini).
+	explicit OptionsDialog(const QString &system, QWidget *parent = nullptr);
 
 protected:
 	bool eventFilter(QObject *watched, QEvent *event) override;
@@ -48,6 +52,7 @@ private slots:
 	void accept() override;
 
 private:
+	void buildUi();   // shared by both constructors
 	void addCategory(const QString &title, QWidget *page);
 	void buildOptionCategories();
 	void buildFolderCategory();
@@ -71,6 +76,8 @@ private:
 	QStackedWidget *m_stack = nullptr;
 	QLabel *m_description = nullptr;
 	QCheckBox *m_videoAutoplay = nullptr;
+	QString m_system;                   // empty = global mame.ini; else per-machine
+	QSet<QString> m_overridden;         // option names set by the machine's ini
 	QHash<QObject *, QString> m_help;   // editor widget -> description
 	std::vector<Editor> m_editors;
 	std::vector<FolderEditor> m_folderEditors;

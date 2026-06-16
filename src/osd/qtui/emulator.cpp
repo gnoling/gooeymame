@@ -396,6 +396,190 @@ bool qtui_write_options(
 
 namespace {
 
+// Turn a parsed core_options into the grouped, GUI-friendly representation
+// shared by the global and per-game option readers.
+std::vector<qtui_option_group> groups_from_options(const core_options &options)
+{
+	std::vector<qtui_option_group> groups;
+	qtui_option_group *current = nullptr;
+	for (const auto &entry : options.entries())
+	{
+		if (entry->type() == core_options::option_type::HEADER)
+		{
+			groups.emplace_back();
+			current = &groups.back();
+			current->header = entry->description() ? entry->description() : "";
+			continue;
+		}
+
+		int const mapped = qtui_map_option_type(entry->type());
+		if (mapped < 0 || entry->names().empty())
+			continue;
+		if (!entry->name().empty() && entry->name().front() == '<')
+			continue;
+
+		if (!current)
+		{
+			groups.emplace_back();
+			current = &groups.back();
+		}
+
+		qtui_option opt;
+		opt.name = entry->name();
+		opt.description = entry->description() ? entry->description() : "";
+		opt.value = entry->value() ? entry->value() : "";
+		opt.minimum = entry->minimum() ? entry->minimum() : "";
+		opt.maximum = entry->maximum() ? entry->maximum() : "";
+		opt.type = mapped;
+		current->options.push_back(std::move(opt));
+	}
+	return groups;
+}
+
+// First directory listed in the "inipath" option (where per-machine and the
+// global ini are written), or "." if none is configured.
+std::string first_inipath_dir(const core_options &options)
+{
+	std::string dir;
+	if (options.value("inipath"))
+	{
+		std::string const inipath = options.value("inipath");
+		std::string::size_type const sep = inipath.find(';');
+		dir = (sep == std::string::npos) ? inipath : inipath.substr(0, sep);
+	}
+	return dir.empty() ? std::string(".") : dir;
+}
+
+} // anonymous namespace
+
+
+std::vector<qtui_option_group> qtui_read_game_options(
+		const std::string &system,
+		std::vector<std::string> *overridden)
+{
+	core_guard guard;
+
+	int const index = driver_list::find(system.c_str());
+	if (index < 0)
+		return {};
+	const game_driver &driver = driver_list::driver(index);
+
+	sdl_options options;
+	std::ostringstream errors;
+	mame_options::parse_standard_inis(options, errors, &driver);
+
+	std::vector<qtui_option_group> groups = groups_from_options(options);
+
+	// Report which options the machine's own ini currently overrides.
+	if (overridden)
+	{
+		overridden->clear();
+		std::string const path = first_inipath_dir(options) + "/" + system + ".ini";
+		std::ifstream in(path);
+		std::string line;
+		while (std::getline(in, line))
+		{
+			std::size_t const start = line.find_first_not_of(" \t");
+			if (start == std::string::npos || line[start] == '#')
+				continue;
+			std::size_t const end = line.find_first_of(" \t", start);
+			overridden->push_back(line.substr(start, end == std::string::npos ? std::string::npos : end - start));
+		}
+	}
+
+	return groups;
+}
+
+
+bool qtui_write_game_options(
+		const std::string &system,
+		const std::vector<std::pair<std::string, std::string>> &changes,
+		std::string *out_path)
+{
+	core_guard guard;
+
+	if (driver_list::find(system.c_str()) < 0)
+		return false;
+
+	sdl_options options;
+	std::ostringstream errors;
+	mame_options::parse_standard_inis(options, errors);
+	std::string const dir = first_inipath_dir(options);
+	std::string const path = dir + "/" + system + ".ini";
+
+	// The ini directory may not exist yet (per-machine inis are optional).
+	std::error_code ec;
+	std::filesystem::create_directories(dir, ec);
+
+	// Merge the requested changes into the existing per-machine ini, preserving
+	// its other lines (comments, blank lines, and unrelated overrides).  This
+	// keeps the file minimal: it holds only the options that differ for this
+	// machine, layered last over the standard ini hierarchy.
+	std::unordered_map<std::string, std::string> pending;
+	for (const auto &c : changes)
+		pending[c.first] = c.second;
+
+	auto format_line = [] (const std::string &name, const std::string &value) {
+		std::string line = name;
+		if (line.size() < 25)
+			line.append(25 - line.size(), ' ');
+		line.push_back(' ');
+		line += value;
+		return line;
+	};
+
+	std::vector<std::string> out;
+	std::ifstream in(path);
+	if (in.is_open())
+	{
+		std::string line;
+		while (std::getline(in, line))
+		{
+			std::size_t const start = line.find_first_not_of(" \t");
+			if (start != std::string::npos && line[start] != '#')
+			{
+				std::size_t const end = line.find_first_of(" \t", start);
+				std::string const key = line.substr(start, end == std::string::npos ? std::string::npos : end - start);
+				auto it = pending.find(key);
+				if (it != pending.end())
+				{
+					out.push_back(format_line(key, it->second));
+					pending.erase(it);
+					continue;
+				}
+			}
+			out.push_back(line);
+		}
+		in.close();
+	}
+
+	// Append any changes that were not already present.
+	for (const auto &c : changes)
+	{
+		auto it = pending.find(c.first);
+		if (it != pending.end())
+		{
+			out.push_back(format_line(c.first, c.second));
+			pending.erase(it);
+		}
+	}
+
+	std::ofstream file(path, std::ios::out | std::ios::trunc);
+	if (!file.is_open())
+		return false;
+	for (const std::string &line : out)
+		file << line << '\n';
+	bool const ok = file.good();
+	file.close();
+
+	if (out_path)
+		*out_path = path;
+	return ok;
+}
+
+
+namespace {
+
 // A minimal index over a *standard* (non-ZIP64) zip: the central directory is
 // parsed once into a name -> entry map for O(1) lookups, with the file kept
 // open.  This sidesteps the linear directory scan in util::archive_file, which

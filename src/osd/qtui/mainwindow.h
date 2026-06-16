@@ -57,6 +57,7 @@ protected:
 private slots:
 	void showAbout();
 	void openOptions();
+	void openProperties();
 	void launchSelectedSystem();
 	void launchSelectedSoftware();
 	void onFolderSelected(const FolderFilter &filter);
@@ -121,6 +122,7 @@ private:
 	QPushButton *m_btnSwUnavailable = nullptr;
 	QTimer *m_softwareTimer = nullptr;
 	QAction *m_playAct = nullptr;
+	QAction *m_propertiesAct = nullptr;
 	QAction *m_auditAct = nullptr;
 	QActionGroup *m_iconSizeGroup = nullptr;
 	QActionGroup *m_layoutGroup = nullptr;

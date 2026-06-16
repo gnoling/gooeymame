@@ -14,6 +14,7 @@
 #include <QtCore/QEvent>
 #include <QtCore/QSettings>
 #include <QtGui/QDoubleValidator>
+#include <QtGui/QFont>
 #include <QtGui/QIntValidator>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
@@ -188,7 +189,20 @@ QStringList choicesFor(const QString &name)
 OptionsDialog::OptionsDialog(QWidget *parent) :
 	QDialog(parent)
 {
-	setWindowTitle(tr("Options"));
+	buildUi();
+}
+
+OptionsDialog::OptionsDialog(const QString &system, QWidget *parent) :
+	QDialog(parent),
+	m_system(system)
+{
+	buildUi();
+}
+
+void OptionsDialog::buildUi()
+{
+	bool const gameMode = !m_system.isEmpty();
+	setWindowTitle(gameMode ? tr("Properties: %1").arg(m_system) : tr("Options"));
 	resize(820, 620);
 
 	m_categoryList = new QListWidget(this);
@@ -197,7 +211,8 @@ OptionsDialog::OptionsDialog(QWidget *parent) :
 	connect(m_categoryList, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
 
 	buildOptionCategories();
-	buildFolderCategory();
+	if (!gameMode)
+		buildFolderCategory();   // front-end folders are global only
 	if (m_categoryList->count() > 0)
 		m_categoryList->setCurrentRow(0);
 
@@ -235,7 +250,18 @@ void OptionsDialog::addCategory(const QString &title, QWidget *page)
 
 void OptionsDialog::buildOptionCategories()
 {
-	std::vector<qtui_option_group> const groups = qtui_read_options();
+	std::vector<qtui_option_group> groups;
+	if (m_system.isEmpty())
+	{
+		groups = qtui_read_options();
+	}
+	else
+	{
+		std::vector<std::string> overridden;
+		groups = qtui_read_game_options(m_system.toStdString(), &overridden);
+		for (const std::string &name : overridden)
+			m_overridden.insert(QString::fromStdString(name));
+	}
 
 	// Bucket the ini headers into top-level categories (preserving order),
 	// each holding an ordered list of sub-tabs.
@@ -420,12 +446,28 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 		}
 	}
 
+	bool const overridden = m_overridden.contains(name);
+
 	// Hover help: watch the editor (and show on mouse-enter).
 	if (readWidget)
 	{
 		readWidget->setToolTip(help);
-		m_help.insert(readWidget, help.isEmpty() ? name : QStringLiteral("%1 — %2").arg(name, help));
+		QString helpText = help.isEmpty() ? name : QStringLiteral("%1 — %2").arg(name, help);
+		if (overridden)
+			helpText = tr("[set for this machine] ") + helpText;
+		m_help.insert(readWidget, helpText);
 		readWidget->installEventFilter(this);
+
+		// Bold the label of an overridden option where the form created one.
+		if (overridden)
+		{
+			if (auto *label = qobject_cast<QLabel *>(form->labelForField(readWidget)))
+			{
+				QFont font = label->font();
+				font.setBold(true);
+				label->setFont(font);
+			}
+		}
 	}
 
 	m_editors.push_back({ name, opt.type, readWidget, value });
@@ -544,18 +586,26 @@ void OptionsDialog::accept()
 	if (!changes.empty())
 	{
 		std::string path;
-		if (!qtui_write_options(changes, &path))
+		bool const ok = m_system.isEmpty()
+				? qtui_write_options(changes, &path)
+				: qtui_write_game_options(m_system.toStdString(), changes, &path);
+		if (!ok)
 		{
-			QMessageBox::warning(this, tr("Options"), tr("Failed to write mame.ini."));
+			QMessageBox::warning(this, windowTitle(),
+					m_system.isEmpty() ? tr("Failed to write mame.ini.")
+									   : tr("Failed to write the per-machine ini."));
 			return;
 		}
 	}
 
-	// Persist front-end folder paths and playback preferences.
-	for (const FolderEditor &folder : m_folderEditors)
-		setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
-	if (m_videoAutoplay)
-		QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
+	// Front-end folders and playback preferences are global-only settings.
+	if (m_system.isEmpty())
+	{
+		for (const FolderEditor &folder : m_folderEditors)
+			setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
+		if (m_videoAutoplay)
+			QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
+	}
 
 	QDialog::accept();
 }

@@ -119,6 +119,21 @@ bool qtui_write_options(
 		const std::vector<std::pair<std::string, std::string>> &changes,
 		std::string *out_path);
 
+// Read the effective options for one machine (the standard ini hierarchy with
+// the machine's own <system>.ini applied).  If `overridden` is non-null it is
+// filled with the option names the machine's ini currently sets.
+std::vector<qtui_option_group> qtui_read_game_options(
+		const std::string &system,
+		std::vector<std::string> *overridden = nullptr);
+
+// Merge name/value changes into the per-machine <inipath>/<system>.ini
+// (preserving its other lines).  Returns true on success; *out_path receives
+// the file written.
+bool qtui_write_game_options(
+		const std::string &system,
+		const std::vector<std::pair<std::string, std::string>> &changes,
+		std::string *out_path);
+
 
 //============================================================
 //  Artwork / asset loading (MAME EXTRAs)
