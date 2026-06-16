@@ -150,6 +150,7 @@ void MainWindow::saveSettings() const
 	QSettings settings;
 	settings.beginGroup(QStringLiteral("mainwindow"));
 	settings.setValue(QStringLiteral("geometry"), saveGeometry());
+	settings.setValue(QStringLiteral("mainLayout"), m_mainLayout);
 	settings.setValue(QStringLiteral("splitter"), m_splitter->saveState());
 	settings.setValue(QStringLiteral("rightSplitter"), m_rightSplitter->saveState());
 	settings.setValue(QStringLiteral("systemHeader"), m_view->horizontalHeader()->saveState());
@@ -166,6 +167,14 @@ void MainWindow::restoreSettings()
 	QByteArray const geometry = settings.value(QStringLiteral("geometry")).toByteArray();
 	if (!geometry.isEmpty())
 		restoreGeometry(geometry);
+
+	// Apply the saved pane arrangement before restoring splitter states (which
+	// depend on it) and tick the matching menu entry.
+	int const mainLayout = settings.value(QStringLiteral("mainLayout"), int(SoftwareBesideArt)).toInt();
+	applyMainLayout(mainLayout);
+	for (QAction *act : m_layoutGroup->actions())
+		if (act->data().toInt() == mainLayout)
+			act->setChecked(true);
 
 	QByteArray const splitterState = settings.value(QStringLiteral("splitter")).toByteArray();
 	if (!splitterState.isEmpty())
@@ -228,6 +237,25 @@ void MainWindow::createMenus()
 	connect(exitAct, &QAction::triggered, this, &QWidget::close);
 
 	QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+
+	QMenu *layoutMenu = viewMenu->addMenu(tr("&Layout"));
+	m_layoutGroup = new QActionGroup(this);
+	struct { const char *label; int layout; } const layouts[] = {
+		{ "Software beside artwork", SoftwareBesideArt },
+		{ "Software under system list", SoftwareUnderSystems },
+	};
+	for (const auto &choice : layouts)
+	{
+		QAction *act = layoutMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.layout);
+		m_layoutGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, layout = choice.layout] {
+			applyMainLayout(layout);
+			QSettings().setValue(QStringLiteral("mainwindow/mainLayout"), layout);
+		});
+	}
+
 	QMenu *iconMenu = viewMenu->addMenu(tr("&Icon Size"));
 	m_iconSizeGroup = new QActionGroup(this);
 	struct { const char *label; int size; } const iconSizes[] = {
@@ -313,8 +341,8 @@ void MainWindow::createWidgets()
 	for (QPushButton *button : { m_btnWorking, m_btnNotWorking, m_btnAvailable, m_btnUnavailable })
 		connect(button, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
 
-	QWidget *systemPane = new QWidget;
-	QVBoxLayout *systemLayout = new QVBoxLayout(systemPane);
+	m_systemPane = new QWidget;
+	QVBoxLayout *systemLayout = new QVBoxLayout(m_systemPane);
 	systemLayout->setContentsMargins(0, 0, 0, 0);
 
 	// Quick-filter bar over the system list.
@@ -392,25 +420,13 @@ void MainWindow::createWidgets()
 	m_folders->setMaximumWidth(260);
 	connect(m_folders, &FolderTree::folderSelected, this, &MainWindow::onFolderSelected);
 
-	// Right side stacks the artwork (top) over the software pane (bottom).
+	// The two splitters are populated by applyMainLayout(), which the menu and
+	// restoreSettings() drive.  m_rightSplitter (vertical) always carries the
+	// software pane at the bottom; m_splitter (horizontal) is the central one.
 	m_rightSplitter = new QSplitter(Qt::Vertical);
-	m_rightSplitter->addWidget(m_artwork);
-	m_rightSplitter->addWidget(m_softwarePane);
-	m_rightSplitter->setStretchFactor(0, 2);
-	m_rightSplitter->setStretchFactor(1, 3);
-
-	// --- layout: folders | systems | (artwork / software) ---
 	m_splitter = new QSplitter(Qt::Horizontal, this);
-	m_splitter->addWidget(m_folders);
-	m_splitter->addWidget(systemPane);
-	m_splitter->addWidget(m_rightSplitter);
-	m_splitter->setStretchFactor(0, 0);
-	m_splitter->setStretchFactor(1, 3);
-	m_splitter->setStretchFactor(2, 2);
 	setCentralWidget(m_splitter);
-
-	// The software pane only appears for systems that have software lists.
-	m_softwarePane->setVisible(false);
+	applyMainLayout(m_mainLayout);
 
 	// Debounce timer for software enumeration.
 	m_softwareTimer = new QTimer(this);
@@ -423,6 +439,56 @@ void MainWindow::applyIconSize(int size)
 {
 	m_view->setIconSize(QSize(size, size));
 	m_view->verticalHeader()->setDefaultSectionSize(size + 6);
+}
+
+void MainWindow::applyMainLayout(int layout)
+{
+	m_mainLayout = layout;
+
+	// Detach every movable pane so the splitters can be re-assembled in a
+	// deterministic order regardless of the previous arrangement.
+	QWidget *const movable[] = {
+		static_cast<QWidget *>(m_folders), m_systemPane, m_softwarePane,
+		static_cast<QWidget *>(m_artwork), static_cast<QWidget *>(m_rightSplitter) };
+	for (QWidget *w : movable)
+		w->setParent(nullptr);
+
+	if (layout == SoftwareUnderSystems)
+	{
+		// folders | (systems / software) | artwork
+		m_rightSplitter->addWidget(m_systemPane);
+		m_rightSplitter->addWidget(m_softwarePane);
+		m_rightSplitter->setStretchFactor(0, 3);
+		m_rightSplitter->setStretchFactor(1, 2);
+
+		m_splitter->addWidget(m_folders);
+		m_splitter->addWidget(m_rightSplitter);
+		m_splitter->addWidget(m_artwork);
+		m_splitter->setStretchFactor(1, 3);
+		m_splitter->setStretchFactor(2, 2);
+	}
+	else
+	{
+		// folders | systems | (artwork / software)
+		m_rightSplitter->addWidget(m_artwork);
+		m_rightSplitter->addWidget(m_softwarePane);
+		m_rightSplitter->setStretchFactor(0, 2);
+		m_rightSplitter->setStretchFactor(1, 3);
+
+		m_splitter->addWidget(m_folders);
+		m_splitter->addWidget(m_systemPane);
+		m_splitter->addWidget(m_rightSplitter);
+		m_splitter->setStretchFactor(1, 3);
+		m_splitter->setStretchFactor(2, 2);
+	}
+	m_splitter->setStretchFactor(0, 0);   // folders keep their width
+
+	// Re-detaching can hide panes; restore the software pane's expected state.
+	m_softwarePane->setVisible(m_softwareModel->rowCount() > 0);
+	m_folders->show();
+	m_systemPane->show();
+	m_artwork->show();
+	m_rightSplitter->show();
 }
 
 void MainWindow::setSoftwarePaneVisible(bool visible)

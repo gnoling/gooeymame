@@ -6,7 +6,11 @@
 //
 //  Shows tabs of MAME EXTRAs images for the current system, or for a
 //  selected software-list item (which uses the "_SL" archives keyed by
-//  "<list>/<software>.png").  Images load on a worker thread.
+//  "<list>/<software>.png", with a fall back to the host machine's art).
+//  A second group of tabs shows the text databases (history/mameinfo/...).
+//  The two groups can be arranged as a split (art over info), or either one
+//  on its own, via a layout selector.  Images and text load on worker
+//  threads.
 //
 //============================================================
 #ifndef MAME_OSD_QTUI_ARTWORKPANEL_H
@@ -23,14 +27,19 @@
 
 #include <vector>
 
+class QComboBox;
+class QHideEvent;
 class QLabel;
 class QResizeEvent;
+class QSplitter;
 class QTabWidget;
 
 namespace osd::qtui {
 
 class ArtLoader;
 class InfoLoader;
+class VideoTab;
+class SoundtrackTab;
 
 class ArtworkPanel : public QWidget
 {
@@ -47,33 +56,49 @@ public:
 
 protected:
 	void resizeEvent(QResizeEvent *event) override;
+	void hideEvent(QHideEvent *event) override;
 
 private slots:
 	void loadCurrent();
+	void onLayoutChanged(int index);
 	void onLoaded(quint64 epoch, int tab, const QByteArray &bytes);
-	void onInfoLoaded(quint64 epoch, const QString &text);
+	void onInfoLoaded(quint64 epoch, int source, const QString &text);
 
 private:
 	enum class Mode { System, Software };
+	enum Layout { Split = 0, ArtOnly, InfoOnly };
+	enum TabKind { KindImage, KindText, KindVideo, KindSoundtrack, KindManual };
 
-	void refresh();   // invalidate all tabs and (re)load the visible one
+	void refresh();          // invalidate all tabs and (re)load the visible ones
+	void applyLayout(int layout);
+	void loadTab(int index); // load one tab by index into m_views
 	void rescale(int index);
+	int indexOfView(QWidget *view) const;
+	void loadVisible(QTabWidget *group);
+	void stopAllMedia();     // pause every media tab
+	void stopOtherMedia(int keepIndex);
 
 	struct Tab
 	{
-		bool isText;      // true = history text tab; false = image tab
-		QString sysKey;   // frontendpaths key in system mode ("" = none)
-		QString swKey;    // frontendpaths key in software mode ("" = none)
-		QWidget *view;    // QLabel (image) or QTextBrowser (text)
+		int kind;         // TabKind
+		QString sysKey;   // image: frontendpaths key in system mode ("" = none)
+		QString swKey;    // image: frontendpaths key in software mode ("" = none)
+		int source;       // text: InfoLoader::Source
+		QWidget *view;    // QLabel / QTextBrowser / VideoTab / SoundtrackTab
 		bool loaded;
 		QPixmap original; // image tabs only
 	};
 
-	QTabWidget *m_tabs = nullptr;
+	QComboBox *m_layoutCombo = nullptr;
+	QSplitter *m_splitter = nullptr;
+	QTabWidget *m_artTabs = nullptr;
+	QTabWidget *m_infoTabs = nullptr;
 	ArtLoader *m_loader = nullptr;
 	InfoLoader *m_info = nullptr;
-	int m_historyTab = -1;
+	VideoTab *m_videoTab = nullptr;
+	SoundtrackTab *m_soundtrackTab = nullptr;
 	std::vector<Tab> m_views;
+	int m_layout = Split;
 
 	Mode m_mode = Mode::System;
 	QString m_system;

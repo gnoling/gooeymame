@@ -36,12 +36,23 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 	{ "versus",     "Versus screens",       false },
 	{ "gameover",   "Game over screens",    false },
 	{ "howto",      "How-to screens",       false },
+	{ "ends",       "End screens",          false },
+	{ "warning",    "Warning screens",      false },
+	{ "devices",    "Device images",        false },
 	{ "artpreview", "Artwork previews",     false },
+	{ "videosnaps",    "Video snaps",            false },
+	{ "videosnaps_sl", "Software video snaps",   false },
+	{ "soundtrack",    "Soundtracks (folder per machine)", false },
 	{ "categories", "Category folders (folder of .ini files)", false },
 	{ "history",    "History (history.xml)", true },
 	{ "mameinfo",   "MAME info (mameinfo.dat)", true },
 	{ "messinfo",   "MESS info (messinfo.dat)", true },
 	{ "command",    "Command list (command.dat)", true },
+	{ "gameinit",   "Game init (gameinit.dat)", true },
+	{ "sysinfo",    "System info (sysinfo.dat)", true },
+	{ "story",      "Story (story.dat)",     true },
+	{ "manuals",    "Manuals (folder or .zip of PDFs)",        false },
+	{ "manuals_sl", "Software manuals (folder or .zip of PDFs)", false },
 };
 
 const std::size_t FRONTEND_FOLDER_COUNT = sizeof(FRONTEND_FOLDERS) / sizeof(FRONTEND_FOLDERS[0]);

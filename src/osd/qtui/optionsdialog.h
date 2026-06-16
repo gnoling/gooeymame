@@ -21,6 +21,7 @@
 
 #include <vector>
 
+class QCheckBox;
 class QEvent;
 class QFormLayout;
 class QLabel;
@@ -69,6 +70,7 @@ private:
 	QListWidget *m_categoryList = nullptr;
 	QStackedWidget *m_stack = nullptr;
 	QLabel *m_description = nullptr;
+	QCheckBox *m_videoAutoplay = nullptr;
 	QHash<QObject *, QString> m_help;   // editor widget -> description
 	std::vector<Editor> m_editors;
 	std::vector<FolderEditor> m_folderEditors;

@@ -12,6 +12,7 @@
 #include "frontendpaths.h"
 
 #include <QtCore/QEvent>
+#include <QtCore/QSettings>
 #include <QtGui/QDoubleValidator>
 #include <QtGui/QIntValidator>
 #include <QtWidgets/QCheckBox>
@@ -443,6 +444,12 @@ void OptionsDialog::buildFolderCategory()
 	intro->setWordWrap(true);
 	form->addRow(intro);
 
+	// Front-end playback behaviour.
+	m_videoAutoplay = new QCheckBox(tr("Auto-play videos when a system is selected"), page);
+	m_videoAutoplay->setChecked(QSettings().value(QStringLiteral("artwork/videoAutoplay"), true).toBool());
+	m_videoAutoplay->setToolTip(tr("When off, the video tab loads paused and you press Play yourself."));
+	form->addRow(tr("Video"), m_videoAutoplay);
+
 	for (std::size_t i = 0; i < FRONTEND_FOLDER_COUNT; i++)
 	{
 		const FrontendFolder &folder = FRONTEND_FOLDERS[i];
@@ -544,9 +551,11 @@ void OptionsDialog::accept()
 		}
 	}
 
-	// Persist front-end folder paths.
+	// Persist front-end folder paths and playback preferences.
 	for (const FolderEditor &folder : m_folderEditors)
 		setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
+	if (m_videoAutoplay)
+		QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
 
 	QDialog::accept();
 }

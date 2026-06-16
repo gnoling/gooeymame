@@ -69,10 +69,14 @@ private slots:
 	void onSoftwareAvailabilityReady(const QVector<int> &availability);
 
 private:
+	// Arrangement of the system list, software list, and artwork panes.
+	enum MainLayout { SoftwareBesideArt = 0, SoftwareUnderSystems };
+
 	void createMenus();
 	void createWidgets();
 	void updateStatusCount();
 	void setSoftwarePaneVisible(bool visible);
+	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
 	void saveSettings() const;
 	void restoreSettings();
@@ -93,7 +97,9 @@ private:
 	QSplitter *m_splitter = nullptr;
 	QSplitter *m_rightSplitter = nullptr;
 	ArtworkPanel *m_artwork = nullptr;
+	QWidget *m_systemPane = nullptr;
 	QWidget *m_softwarePane = nullptr;
+	int m_mainLayout = SoftwareBesideArt;
 	QLineEdit *m_search = nullptr;
 	QLineEdit *m_softwareSearch = nullptr;
 	QPushButton *m_btnWorking = nullptr;
@@ -109,6 +115,7 @@ private:
 	QAction *m_playAct = nullptr;
 	QAction *m_auditAct = nullptr;
 	QActionGroup *m_iconSizeGroup = nullptr;
+	QActionGroup *m_layoutGroup = nullptr;
 	AuditManager *m_audit = nullptr;
 	SoftwareLoader *m_softwareLoader = nullptr;
 	QProgressBar *m_progressBar = nullptr;

@@ -2,7 +2,7 @@
 // copyright-holders:MAMEdev Team
 //============================================================
 //
-//  infoloader.cpp - background lookups into history.xml
+//  infoloader.cpp - background lookups into the EXTRAs text databases
 //
 //============================================================
 
@@ -16,6 +16,20 @@
 namespace osd::qtui {
 
 namespace {
+
+// Maps each Source to its frontendpaths key and whether it is XML (history.xml)
+// or the line-based "$info=" dat format (mameinfo/messinfo/command).
+struct SourceDef { const char *key; bool xml; };
+const SourceDef kSources[InfoLoader::SourceCount] =
+{
+	{ "history",  true  },   // History
+	{ "mameinfo", false },   // MameInfo
+	{ "messinfo", false },   // MessInfo
+	{ "command",  false },   // Command
+	{ "gameinit", false },   // GameInit
+	{ "sysinfo",  false },   // SysInfo
+	{ "story",    false },   // Story
+};
 
 // Unescape the XML entities that appear in history.xml <text> bodies.
 QString unescape(const QString &in)
@@ -44,51 +58,9 @@ QByteArray readAttr(const QByteArray &data, const char *attr, int from, int to)
 	return data.mid(open + 1, close - open - 1);
 }
 
-} // anonymous namespace
-
-InfoLoader::InfoLoader(QObject *parent) :
-	QObject(parent)
+// Parse history.xml: map each <system name> / <item list/name> to its <text>.
+void buildXmlIndex(const QByteArray &data, QHash<QString, QPair<int, int>> &index)
 {
-	m_thread = std::thread(&InfoLoader::run, this);
-}
-
-InfoLoader::~InfoLoader()
-{
-	{
-		std::lock_guard<std::mutex> lk(m_mutex);
-		m_stop = true;
-	}
-	m_cv.notify_all();
-	if (m_thread.joinable())
-		m_thread.join();
-}
-
-void InfoLoader::request(quint64 epoch, const QString &key)
-{
-	{
-		std::lock_guard<std::mutex> lk(m_mutex);
-		m_epoch = epoch;
-		m_key = key;
-		m_hasRequest = true;
-	}
-	m_cv.notify_one();
-}
-
-void InfoLoader::buildIndex()
-{
-	m_indexed = true;   // attempt once regardless of outcome
-
-	QString const path = frontendFolderPath(QStringLiteral("history"));
-	if (path.isEmpty())
-		return;
-
-	QFile file(path);
-	if (!file.open(QIODevice::ReadOnly))
-		return;
-	m_data = file.readAll();
-	file.close();
-
-	const QByteArray &data = m_data;
 	int pos = 0;
 	for (;;)
 	{
@@ -125,7 +97,7 @@ void InfoLoader::buildIndex()
 					break;
 				QByteArray const name = readAttr(data, "name=", sys, idLimit);
 				if (!name.isEmpty())
-					m_index.insert(QString::fromLatin1(name), range);
+					index.insert(QString::fromLatin1(name), range);
 				sp = sys + 8;
 			}
 
@@ -140,7 +112,7 @@ void InfoLoader::buildIndex()
 				QByteArray const list = readAttr(data, "list=", item, itemEnd);
 				QByteArray const name = readAttr(data, "name=", item, itemEnd);
 				if (!list.isEmpty() && !name.isEmpty())
-					m_index.insert(QString::fromLatin1(list) + QLatin1Char('/') + QString::fromLatin1(name), range);
+					index.insert(QString::fromLatin1(list) + QLatin1Char('/') + QString::fromLatin1(name), range);
 				ip = itemEnd + 1;
 			}
 		}
@@ -149,11 +121,104 @@ void InfoLoader::buildIndex()
 	}
 }
 
+// Parse a "$info=names\n$tag\n...body...\n$end" dat file, mapping each
+// comma-separated short name to the body range.
+void buildDatIndex(const QByteArray &data, QHash<QString, QPair<int, int>> &index)
+{
+	int pos = 0;
+	for (;;)
+	{
+		int const info = data.indexOf("$info=", pos);
+		if (info < 0)
+			break;
+		int const nameStart = info + 6;   // len("$info=")
+		int const nameEnd = data.indexOf('\n', nameStart);
+		if (nameEnd < 0)
+			break;
+
+		// The next line beginning with '$' is the section tag ($mame/$cmd/...);
+		// the body starts after it and runs to the "$end" line.
+		int const tag = data.indexOf('$', nameEnd);
+		if (tag < 0)
+			break;
+		int const bodyStart = data.indexOf('\n', tag);
+		if (bodyStart < 0)
+			break;
+		int const end = data.indexOf("$end", bodyStart);
+		if (end < 0)
+			break;
+
+		QByteArray const names = data.mid(nameStart, nameEnd - nameStart);
+		QPair<int, int> const range(bodyStart + 1, end - bodyStart - 1);
+		for (const QByteArray &raw : names.split(','))
+		{
+			QByteArray const name = raw.trimmed();
+			if (!name.isEmpty())
+				index.insert(QString::fromLatin1(name), range);
+		}
+
+		pos = end + 4;   // len("$end")
+	}
+}
+
+} // anonymous namespace
+
+InfoLoader::InfoLoader(QObject *parent) :
+	QObject(parent)
+{
+	m_thread = std::thread(&InfoLoader::run, this);
+}
+
+InfoLoader::~InfoLoader()
+{
+	{
+		std::lock_guard<std::mutex> lk(m_mutex);
+		m_stop = true;
+	}
+	m_cv.notify_all();
+	if (m_thread.joinable())
+		m_thread.join();
+}
+
+void InfoLoader::request(quint64 epoch, int source, const QString &key)
+{
+	{
+		std::lock_guard<std::mutex> lk(m_mutex);
+		m_epoch = epoch;
+		m_source = source;
+		m_key = key;
+		m_hasRequest = true;
+	}
+	m_cv.notify_one();
+}
+
+void InfoLoader::buildIndex(int source)
+{
+	Db &db = m_db[source];
+	db.indexed = true;   // attempt once regardless of outcome
+
+	QString const path = frontendFolderPath(QString::fromLatin1(kSources[source].key));
+	if (path.isEmpty())
+		return;
+
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly))
+		return;
+	db.data = file.readAll();
+	file.close();
+
+	if (kSources[source].xml)
+		buildXmlIndex(db.data, db.index);
+	else
+		buildDatIndex(db.data, db.index);
+}
+
 void InfoLoader::run()
 {
 	for (;;)
 	{
 		quint64 epoch;
+		int source;
 		QString key;
 		{
 			std::unique_lock<std::mutex> lk(m_mutex);
@@ -161,22 +226,28 @@ void InfoLoader::run()
 			if (m_stop)
 				return;
 			epoch = m_epoch;
+			source = m_source;
 			key = m_key;
 			m_hasRequest = false;
 		}
 
-		if (!m_indexed)
-			buildIndex();
+		if (source < 0 || source >= SourceCount)
+			continue;
+
+		Db &db = m_db[source];
+		if (!db.indexed)
+			buildIndex(source);
 
 		QString text;
-		auto it = m_index.constFind(key);
-		if (it != m_index.constEnd())
+		auto it = db.index.constFind(key);
+		if (it != db.index.constEnd())
 		{
-			QByteArray const raw = m_data.mid(it.value().first, it.value().second);
-			text = unescape(QString::fromUtf8(raw)).trimmed();
+			QByteArray const raw = db.data.mid(it.value().first, it.value().second);
+			QString const decoded = QString::fromUtf8(raw);
+			text = (kSources[source].xml ? unescape(decoded) : decoded).trimmed();
 		}
 
-		emit loaded(epoch, text);
+		emit loaded(epoch, source, text);
 	}
 }
 

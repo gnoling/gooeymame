@@ -30,6 +30,25 @@ _OPTIONS["USE_QTDEBUG"] = "1"
 function maintargetosdoptions(_target,_subtarget)
 	osdmodulestargetconf()
 
+	-- The qtui front-end uses Qt Multimedia for its video/soundtrack tabs.
+	-- (osdmodulestargetconf already added the Qt -L path and Core/Gui/Widgets.)
+	if _OPTIONS["targetos"]=="windows" then
+		links {
+			"Qt6Multimedia.dll",
+			"Qt6MultimediaWidgets.dll",
+		}
+	elseif _OPTIONS["targetos"]=="macosx" then
+		links {
+			"QtMultimedia.framework",
+			"QtMultimediaWidgets.framework",
+		}
+	else
+		links {
+			"Qt6Multimedia",
+			"Qt6MultimediaWidgets",
+		}
+	end
+
 	-- MAME statically links its own copies of zlib, libpng, etc.  If those
 	-- symbols (crc32/inflate/deflate/png_*/...) are exported in the
 	-- executable's dynamic symbol table they interpose over the system
@@ -447,6 +466,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/artloader.h",
 		MAME_DIR .. "src/osd/qtui/infoloader.cpp",
 		MAME_DIR .. "src/osd/qtui/infoloader.h",
+		MAME_DIR .. "src/osd/qtui/mediatabs.cpp",
+		MAME_DIR .. "src/osd/qtui/mediatabs.h",
 		MAME_DIR .. "src/osd/qtui/iconloader.cpp",
 		MAME_DIR .. "src/osd/qtui/iconloader.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",

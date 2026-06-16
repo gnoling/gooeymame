@@ -2,11 +2,13 @@
 // copyright-holders:MAMEdev Team
 //============================================================
 //
-//  infoloader.h - background lookups into history.xml
+//  infoloader.h - background lookups into the EXTRAs text databases
 //
-//  Indexes the (large) history.xml once on a worker thread, mapping each
-//  system short name and "<list>/<software>" key to the byte range of its
-//  <text> entry, then answers lookups without blocking the UI.
+//  Indexes the (large) text databases once each, on a worker thread:
+//   - history.xml  (XML; system + software keyed)
+//   - mameinfo.dat / messinfo.dat / command.dat  ($info= ... $end; machine
+//     short-name keyed)
+//  then answers lookups without blocking the UI.
 //
 //============================================================
 #ifndef MAME_OSD_QTUI_INFOLOADER_H
@@ -31,19 +33,30 @@ class InfoLoader : public QObject
 	Q_OBJECT
 
 public:
+	// Text databases the loader knows about (index into the source table).
+	enum Source { History = 0, MameInfo, MessInfo, Command, GameInit, SysInfo, Story, SourceCount };
+
 	explicit InfoLoader(QObject *parent = nullptr);
 	~InfoLoader() override;
 
-	// Look up history text for a key: a system short name ("pacman") or a
-	// software key ("nes/smb").  Replaces any pending request.
-	void request(quint64 epoch, const QString &key);
+	// Look up text for a key in the given source.  For History the key is a
+	// system short name ("pacman") or a software key ("nes/smb"); for the dat
+	// sources it is a machine short name.  Replaces any pending request.
+	void request(quint64 epoch, int source, const QString &key);
 
 signals:
-	void loaded(quint64 epoch, const QString &text);
+	void loaded(quint64 epoch, int source, const QString &text);
 
 private:
 	void run();
-	void buildIndex();   // worker thread
+	void buildIndex(int source);   // worker thread
+
+	struct Db
+	{
+		bool indexed = false;
+		QByteArray data;                          // raw file contents
+		QHash<QString, QPair<int, int>> index;    // key -> (offset, length)
+	};
 
 	std::thread m_thread;
 	std::mutex m_mutex;
@@ -51,12 +64,11 @@ private:
 	bool m_stop = false;
 	bool m_hasRequest = false;
 	quint64 m_epoch = 0;
+	int m_source = History;
 	QString m_key;
 
-	// Worker-thread-only state.
-	bool m_indexed = false;
-	QByteArray m_data;                                  // raw history.xml
-	QHash<QString, QPair<int, int>> m_index;            // key -> (offset, length)
+	// Worker-thread-only state, one entry per Source.
+	Db m_db[SourceCount];
 };
 
 } // namespace osd::qtui
