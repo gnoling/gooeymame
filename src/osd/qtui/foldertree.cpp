@@ -13,6 +13,7 @@
 
 #include <QtCore/QFile>
 #include <QtCore/QHash>
+#include <QtCore/QStringList>
 #include <QtCore/QTextStream>
 
 
@@ -178,6 +179,48 @@ void FolderTree::onItemSelectionChanged()
 	}
 
 	emit folderSelected(filter);
+}
+
+QString FolderTree::currentPath() const
+{
+	QTreeWidgetItem *item = currentItem();
+	if (!item)
+		return QString();
+	QStringList parts;
+	for (; item; item = item->parent())
+		parts.prepend(item->text(0));
+	// Unit separator avoids clashing with '/' that appears in category labels.
+	return parts.join(QLatin1Char('\x1f'));
+}
+
+void FolderTree::selectPath(const QString &path)
+{
+	if (path.isEmpty())
+		return;
+
+	QTreeWidgetItem *item = nullptr;
+	for (const QString &part : path.split(QLatin1Char('\x1f')))
+	{
+		QTreeWidgetItem *found = nullptr;
+		int const count = item ? item->childCount() : topLevelItemCount();
+		for (int i = 0; i < count; i++)
+		{
+			QTreeWidgetItem *child = item ? item->child(i) : topLevelItem(i);
+			if (child->text(0) == part)
+			{
+				found = child;
+				break;
+			}
+		}
+		if (!found)
+			return;   // path no longer exists; leave the current selection
+		item = found;
+	}
+
+	for (QTreeWidgetItem *ancestor = item->parent(); ancestor; ancestor = ancestor->parent())
+		ancestor->setExpanded(true);
+	setCurrentItem(item);
+	scrollToItem(item);
 }
 
 } // namespace osd::qtui

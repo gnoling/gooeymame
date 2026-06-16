@@ -43,6 +43,38 @@ void GameListProxy::setSearchText(const QString &text)
 	invalidateFilter();
 }
 
+void GameListProxy::setHideClones(bool hide)
+{
+	if (hide == m_hideClones)
+		return;
+	m_hideClones = hide;
+	invalidateFilter();
+}
+
+void GameListProxy::setHideBootlegs(bool hide)
+{
+	if (hide == m_hideBootlegs)
+		return;
+	m_hideBootlegs = hide;
+	invalidateFilter();
+}
+
+void GameListProxy::setHideHacks(bool hide)
+{
+	if (hide == m_hideHacks)
+		return;
+	m_hideHacks = hide;
+	invalidateFilter();
+}
+
+void GameListProxy::setHidePrototypes(bool hide)
+{
+	if (hide == m_hidePrototypes)
+		return;
+	m_hidePrototypes = hide;
+	invalidateFilter();
+}
+
 bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
 	QAbstractItemModel *model = sourceModel();
@@ -83,6 +115,21 @@ bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 		}
 		break;
 	}
+	}
+
+	// Version filters: hide clones (keep only family representatives) and hide
+	// bootleg/hack/prototype sets.
+	if (m_hideClones && !index.data(GameListModel::IsRepresentativeRole).toBool())
+		return false;
+	if (m_hideBootlegs || m_hideHacks || m_hidePrototypes)
+	{
+		int const flags = index.data(GameListModel::VersionFlagsRole).toInt();
+		if (m_hideBootlegs && (flags & GameListModel::VersionBootleg))
+			return false;
+		if (m_hideHacks && (flags & GameListModel::VersionHack))
+			return false;
+		if (m_hidePrototypes && (flags & GameListModel::VersionPrototype))
+			return false;
 	}
 
 	// Emulation-status modifier (orthogonal to the folder).  OR within the

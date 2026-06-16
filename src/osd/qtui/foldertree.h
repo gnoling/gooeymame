@@ -33,6 +33,11 @@ class FolderTree : public QTreeWidget
 public:
 	explicit FolderTree(GameListModel *model, QWidget *parent = nullptr);
 
+	// Stable identifier of the current node (its label path), and re-selection
+	// by that identifier, for persisting the selected folder across sessions.
+	QString currentPath() const;
+	void selectPath(const QString &path);
+
 signals:
 	void folderSelected(const FolderFilter &filter);
 

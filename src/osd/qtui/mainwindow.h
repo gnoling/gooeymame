@@ -70,6 +70,7 @@ private slots:
 	void onFolderSelected(const FolderFilter &filter);
 	void onSearchTextChanged(const QString &text);
 	void onStatusFilterChanged();
+	void onVersionFilterChanged();
 	void onSoftwareFilterChanged();
 	void onSystemSelectionChanged();
 	void onSoftwareSelectionChanged();
@@ -85,6 +86,9 @@ private:
 	void createWidgets();
 	void updateStatusCount();
 	void setSoftwarePaneVisible(bool visible);
+	void selectPendingSoftware();   // re-select the restored software item once
+
+
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
 
@@ -139,10 +143,16 @@ private:
 	int m_mainLayout = SoftwareBesideArt;
 	QLineEdit *m_search = nullptr;
 	QLineEdit *m_softwareSearch = nullptr;
-	QPushButton *m_btnWorking = nullptr;
-	QPushButton *m_btnNotWorking = nullptr;
-	QPushButton *m_btnAvailable = nullptr;
-	QPushButton *m_btnUnavailable = nullptr;
+	// Machine list filters, shared between the "Filters" bar button and the
+	// View ▸ Filters menu.
+	QAction *m_actWorking = nullptr;
+	QAction *m_actNotWorking = nullptr;
+	QAction *m_actAvailable = nullptr;
+	QAction *m_actUnavailable = nullptr;
+	QAction *m_actHideClones = nullptr;
+	QAction *m_actHideBootlegs = nullptr;
+	QAction *m_actHideHacks = nullptr;
+	QAction *m_actHidePrototypes = nullptr;
 	QPushButton *m_btnSupported = nullptr;
 	QPushButton *m_btnPartial = nullptr;
 	QPushButton *m_btnUnsupported = nullptr;
@@ -161,6 +171,11 @@ private:
 
 	QHash<QString, QVector<int>> m_softwareAvail;   // system -> availability
 	QString m_softwareLoadSystem;                   // system of the active load
+
+	// Software selection to restore once its list loads after a session restore
+	// (applied a single time, then cleared).
+	QString m_pendingSoftwareList;
+	QString m_pendingSoftwareName;
 };
 
 } // namespace osd::qtui

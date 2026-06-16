@@ -10,6 +10,8 @@
 
 #include "emulator.h"
 #include "frontendpaths.h"
+#include "gamelistmodel.h"
+#include "regions.h"
 
 #include <QtCore/QEvent>
 #include <QtCore/QSettings>
@@ -218,7 +220,10 @@ void OptionsDialog::buildUi()
 
 	buildOptionCategories();
 	if (!gameMode)
-		buildFolderCategory();   // front-end folders are global only
+	{
+		buildVersionsCategory();   // global only
+		buildFolderCategory();     // front-end folders are global only
+	}
 	if (m_categoryList->count() > 0)
 		m_categoryList->setCurrentRow(0);
 
@@ -479,6 +484,84 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 	m_editors.push_back({ name, opt.type, readWidget, value });
 }
 
+void OptionsDialog::buildVersionsCategory()
+{
+	QWidget *page = new QWidget;
+	QVBoxLayout *layout = new QVBoxLayout(page);
+
+	QLabel *intro = new QLabel(
+			tr("How the front-end picks the primary version of a game that has "
+			   "clones (regional/revision variants).  Affects the top item, its "
+			   "artwork, and what launching a group runs."), page);
+	intro->setWordWrap(true);
+	layout->addWidget(intro);
+
+	QFormLayout *form = new QFormLayout;
+	m_versionMode = new QComboBox(page);
+	m_versionMode->addItem(tr("Match MAME (use the parent set)"), GameListModel::MatchParent);
+	m_versionMode->addItem(tr("Promote my preferred region"), GameListModel::PromoteRegion);
+	form->addRow(tr("Default version:"), m_versionMode);
+
+	m_useSystemRegion = new QCheckBox(tr("Use my system region automatically"), page);
+	form->addRow(QString(), m_useSystemRegion);
+	layout->addLayout(form);
+
+	layout->addWidget(new QLabel(tr("Region priority (top = preferred; uncheck to ignore):"), page));
+	m_regionList = new QListWidget(page);
+	layout->addWidget(m_regionList, 1);
+
+	QHBoxLayout *buttons = new QHBoxLayout;
+	QPushButton *up = new QPushButton(tr("Move Up"), page);
+	QPushButton *down = new QPushButton(tr("Move Down"), page);
+	auto move = [this] (int delta) {
+		int const row = m_regionList->currentRow();
+		int const target = row + delta;
+		if (row < 0 || target < 0 || target >= m_regionList->count())
+			return;
+		QListWidgetItem *item = m_regionList->takeItem(row);
+		m_regionList->insertItem(target, item);
+		m_regionList->setCurrentRow(target);
+	};
+	connect(up, &QPushButton::clicked, this, [move] { move(-1); });
+	connect(down, &QPushButton::clicked, this, [move] { move(1); });
+	buttons->addWidget(up);
+	buttons->addWidget(down);
+	buttons->addStretch();
+	layout->addLayout(buttons);
+
+	// Load current settings.
+	QSettings settings;
+	int const mode = settings.value(QStringLiteral("versions/mode"), int(GameListModel::MatchParent)).toInt();
+	int const modeIndex = m_versionMode->findData(mode);
+	m_versionMode->setCurrentIndex(modeIndex >= 0 ? modeIndex : 0);
+	m_useSystemRegion->setChecked(settings.value(QStringLiteral("versions/useSystemRegion"), false).toBool());
+
+	QStringList const saved = settings.value(QStringLiteral("versions/order")).toStringList();
+	QStringList ordered;
+	QSet<QString> checked;
+	if (saved.isEmpty())
+	{
+		ordered = defaultRegionOrder();   // all enabled by default
+		checked = QSet<QString>(ordered.begin(), ordered.end());
+	}
+	else
+	{
+		ordered = saved;
+		checked = QSet<QString>(saved.begin(), saved.end());
+		for (const QString &region : defaultRegionOrder())
+			if (!ordered.contains(region))
+				ordered << region;   // append the rest, unchecked
+	}
+	for (const QString &region : ordered)
+	{
+		QListWidgetItem *item = new QListWidgetItem(region, m_regionList);
+		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+		item->setCheckState(checked.contains(region) ? Qt::Checked : Qt::Unchecked);
+	}
+
+	addCategory(tr("Versions & Regions"), page);
+}
+
 void OptionsDialog::buildFolderCategory()
 {
 	QWidget *page = new QWidget;
@@ -611,6 +694,23 @@ void OptionsDialog::accept()
 			setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
 		if (m_videoAutoplay)
 			QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
+
+		// Versions & Regions.
+		if (m_versionMode)
+			QSettings().setValue(QStringLiteral("versions/mode"), m_versionMode->currentData().toInt());
+		if (m_useSystemRegion)
+			QSettings().setValue(QStringLiteral("versions/useSystemRegion"), m_useSystemRegion->isChecked());
+		if (m_regionList)
+		{
+			QStringList order;
+			for (int i = 0; i < m_regionList->count(); i++)
+			{
+				QListWidgetItem *item = m_regionList->item(i);
+				if (item->checkState() == Qt::Checked)
+					order << item->text();
+			}
+			QSettings().setValue(QStringLiteral("versions/order"), order);
+		}
 	}
 
 	QDialog::accept();

@@ -23,6 +23,7 @@
 #include <vector>
 
 class QCheckBox;
+class QComboBox;
 class QEvent;
 class QFormLayout;
 class QLabel;
@@ -57,6 +58,7 @@ private:
 	void addCategory(const QString &title, QWidget *page);
 	void buildOptionCategories();
 	void buildFolderCategory();
+	void buildVersionsCategory();
 	void addOptionRow(QFormLayout *form, const qtui_option &opt);
 
 	struct Editor
@@ -77,6 +79,9 @@ private:
 	QStackedWidget *m_stack = nullptr;
 	QLabel *m_description = nullptr;
 	QCheckBox *m_videoAutoplay = nullptr;
+	QComboBox *m_versionMode = nullptr;       // Versions & Regions page
+	QCheckBox *m_useSystemRegion = nullptr;
+	QListWidget *m_regionList = nullptr;      // checkable, reorderable priority
 	QString m_system;                   // empty = global mame.ini; else per-machine
 	QString m_systemDescription;        // machine friendly name (per-machine mode)
 	QSet<QString> m_overridden;         // option names set by the machine's ini

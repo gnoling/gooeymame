@@ -160,6 +160,13 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 
 	connect(m_artTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
 	connect(m_infoTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
+	// Remember the selected tab in each group across sessions.
+	connect(m_artTabs, &QTabWidget::currentChanged, this, [] (int index) {
+		QSettings().setValue(QStringLiteral("artwork/artTab"), index);
+	});
+	connect(m_infoTabs, &QTabWidget::currentChanged, this, [] (int index) {
+		QSettings().setValue(QStringLiteral("artwork/infoTab"), index);
+	});
 
 	m_splitter = new QSplitter(Qt::Vertical, this);
 	m_splitter->addWidget(m_artTabs);
@@ -171,6 +178,7 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	connect(m_splitter, &QSplitter::splitterMoved, this, [this](int, int) {
 		if (m_layout == Split || m_layout == ArtOnly)
 			rescale(indexOfView(m_artTabs->currentWidget()));
+		QSettings().setValue(QStringLiteral("artwork/splitter"), m_splitter->saveState());
 	});
 
 	m_loader = new ArtLoader(this);
@@ -196,11 +204,16 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	layout->addLayout(bar);
 	layout->addWidget(m_splitter);
 
-	// Restore the saved layout choice.
+	// Restore the saved layout choice and the art/info split sizes.
 	QSettings settings;
 	int const saved = settings.value(QStringLiteral("artwork/layout"), int(Split)).toInt();
 	m_layout = (saved >= Split && saved <= InfoOnly) ? saved : Split;
 	m_layoutCombo->setCurrentIndex(m_layout);
+	QByteArray const splitState = settings.value(QStringLiteral("artwork/splitter")).toByteArray();
+	if (!splitState.isEmpty())
+		m_splitter->restoreState(splitState);
+	m_artTabs->setCurrentIndex(settings.value(QStringLiteral("artwork/artTab"), 0).toInt());
+	m_infoTabs->setCurrentIndex(settings.value(QStringLiteral("artwork/infoTab"), 0).toInt());
 	applyLayout(m_layout);
 	connect(m_layoutCombo, qOverload<int>(&QComboBox::currentIndexChanged),
 			this, &ArtworkPanel::onLayoutChanged);

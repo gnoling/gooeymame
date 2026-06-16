@@ -29,6 +29,7 @@
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
+#include <QtGui/QAction>
 #include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
 #include <QtWidgets/QApplication>
@@ -47,6 +48,7 @@
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
+#include <QtWidgets/QToolButton>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
@@ -78,6 +80,17 @@ void pairExclusive(QPushButton *a, QPushButton *b)
 		if (on) { QSignalBlocker block(b); b->setChecked(false); }
 	});
 	QObject::connect(b, &QPushButton::toggled, a, [a] (bool on) {
+		if (on) { QSignalBlocker block(a); a->setChecked(false); }
+	});
+}
+
+// Make two checkable actions mutually exclusive (either, or neither).
+void actionsExclusive(QAction *a, QAction *b)
+{
+	QObject::connect(a, &QAction::toggled, b, [b] (bool on) {
+		if (on) { QSignalBlocker block(b); b->setChecked(false); }
+	});
+	QObject::connect(b, &QAction::toggled, a, [a] (bool on) {
 		if (on) { QSignalBlocker block(a); a->setChecked(false); }
 	});
 }
@@ -160,6 +173,8 @@ void MainWindow::openOptions()
 	OptionsDialog dialog(this);
 	if (dialog.exec() == QDialog::Accepted)
 	{
+		// Version/region preferences may have changed the representatives.
+		m_model->reloadVersionSettings();
 		// Path changes can affect availability; suggest a re-audit.
 		statusBar()->showMessage(
 				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),
@@ -242,6 +257,20 @@ void MainWindow::saveSettings() const
 	settings.setValue(QStringLiteral("systemHeader"), m_view->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("softwareHeader"), m_softwareView->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("selected"), selectedSystem());
+	settings.setValue(QStringLiteral("folderPath"), m_folders->currentPath());
+	settings.setValue(QStringLiteral("search"), m_search->text());
+
+	// Currently selected software item (re-selected when its list reloads).
+	QString swList, swName;
+	QModelIndex const swIndex = m_softwareView->selectionModel()->currentIndex();
+	if (swIndex.isValid())
+	{
+		int const sourceRow = m_softwareProxy->mapToSource(swIndex).row();
+		swList = m_softwareModel->listForRow(sourceRow);
+		swName = m_softwareModel->shortNameForRow(sourceRow);
+	}
+	settings.setValue(QStringLiteral("softwareList"), swList);
+	settings.setValue(QStringLiteral("softwareName"), swName);
 	settings.endGroup();
 }
 
@@ -315,6 +344,10 @@ void MainWindow::restoreSettings()
 
 	int const iconSize = settings.value(QStringLiteral("iconSize"), 24).toInt();
 	QString const selected = settings.value(QStringLiteral("selected")).toString();
+	QString const folderPath = settings.value(QStringLiteral("folderPath")).toString();
+	QString const searchText = settings.value(QStringLiteral("search")).toString();
+	m_pendingSoftwareList = settings.value(QStringLiteral("softwareList")).toString();
+	m_pendingSoftwareName = settings.value(QStringLiteral("softwareName")).toString();
 	settings.endGroup();
 
 	// Apply the saved icon size and tick the matching menu entry.
@@ -333,6 +366,48 @@ void MainWindow::restoreSettings()
 	m_softwareGridSource->setCurrentIndex(settings.value(QStringLiteral("view/softwareSource"), 0).toInt());
 	m_softwareGridCaption->setCheckedIds(captionIds(settings.value(QStringLiteral("view/softwareCaption"), 1).toInt()));
 	m_softwareGridToggle->setChecked(settings.value(QStringLiteral("view/softwareMode"), false).toBool());
+
+	// Restore all machine-list filters.  Block signals while setting the action
+	// states so an early toggle doesn't write back the not-yet-restored others,
+	// then apply once.
+	QAction *const filterActs[] = {
+		m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable,
+		m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes };
+	for (QAction *act : filterActs)
+		act->blockSignals(true);
+	m_actWorking->setChecked(settings.value(QStringLiteral("filters/working"), false).toBool());
+	m_actNotWorking->setChecked(settings.value(QStringLiteral("filters/notWorking"), false).toBool());
+	m_actAvailable->setChecked(settings.value(QStringLiteral("filters/available"), false).toBool());
+	m_actUnavailable->setChecked(settings.value(QStringLiteral("filters/unavailable"), false).toBool());
+	m_actHideClones->setChecked(settings.value(QStringLiteral("filters/hideClones"), false).toBool());
+	m_actHideBootlegs->setChecked(settings.value(QStringLiteral("filters/hideBootlegs"), false).toBool());
+	m_actHideHacks->setChecked(settings.value(QStringLiteral("filters/hideHacks"), false).toBool());
+	m_actHidePrototypes->setChecked(settings.value(QStringLiteral("filters/hidePrototypes"), false).toBool());
+	for (QAction *act : filterActs)
+		act->blockSignals(false);
+	onStatusFilterChanged();
+	onVersionFilterChanged();
+
+	// Software-pane filters (same block-then-apply-once pattern).
+	QPushButton *const swActs[] = {
+		m_btnSupported, m_btnPartial, m_btnUnsupported, m_btnSwAvailable, m_btnSwUnavailable };
+	for (QPushButton *button : swActs)
+		button->blockSignals(true);
+	m_btnSupported->setChecked(settings.value(QStringLiteral("filters/swSupported"), false).toBool());
+	m_btnPartial->setChecked(settings.value(QStringLiteral("filters/swPartial"), false).toBool());
+	m_btnUnsupported->setChecked(settings.value(QStringLiteral("filters/swUnsupported"), false).toBool());
+	m_btnSwAvailable->setChecked(settings.value(QStringLiteral("filters/swAvailable"), false).toBool());
+	m_btnSwUnavailable->setChecked(settings.value(QStringLiteral("filters/swUnavailable"), false).toBool());
+	for (QPushButton *button : swActs)
+		button->blockSignals(false);
+	onSoftwareFilterChanged();
+
+	// Restore the search text and selected folder (each applies its filter via
+	// its normal signal) before re-selecting the system under those filters.
+	if (!searchText.isEmpty())
+		m_search->setText(searchText);
+	if (!folderPath.isEmpty())
+		m_folders->selectPath(folderPath);
 
 	// Re-select the last system, if it is still visible under the current
 	// folder/filters.
@@ -410,6 +485,41 @@ void MainWindow::createMenus()
 		});
 	}
 
+	// Machine-list filters: shared QActions used by both the View ▸ Filters
+	// menu and the "Filters" button in the list's bar.
+	auto makeFilterAction = [this] (const QString &text, const QString &tip) {
+		QAction *act = new QAction(text, this);
+		act->setCheckable(true);
+		act->setToolTip(tip);
+		return act;
+	};
+	m_actWorking = makeFilterAction(tr("Working"), tr("Show systems with working emulation"));
+	m_actNotWorking = makeFilterAction(tr("Not working"), tr("Show systems with non-working emulation"));
+	m_actAvailable = makeFilterAction(tr("Available"), tr("Show systems whose ROMs are present"));
+	m_actUnavailable = makeFilterAction(tr("Unavailable"), tr("Show systems whose ROMs are missing"));
+	m_actHideClones = makeFilterAction(tr("Hide clones"), tr("Show only each family's primary version"));
+	m_actHideBootlegs = makeFilterAction(tr("Hide bootlegs"), tr("Hide bootleg sets"));
+	m_actHideHacks = makeFilterAction(tr("Hide hacks && homebrew"), tr("Hide hacks and unofficial/homebrew sets"));
+	m_actHidePrototypes = makeFilterAction(tr("Hide prototypes"), tr("Hide prototype/incomplete sets"));
+
+	actionsExclusive(m_actWorking, m_actNotWorking);
+	actionsExclusive(m_actAvailable, m_actUnavailable);
+	for (QAction *act : { m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable })
+		connect(act, &QAction::toggled, this, &MainWindow::onStatusFilterChanged);
+	for (QAction *act : { m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes })
+		connect(act, &QAction::toggled, this, &MainWindow::onVersionFilterChanged);
+
+	QMenu *filtersMenu = viewMenu->addMenu(tr("&Filters"));
+	filtersMenu->addAction(m_actWorking);
+	filtersMenu->addAction(m_actNotWorking);
+	filtersMenu->addAction(m_actAvailable);
+	filtersMenu->addAction(m_actUnavailable);
+	filtersMenu->addSeparator();
+	filtersMenu->addAction(m_actHideClones);
+	filtersMenu->addAction(m_actHideBootlegs);
+	filtersMenu->addAction(m_actHideHacks);
+	filtersMenu->addAction(m_actHidePrototypes);
+
 	QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
 	QAction *optionsAct = toolsMenu->addAction(tr("&Options…"));
 	connect(optionsAct, &QAction::triggered, this, &MainWindow::openOptions);
@@ -436,6 +546,12 @@ void MainWindow::createWidgets()
 
 	m_proxy = new GameListProxy(this);
 	m_proxy->setSourceModel(m_model);
+
+	// Re-filter when clone-family representatives change (version preference).
+	connect(m_model, &GameListModel::versionsChanged, this, [this] {
+		m_proxy->invalidate();
+		updateStatusCount();
+	});
 
 	// --- system list pane: [search | status] over the table ---
 	m_view = new QTableView;
@@ -469,19 +585,24 @@ void MainWindow::createWidgets()
 	m_search->setPlaceholderText(tr("Search systems…"));
 	connect(m_search, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
 
-	// Status quick-filters: combinable toggles that refine the current list.
-	// Opposite pairs are mutually exclusive; the two groups (emulation,
-	// availability) AND together.
-	m_btnWorking = makeToggle(tr("Working"), tr("Show systems with working emulation"));
-	m_btnNotWorking = makeToggle(tr("Not working"), tr("Show systems with non-working emulation"));
-	m_btnAvailable = makeToggle(tr("Available"), tr("Show systems whose ROMs are present"));
-	m_btnUnavailable = makeToggle(tr("Unavailable"), tr("Show systems whose ROMs are missing"));
-
-	pairExclusive(m_btnWorking, m_btnNotWorking);
-	pairExclusive(m_btnAvailable, m_btnUnavailable);
-
-	for (QPushButton *button : { m_btnWorking, m_btnNotWorking, m_btnAvailable, m_btnUnavailable })
-		connect(button, &QPushButton::toggled, this, &MainWindow::onStatusFilterChanged);
+	// The status/version filters (created in createMenus) are reached from a
+	// single "Filters" button that drops the same shared actions as a menu,
+	// keeping the bar uncluttered.
+	QToolButton *filtersButton = new QToolButton;
+	filtersButton->setText(tr("Filters"));
+	filtersButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+	filtersButton->setPopupMode(QToolButton::InstantPopup);
+	QMenu *barFiltersMenu = new QMenu(filtersButton);
+	barFiltersMenu->addAction(m_actWorking);
+	barFiltersMenu->addAction(m_actNotWorking);
+	barFiltersMenu->addAction(m_actAvailable);
+	barFiltersMenu->addAction(m_actUnavailable);
+	barFiltersMenu->addSeparator();
+	barFiltersMenu->addAction(m_actHideClones);
+	barFiltersMenu->addAction(m_actHideBootlegs);
+	barFiltersMenu->addAction(m_actHideHacks);
+	barFiltersMenu->addAction(m_actHidePrototypes);
+	filtersButton->setMenu(barFiltersMenu);
 
 	// Grid (thumbnail) view sharing the proxy and selection model with the table.
 	m_grid = new GridView;
@@ -519,10 +640,7 @@ void MainWindow::createWidgets()
 	// Quick-filter bar over the system list.
 	QHBoxLayout *systemBar = new QHBoxLayout;
 	systemBar->addWidget(m_search, 1);
-	systemBar->addWidget(m_btnWorking);
-	systemBar->addWidget(m_btnNotWorking);
-	systemBar->addWidget(m_btnAvailable);
-	systemBar->addWidget(m_btnUnavailable);
+	systemBar->addWidget(filtersButton);
 	systemBar->addWidget(m_gridToggle);
 	systemLayout->addLayout(systemBar);
 	systemLayout->addWidget(m_gridBar);
@@ -793,15 +911,38 @@ void MainWindow::onSearchTextChanged(const QString &text)
 void MainWindow::onStatusFilterChanged()
 {
 	int flags = 0;
-	if (m_btnWorking->isChecked())
+	if (m_actWorking->isChecked())
 		flags |= StatusWorking;
-	if (m_btnNotWorking->isChecked())
+	if (m_actNotWorking->isChecked())
 		flags |= StatusNotWorking;
-	if (m_btnAvailable->isChecked())
+	if (m_actAvailable->isChecked())
 		flags |= StatusAvailable;
-	if (m_btnUnavailable->isChecked())
+	if (m_actUnavailable->isChecked())
 		flags |= StatusUnavailable;
 	m_proxy->setStatusFilter(flags);
+
+	QSettings settings;
+	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
+	settings.setValue(QStringLiteral("filters/notWorking"), m_actNotWorking->isChecked());
+	settings.setValue(QStringLiteral("filters/available"), m_actAvailable->isChecked());
+	settings.setValue(QStringLiteral("filters/unavailable"), m_actUnavailable->isChecked());
+
+	updateStatusCount();
+}
+
+void MainWindow::onVersionFilterChanged()
+{
+	m_proxy->setHideClones(m_actHideClones->isChecked());
+	m_proxy->setHideBootlegs(m_actHideBootlegs->isChecked());
+	m_proxy->setHideHacks(m_actHideHacks->isChecked());
+	m_proxy->setHidePrototypes(m_actHidePrototypes->isChecked());
+
+	QSettings settings;
+	settings.setValue(QStringLiteral("filters/hideClones"), m_actHideClones->isChecked());
+	settings.setValue(QStringLiteral("filters/hideBootlegs"), m_actHideBootlegs->isChecked());
+	settings.setValue(QStringLiteral("filters/hideHacks"), m_actHideHacks->isChecked());
+	settings.setValue(QStringLiteral("filters/hidePrototypes"), m_actHidePrototypes->isChecked());
+
 	updateStatusCount();
 }
 
@@ -822,6 +963,13 @@ void MainWindow::onSoftwareFilterChanged()
 	if (m_btnSwUnavailable->isChecked())
 		avail |= SwUnavailable;
 	m_softwareProxy->setAvailabilityFilter(avail);
+
+	QSettings settings;
+	settings.setValue(QStringLiteral("filters/swSupported"), m_btnSupported->isChecked());
+	settings.setValue(QStringLiteral("filters/swPartial"), m_btnPartial->isChecked());
+	settings.setValue(QStringLiteral("filters/swUnsupported"), m_btnUnsupported->isChecked());
+	settings.setValue(QStringLiteral("filters/swAvailable"), m_btnSwAvailable->isChecked());
+	settings.setValue(QStringLiteral("filters/swUnavailable"), m_btnSwUnavailable->isChecked());
 }
 
 void MainWindow::onSystemSelectionChanged()
@@ -837,6 +985,38 @@ void MainWindow::onSystemSelectionChanged()
 	// settles.
 	m_softwareModel->setEntries({});
 	m_softwareTimer->start();
+}
+
+void MainWindow::selectPendingSoftware()
+{
+	if (m_pendingSoftwareName.isEmpty())
+		return;
+
+	for (int row = 0; row < m_softwareModel->rowCount(); row++)
+	{
+		if (m_softwareModel->shortNameForRow(row) == m_pendingSoftwareName
+				&& m_softwareModel->listForRow(row) == m_pendingSoftwareList)
+		{
+			QModelIndex const proxyIndex = m_softwareProxy->mapFromSource(
+					m_softwareModel->index(row, SoftwareModel::COLUMN_DESCRIPTION));
+			if (proxyIndex.isValid())
+			{
+				m_softwareView->setCurrentIndex(proxyIndex);
+				// Defer the scroll: the just-shown view hasn't laid out its rows
+				// yet (large lists), so an immediate scrollTo lands off-target.
+				QPersistentModelIndex const persistent(proxyIndex);
+				QTimer::singleShot(0, this, [this, persistent] {
+					if (persistent.isValid())
+						m_softwareView->scrollTo(persistent, QAbstractItemView::PositionAtCenter);
+				});
+			}
+			break;
+		}
+	}
+
+	// One-shot: applies only to the first load after a session restore.
+	m_pendingSoftwareList.clear();
+	m_pendingSoftwareName.clear();
 }
 
 void MainWindow::onSoftwareSelectionChanged()
@@ -883,6 +1063,7 @@ void MainWindow::onSoftwareLoaded(const std::vector<qtui_software_entry> &entrie
 		return;
 
 	m_softwareSearch->clear();   // start fresh for the new system
+	selectPendingSoftware();     // restore the saved software item (once)
 
 	// If this system's availability is already cached (and still aligns with
 	// the freshly enumerated list), apply it immediately and skip the audit.

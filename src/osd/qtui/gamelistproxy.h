@@ -73,6 +73,13 @@ public:
 	void setStatusFilter(int flags);   // bitwise OR of StatusFlag
 	void setSearchText(const QString &text);
 
+	// Version filters: hide clones (show only family representatives), and hide
+	// bootleg/hack/prototype sets.
+	void setHideClones(bool hide);
+	void setHideBootlegs(bool hide);
+	void setHideHacks(bool hide);
+	void setHidePrototypes(bool hide);
+
 protected:
 	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
 
@@ -80,6 +87,10 @@ private:
 	FolderFilter m_filter;
 	int m_status = 0;
 	QString m_search;
+	bool m_hideClones = false;
+	bool m_hideBootlegs = false;
+	bool m_hideHacks = false;
+	bool m_hidePrototypes = false;
 };
 
 } // namespace osd::qtui
