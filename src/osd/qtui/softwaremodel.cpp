@@ -9,9 +9,13 @@
 #include "softwaremodel.h"
 
 #include "frontendpaths.h"
+#include "regions.h"
 #include "thumbnailloader.h"
 
+#include <QtCore/QSettings>
 #include <QtGui/QBrush>
+
+#include <climits>
 
 
 namespace osd::qtui {
@@ -30,7 +34,200 @@ void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
 	++m_thumbGen;   // entries replaced: invalidate thumbnails
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
+	buildFamilies();
+	reloadVersionSettings();   // reads versions/* and computes representatives
 	endResetModel();
+}
+
+QString SoftwareModel::familyKey(int rootRow) const
+{
+	if (rootRow < 0 || rootRow >= int(m_entries.size()))
+		return QString();
+	return QString::fromStdString(m_entries[rootRow].list) + QLatin1Char('\x1f')
+			+ QString::fromStdString(m_entries[rootRow].shortname);
+}
+
+void SoftwareModel::buildFamilies()
+{
+	int const n = int(m_entries.size());
+	m_familyRoot.assign(n, -1);
+	m_region.assign(n, QString());
+	m_versionFlags.assign(n, 0);
+	m_representative.assign(n, -1);
+	m_familyMembers.clear();
+
+	// (list, short name) -> row, to resolve a clone's parent within its list.
+	QHash<QString, int> keyToRow;
+	keyToRow.reserve(n * 2);
+	for (int row = 0; row < n; row++)
+		keyToRow.insert(QString::fromStdString(m_entries[row].list) + QLatin1Char('\x1f')
+				+ QString::fromStdString(m_entries[row].shortname), row);
+
+	for (int row = 0; row < n; row++)
+	{
+		const qtui_software_entry &entry = m_entries[row];
+
+		int rootRow = row;
+		if (!entry.parent.empty())
+		{
+			auto it = keyToRow.constFind(QString::fromStdString(entry.list) + QLatin1Char('\x1f')
+					+ QString::fromStdString(entry.parent));
+			if (it != keyToRow.constEnd())
+				rootRow = it.value();
+		}
+		m_familyRoot[row] = rootRow;
+
+		QString const desc = QString::fromStdString(entry.description);
+		m_region[row] = extractRegion(desc);
+
+		std::uint8_t flags = 0;
+		QString const lower = desc.toLower();
+		if (lower.contains(QStringLiteral("bootleg")))
+			flags |= VersionBootleg;
+		if (lower.contains(QStringLiteral("hack")))
+			flags |= VersionHack;
+		if (lower.contains(QStringLiteral("prototype")))
+			flags |= VersionPrototype;
+		m_versionFlags[row] = flags;
+	}
+
+	for (int row = 0; row < n; row++)
+		m_familyMembers[m_familyRoot[row]].push_back(row);
+	for (auto &entry : m_familyMembers)
+	{
+		std::vector<int> &members = entry.second;
+		for (std::size_t i = 1; i < members.size(); i++)
+		{
+			if (members[i] == entry.first)
+			{
+				std::swap(members[0], members[i]);
+				break;
+			}
+		}
+	}
+}
+
+void SoftwareModel::computeRepresentatives()
+{
+	QStringList order = m_regionOrder;
+	if (m_useSystemRegion)
+	{
+		QString const sys = systemRegion();
+		if (!sys.isEmpty())
+		{
+			order.removeAll(sys);
+			order.prepend(sys);
+		}
+	}
+	QHash<QString, int> rank;
+	for (int i = 0; i < order.size(); i++)
+		rank.insert(order[i], i);
+
+	for (auto &entry : m_familyMembers)
+	{
+		int const root = entry.first;
+		const std::vector<int> &members = entry.second;
+		int rep = root;
+
+		auto ov = m_overrides.constFind(familyKey(root));
+		if (ov != m_overrides.constEnd())
+		{
+			for (int member : members)
+				if (QString::fromStdString(m_entries[member].shortname) == ov.value())
+				{
+					rep = member;
+					break;
+				}
+		}
+		else if (m_versionMode == PromoteRegion)
+		{
+			int bestRank = INT_MAX;
+			int bestRow = root;
+			for (int member : members)
+			{
+				int const rk = m_region[member].isEmpty()
+						? INT_MAX : rank.value(m_region[member], INT_MAX);
+				if (rk < bestRank)
+				{
+					bestRank = rk;
+					bestRow = member;
+				}
+			}
+			rep = bestRow;
+		}
+
+		for (int member : members)
+			m_representative[member] = rep;
+	}
+}
+
+void SoftwareModel::reloadVersionSettings()
+{
+	QSettings settings;
+	m_versionMode = settings.value(QStringLiteral("versions/mode"), int(MatchParent)).toInt();
+	m_useSystemRegion = settings.value(QStringLiteral("versions/useSystemRegion"), false).toBool();
+	QStringList const order = settings.value(QStringLiteral("versions/order")).toStringList();
+	m_regionOrder = order.isEmpty() ? defaultRegionOrder() : order;
+
+	m_overrides.clear();
+	settings.beginGroup(QStringLiteral("versions/swoverrides"));
+	const QStringList keys = settings.childKeys();
+	for (const QString &key : keys)
+		m_overrides.insert(key, settings.value(key).toString());
+	settings.endGroup();
+
+	computeRepresentatives();
+
+	if (!m_entries.empty())
+		emit dataChanged(index(0, 0), index(int(m_entries.size()) - 1, COLUMN_COUNT - 1),
+				{ IsRepresentativeRole, IsCloneRole });
+	emit versionsChanged();
+}
+
+bool SoftwareModel::isClone(int row) const
+{
+	return row >= 0 && row < int(m_familyRoot.size()) && m_familyRoot[row] != row;
+}
+
+bool SoftwareModel::isRepresentative(int row) const
+{
+	return row >= 0 && row < int(m_representative.size()) && m_representative[row] == row;
+}
+
+int SoftwareModel::representativeRow(int row) const
+{
+	return (row >= 0 && row < int(m_representative.size())) ? m_representative[row] : row;
+}
+
+QList<int> SoftwareModel::familyMemberRows(int row) const
+{
+	QList<int> out;
+	if (row < 0 || row >= int(m_familyRoot.size()))
+		return out;
+	auto it = m_familyMembers.find(m_familyRoot[row]);
+	if (it == m_familyMembers.end())
+		return out;
+	int const rep = m_representative[m_familyRoot[row]];
+	if (rep >= 0)
+		out << rep;
+	for (int member : it->second)
+		if (member != rep)
+			out << member;
+	return out;
+}
+
+void SoftwareModel::setVersionOverride(int row, const QString &memberShortName)
+{
+	if (row < 0 || row >= int(m_familyRoot.size()))
+		return;
+	QString const key = familyKey(m_familyRoot[row]);
+	if (key.isEmpty())
+		return;
+	QSettings settings;
+	settings.beginGroup(QStringLiteral("versions/swoverrides"));
+	settings.setValue(key, memberShortName);
+	settings.endGroup();
+	reloadVersionSettings();
 }
 
 void SoftwareModel::setHostSystem(const QString &system)
@@ -162,6 +359,15 @@ QVariant SoftwareModel::data(const QModelIndex &index, int role) const
 
 	if (role == kThumbnailRole)
 		return thumbnailForRow(index.row());
+
+	if (role == IsCloneRole)
+		return isClone(index.row());
+	if (role == IsRepresentativeRole)
+		return isRepresentative(index.row());
+	if (role == RegionRole)
+		return m_region.empty() ? QString() : m_region[index.row()];
+	if (role == VersionFlagsRole)
+		return m_versionFlags.empty() ? 0 : int(m_versionFlags[index.row()]);
 
 	if (role == Qt::ForegroundRole)
 	{

@@ -45,6 +45,38 @@ void SoftwareProxy::setAvailabilityFilter(int flags)
 	invalidateFilter();
 }
 
+void SoftwareProxy::setHideClones(bool hide)
+{
+	if (hide == m_hideClones)
+		return;
+	m_hideClones = hide;
+	invalidateFilter();
+}
+
+void SoftwareProxy::setHideBootlegs(bool hide)
+{
+	if (hide == m_hideBootlegs)
+		return;
+	m_hideBootlegs = hide;
+	invalidateFilter();
+}
+
+void SoftwareProxy::setHideHacks(bool hide)
+{
+	if (hide == m_hideHacks)
+		return;
+	m_hideHacks = hide;
+	invalidateFilter();
+}
+
+void SoftwareProxy::setHidePrototypes(bool hide)
+{
+	if (hide == m_hidePrototypes)
+		return;
+	m_hidePrototypes = hide;
+	invalidateFilter();
+}
+
 bool SoftwareProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
 	QAbstractItemModel *model = sourceModel();
@@ -52,6 +84,20 @@ bool SoftwareProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 		return false;
 
 	QModelIndex const index = model->index(sourceRow, 0, sourceParent);
+
+	// Version filters (hide clones / bootlegs / hacks / prototypes).
+	if (m_hideClones && !index.data(SoftwareModel::IsRepresentativeRole).toBool())
+		return false;
+	if (m_hideBootlegs || m_hideHacks || m_hidePrototypes)
+	{
+		int const flags = index.data(SoftwareModel::VersionFlagsRole).toInt();
+		if (m_hideBootlegs && (flags & SoftwareModel::VersionBootleg))
+			return false;
+		if (m_hideHacks && (flags & SoftwareModel::VersionHack))
+			return false;
+		if (m_hidePrototypes && (flags & SoftwareModel::VersionPrototype))
+			return false;
+	}
 
 	// Support-level quick filter (OR within the group).
 	if (m_support)

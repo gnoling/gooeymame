@@ -153,11 +153,17 @@ private:
 	QAction *m_actHideBootlegs = nullptr;
 	QAction *m_actHideHacks = nullptr;
 	QAction *m_actHidePrototypes = nullptr;
-	QPushButton *m_btnSupported = nullptr;
-	QPushButton *m_btnPartial = nullptr;
-	QPushButton *m_btnUnsupported = nullptr;
-	QPushButton *m_btnSwAvailable = nullptr;
-	QPushButton *m_btnSwUnavailable = nullptr;
+	// Software-list filters (shared by the software "Filters" button and the
+	// View ▸ Software Filters menu).
+	QAction *m_actSwSupported = nullptr;
+	QAction *m_actSwPartial = nullptr;
+	QAction *m_actSwUnsupported = nullptr;
+	QAction *m_actSwAvailable = nullptr;
+	QAction *m_actSwUnavailable = nullptr;
+	QAction *m_actSwHideClones = nullptr;
+	QAction *m_actSwHideBootlegs = nullptr;
+	QAction *m_actSwHideHacks = nullptr;
+	QAction *m_actSwHidePrototypes = nullptr;
 	QTimer *m_softwareTimer = nullptr;
 	QAction *m_playAct = nullptr;
 	QAction *m_propertiesAct = nullptr;

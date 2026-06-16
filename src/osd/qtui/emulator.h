@@ -50,6 +50,7 @@ struct qtui_software_entry
 {
 	std::string list;        // software list short name (e.g. "nes")
 	std::string shortname;   // software short name (e.g. "smb")
+	std::string parent;      // cloneof short name, or "" if this is a parent
 	std::string description; // human-readable title
 	std::string year;
 	std::string publisher;

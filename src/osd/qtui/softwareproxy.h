@@ -45,6 +45,12 @@ public:
 	void setSupportFilter(int flags);        // bitwise OR of SoftwareSupportFlag
 	void setAvailabilityFilter(int flags);   // bitwise OR of SoftwareAvailFlag
 
+	// Version filters, mirroring the machine list.
+	void setHideClones(bool hide);
+	void setHideBootlegs(bool hide);
+	void setHideHacks(bool hide);
+	void setHidePrototypes(bool hide);
+
 protected:
 	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
 
@@ -52,6 +58,10 @@ private:
 	QString m_search;
 	int m_support = 0;
 	int m_avail = 0;
+	bool m_hideClones = false;
+	bool m_hideBootlegs = false;
+	bool m_hideHacks = false;
+	bool m_hidePrototypes = false;
 };
 
 } // namespace osd::qtui

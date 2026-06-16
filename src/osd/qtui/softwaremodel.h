@@ -17,11 +17,15 @@
 
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QHash>
+#include <QtCore/QList>
 #include <QtCore/QSet>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QVector>
 #include <QtGui/QPixmap>
 
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace osd::qtui {
@@ -49,12 +53,36 @@ public:
 		// support level: 0 = supported, 1 = partial, 2 = unsupported
 		SupportedRole = Qt::UserRole + 1,
 		// ROM availability: matches qtui_availability (0/1/2)
-		AvailabilityRole
+		AvailabilityRole,
+		// true if this item is a clone (has a parent in the same list)
+		IsCloneRole,
+		// true if this item is its clone family's representative
+		IsRepresentativeRole,
+		// canonical region inferred from the longname ("" if none)
+		RegionRole,
+		// VersionFlag bitmask (bootleg/hack/prototype)
+		VersionFlagsRole
 	};
+
+	// Mirrors GameListModel: how a family's representative is chosen, and the
+	// version classification bits.
+	enum VersionMode { MatchParent = 0, PromoteRegion = 1 };
+	enum VersionFlag { VersionBootleg = 0x1, VersionHack = 0x2, VersionPrototype = 0x4 };
 
 	explicit SoftwareModel(QObject *parent = nullptr);
 
 	void setEntries(std::vector<qtui_software_entry> entries);
+
+	// Re-read versions/* and recompute representatives; emits versionsChanged().
+	void reloadVersionSettings();
+
+	// Clone-family queries (rows are model rows).
+	bool isClone(int row) const;
+	bool isRepresentative(int row) const;
+	int representativeRow(int row) const;
+	QList<int> familyMemberRows(int row) const;   // representative first
+	// Persist a per-family default-version override for the family of `row`.
+	void setVersionOverride(int row, const QString &memberShortName);
 
 	// Host machine for the current entries (used for thumbnail fallback art).
 	void setHostSystem(const QString &system);
@@ -78,13 +106,30 @@ public:
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 	QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
+signals:
+	void versionsChanged();
+
 private slots:
 	void onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes);
 
 private:
 	QVariant thumbnailForRow(int row) const;
+	void buildFamilies();           // families + region + version flags
+	void computeRepresentatives();  // (re)derive representatives from settings
+	QString familyKey(int rootRow) const;   // "list\x1froot" for overrides
 
 	std::vector<qtui_software_entry> m_entries;
+
+	// Clone families (mirrors GameListModel).
+	std::vector<int> m_familyRoot;
+	std::unordered_map<int, std::vector<int>> m_familyMembers;
+	std::vector<int> m_representative;
+	std::vector<QString> m_region;
+	std::vector<std::uint8_t> m_versionFlags;
+	int m_versionMode = MatchParent;
+	bool m_useSystemRegion = false;
+	QStringList m_regionOrder;
+	QHash<QString, QString> m_overrides;   // "list\x1froot" -> member short name
 
 	// Grid thumbnails: software (_SL) art with host-machine fallback.
 	ThumbnailLoader *m_thumbLoader = nullptr;

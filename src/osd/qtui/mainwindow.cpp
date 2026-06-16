@@ -71,19 +71,6 @@ QPushButton *makeToggle(const QString &text, const QString &tip)
 	return button;
 }
 
-// Make two toggle buttons mutually exclusive (either, or neither, but never
-// both).  Unchecking the opposite is silenced so it does not re-trigger the
-// filter recomputation.
-void pairExclusive(QPushButton *a, QPushButton *b)
-{
-	QObject::connect(a, &QPushButton::toggled, b, [b] (bool on) {
-		if (on) { QSignalBlocker block(b); b->setChecked(false); }
-	});
-	QObject::connect(b, &QPushButton::toggled, a, [a] (bool on) {
-		if (on) { QSignalBlocker block(a); a->setChecked(false); }
-	});
-}
-
 // Make two checkable actions mutually exclusive (either, or neither).
 void actionsExclusive(QAction *a, QAction *b)
 {
@@ -175,6 +162,7 @@ void MainWindow::openOptions()
 	{
 		// Version/region preferences may have changed the representatives.
 		m_model->reloadVersionSettings();
+		m_softwareModel->reloadVersionSettings();
 		// Path changes can affect availability; suggest a re-audit.
 		statusBar()->showMessage(
 				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),
@@ -389,17 +377,22 @@ void MainWindow::restoreSettings()
 	onVersionFilterChanged();
 
 	// Software-pane filters (same block-then-apply-once pattern).
-	QPushButton *const swActs[] = {
-		m_btnSupported, m_btnPartial, m_btnUnsupported, m_btnSwAvailable, m_btnSwUnavailable };
-	for (QPushButton *button : swActs)
-		button->blockSignals(true);
-	m_btnSupported->setChecked(settings.value(QStringLiteral("filters/swSupported"), false).toBool());
-	m_btnPartial->setChecked(settings.value(QStringLiteral("filters/swPartial"), false).toBool());
-	m_btnUnsupported->setChecked(settings.value(QStringLiteral("filters/swUnsupported"), false).toBool());
-	m_btnSwAvailable->setChecked(settings.value(QStringLiteral("filters/swAvailable"), false).toBool());
-	m_btnSwUnavailable->setChecked(settings.value(QStringLiteral("filters/swUnavailable"), false).toBool());
-	for (QPushButton *button : swActs)
-		button->blockSignals(false);
+	QAction *const swActs[] = {
+		m_actSwSupported, m_actSwPartial, m_actSwUnsupported, m_actSwAvailable, m_actSwUnavailable,
+		m_actSwHideClones, m_actSwHideBootlegs, m_actSwHideHacks, m_actSwHidePrototypes };
+	for (QAction *act : swActs)
+		act->blockSignals(true);
+	m_actSwSupported->setChecked(settings.value(QStringLiteral("filters/swSupported"), false).toBool());
+	m_actSwPartial->setChecked(settings.value(QStringLiteral("filters/swPartial"), false).toBool());
+	m_actSwUnsupported->setChecked(settings.value(QStringLiteral("filters/swUnsupported"), false).toBool());
+	m_actSwAvailable->setChecked(settings.value(QStringLiteral("filters/swAvailable"), false).toBool());
+	m_actSwUnavailable->setChecked(settings.value(QStringLiteral("filters/swUnavailable"), false).toBool());
+	m_actSwHideClones->setChecked(settings.value(QStringLiteral("filters/swHideClones"), false).toBool());
+	m_actSwHideBootlegs->setChecked(settings.value(QStringLiteral("filters/swHideBootlegs"), false).toBool());
+	m_actSwHideHacks->setChecked(settings.value(QStringLiteral("filters/swHideHacks"), false).toBool());
+	m_actSwHidePrototypes->setChecked(settings.value(QStringLiteral("filters/swHidePrototypes"), false).toBool());
+	for (QAction *act : swActs)
+		act->blockSignals(false);
 	onSoftwareFilterChanged();
 
 	// Restore the search text and selected folder (each applies its filter via
@@ -519,6 +512,35 @@ void MainWindow::createMenus()
 	filtersMenu->addAction(m_actHideBootlegs);
 	filtersMenu->addAction(m_actHideHacks);
 	filtersMenu->addAction(m_actHidePrototypes);
+
+	// Software-list filters (same pattern as the machine list).
+	m_actSwSupported = makeFilterAction(tr("Supported"), tr("Show fully supported software"));
+	m_actSwPartial = makeFilterAction(tr("Partial"), tr("Show partially supported software"));
+	m_actSwUnsupported = makeFilterAction(tr("Unsupported"), tr("Show unsupported software"));
+	m_actSwAvailable = makeFilterAction(tr("Available"), tr("Show software whose ROMs are present"));
+	m_actSwUnavailable = makeFilterAction(tr("Unavailable"), tr("Show software whose ROMs are missing"));
+	m_actSwHideClones = makeFilterAction(tr("Hide clones"), tr("Show only each software family's primary version"));
+	m_actSwHideBootlegs = makeFilterAction(tr("Hide bootlegs"), tr("Hide bootleg software"));
+	m_actSwHideHacks = makeFilterAction(tr("Hide hacks && homebrew"), tr("Hide hacks/homebrew software"));
+	m_actSwHidePrototypes = makeFilterAction(tr("Hide prototypes"), tr("Hide prototype software"));
+
+	actionsExclusive(m_actSwAvailable, m_actSwUnavailable);
+	for (QAction *act : { m_actSwSupported, m_actSwPartial, m_actSwUnsupported,
+			m_actSwAvailable, m_actSwUnavailable, m_actSwHideClones,
+			m_actSwHideBootlegs, m_actSwHideHacks, m_actSwHidePrototypes })
+		connect(act, &QAction::toggled, this, &MainWindow::onSoftwareFilterChanged);
+
+	QMenu *swFiltersMenu = viewMenu->addMenu(tr("Soft&ware Filters"));
+	swFiltersMenu->addAction(m_actSwSupported);
+	swFiltersMenu->addAction(m_actSwPartial);
+	swFiltersMenu->addAction(m_actSwUnsupported);
+	swFiltersMenu->addAction(m_actSwAvailable);
+	swFiltersMenu->addAction(m_actSwUnavailable);
+	swFiltersMenu->addSeparator();
+	swFiltersMenu->addAction(m_actSwHideClones);
+	swFiltersMenu->addAction(m_actSwHideBootlegs);
+	swFiltersMenu->addAction(m_actSwHideHacks);
+	swFiltersMenu->addAction(m_actSwHidePrototypes);
 
 	QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
 	QAction *optionsAct = toolsMenu->addAction(tr("&Options…"));
@@ -648,6 +670,10 @@ void MainWindow::createWidgets()
 
 	// --- software list pane: quick-filter bar over the table ---
 	m_softwareModel = new SoftwareModel(this);
+	connect(m_softwareModel, &SoftwareModel::versionsChanged, this, [this] {
+		if (m_softwareProxy)
+			m_softwareProxy->invalidate();
+	});
 
 	m_softwareProxy = new SoftwareProxy(this);
 	m_softwareProxy->setSourceModel(m_softwareModel);
@@ -695,15 +721,23 @@ void MainWindow::createWidgets()
 	connect(m_softwareLoader, &SoftwareLoader::loaded, this, &MainWindow::onSoftwareLoaded);
 	connect(m_softwareLoader, &SoftwareLoader::availabilityReady, this, &MainWindow::onSoftwareAvailabilityReady);
 
-	// Support-level and availability quick-filters for the software list.
-	m_btnSupported = makeToggle(tr("Supported"), tr("Show fully supported software"));
-	m_btnPartial = makeToggle(tr("Partial"), tr("Show partially supported software"));
-	m_btnUnsupported = makeToggle(tr("Unsupported"), tr("Show unsupported software"));
-	m_btnSwAvailable = makeToggle(tr("Available"), tr("Show software whose ROMs are present"));
-	m_btnSwUnavailable = makeToggle(tr("Unavailable"), tr("Show software whose ROMs are missing"));
-	pairExclusive(m_btnSwAvailable, m_btnSwUnavailable);
-	for (QPushButton *button : { m_btnSupported, m_btnPartial, m_btnUnsupported, m_btnSwAvailable, m_btnSwUnavailable })
-		connect(button, &QPushButton::toggled, this, &MainWindow::onSoftwareFilterChanged);
+	// Software filters consolidated under a "Filters" button (shared actions).
+	QToolButton *swFiltersButton = new QToolButton;
+	swFiltersButton->setText(tr("Filters"));
+	swFiltersButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+	swFiltersButton->setPopupMode(QToolButton::InstantPopup);
+	QMenu *swBarFiltersMenu = new QMenu(swFiltersButton);
+	swBarFiltersMenu->addAction(m_actSwSupported);
+	swBarFiltersMenu->addAction(m_actSwPartial);
+	swBarFiltersMenu->addAction(m_actSwUnsupported);
+	swBarFiltersMenu->addAction(m_actSwAvailable);
+	swBarFiltersMenu->addAction(m_actSwUnavailable);
+	swBarFiltersMenu->addSeparator();
+	swBarFiltersMenu->addAction(m_actSwHideClones);
+	swBarFiltersMenu->addAction(m_actSwHideBootlegs);
+	swBarFiltersMenu->addAction(m_actSwHideHacks);
+	swBarFiltersMenu->addAction(m_actSwHidePrototypes);
+	swFiltersButton->setMenu(swBarFiltersMenu);
 
 	m_softwareGridToggle = makeToggle(tr("Grid"), tr("Show software as a thumbnail grid"));
 	connect(m_softwareGridToggle, &QPushButton::toggled, this, &MainWindow::setSoftwareGridMode);
@@ -727,11 +761,7 @@ void MainWindow::createWidgets()
 	softwareLayout->setContentsMargins(0, 0, 0, 0);
 	QHBoxLayout *softwareBar = new QHBoxLayout;
 	softwareBar->addWidget(m_softwareSearch, 1);
-	softwareBar->addWidget(m_btnSupported);
-	softwareBar->addWidget(m_btnPartial);
-	softwareBar->addWidget(m_btnUnsupported);
-	softwareBar->addWidget(m_btnSwAvailable);
-	softwareBar->addWidget(m_btnSwUnavailable);
+	softwareBar->addWidget(swFiltersButton);
 	softwareBar->addWidget(m_softwareGridToggle);
 	softwareLayout->addLayout(softwareBar);
 	softwareLayout->addWidget(m_softwareGridBar);
@@ -949,27 +979,36 @@ void MainWindow::onVersionFilterChanged()
 void MainWindow::onSoftwareFilterChanged()
 {
 	int support = 0;
-	if (m_btnSupported->isChecked())
+	if (m_actSwSupported->isChecked())
 		support |= SwSupported;
-	if (m_btnPartial->isChecked())
+	if (m_actSwPartial->isChecked())
 		support |= SwPartial;
-	if (m_btnUnsupported->isChecked())
+	if (m_actSwUnsupported->isChecked())
 		support |= SwUnsupported;
 	m_softwareProxy->setSupportFilter(support);
 
 	int avail = 0;
-	if (m_btnSwAvailable->isChecked())
+	if (m_actSwAvailable->isChecked())
 		avail |= SwAvailable;
-	if (m_btnSwUnavailable->isChecked())
+	if (m_actSwUnavailable->isChecked())
 		avail |= SwUnavailable;
 	m_softwareProxy->setAvailabilityFilter(avail);
 
+	m_softwareProxy->setHideClones(m_actSwHideClones->isChecked());
+	m_softwareProxy->setHideBootlegs(m_actSwHideBootlegs->isChecked());
+	m_softwareProxy->setHideHacks(m_actSwHideHacks->isChecked());
+	m_softwareProxy->setHidePrototypes(m_actSwHidePrototypes->isChecked());
+
 	QSettings settings;
-	settings.setValue(QStringLiteral("filters/swSupported"), m_btnSupported->isChecked());
-	settings.setValue(QStringLiteral("filters/swPartial"), m_btnPartial->isChecked());
-	settings.setValue(QStringLiteral("filters/swUnsupported"), m_btnUnsupported->isChecked());
-	settings.setValue(QStringLiteral("filters/swAvailable"), m_btnSwAvailable->isChecked());
-	settings.setValue(QStringLiteral("filters/swUnavailable"), m_btnSwUnavailable->isChecked());
+	settings.setValue(QStringLiteral("filters/swSupported"), m_actSwSupported->isChecked());
+	settings.setValue(QStringLiteral("filters/swPartial"), m_actSwPartial->isChecked());
+	settings.setValue(QStringLiteral("filters/swUnsupported"), m_actSwUnsupported->isChecked());
+	settings.setValue(QStringLiteral("filters/swAvailable"), m_actSwAvailable->isChecked());
+	settings.setValue(QStringLiteral("filters/swUnavailable"), m_actSwUnavailable->isChecked());
+	settings.setValue(QStringLiteral("filters/swHideClones"), m_actSwHideClones->isChecked());
+	settings.setValue(QStringLiteral("filters/swHideBootlegs"), m_actSwHideBootlegs->isChecked());
+	settings.setValue(QStringLiteral("filters/swHideHacks"), m_actSwHideHacks->isChecked());
+	settings.setValue(QStringLiteral("filters/swHidePrototypes"), m_actSwHidePrototypes->isChecked());
 }
 
 void MainWindow::onSystemSelectionChanged()

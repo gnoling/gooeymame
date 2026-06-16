@@ -227,6 +227,7 @@ void qtui_load_software(
 				qtui_software_entry entry;
 				entry.list = swlistdev.list_name();
 				entry.shortname = info.shortname();
+				entry.parent = info.parentname();   // cloneof, "" if a parent
 				entry.description = info.longname();
 				entry.year = info.year();
 				entry.publisher = info.publisher();
