@@ -166,4 +166,13 @@ void qtui_audit_all(
 		const std::function<void (const std::string &, int)> &progress,
 		const std::atomic<bool> &cancel);
 
+// Fast-audit *software-list* ROMs for every system in one sweep (builds each
+// machine configuration, so it is expensive).  on_system is invoked once per
+// system with its short name, the per-entry availability (qtui_availability,
+// aligned with qtui_load_software()'s order), and whether it has any software.
+// Runs on a worker thread; aborts promptly when cancel becomes true.
+void qtui_audit_all_software(
+		const std::function<void (const std::string &, const std::vector<int> &, bool)> &on_system,
+		const std::atomic<bool> &cancel);
+
 #endif // MAME_OSD_QTUI_EMULATOR_H

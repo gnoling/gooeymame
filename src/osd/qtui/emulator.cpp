@@ -855,3 +855,71 @@ void qtui_audit_all(
 		progress(name, status);
 	}
 }
+
+void qtui_audit_all_software(
+		const std::function<void (const std::string &, const std::vector<int> &, bool)> &on_system,
+		const std::atomic<bool> &cancel)
+{
+	sdl_options options;
+	{
+		core_guard guard;
+		std::ostringstream errors;
+		mame_options::parse_standard_inis(options, errors);
+	}
+
+	driver_enumerator drivlist(options);
+
+	while (!cancel.load(std::memory_order_relaxed))
+	{
+		std::string name;
+		std::vector<int> availability;
+		bool has_software = false;
+
+		{
+			// Hold the core only for the per-driver work, releasing between
+			// systems so on-demand software enumeration stays responsive.
+			core_guard guard;
+			if (!drivlist.next())
+				break;
+
+			name = drivlist.driver().name;
+			try
+			{
+				device_t &root = drivlist.config()->root_device();
+				media_auditor auditor(drivlist);
+				for (software_list_device &swlistdev : software_list_device_enumerator(root))
+				{
+					for (const software_info &info : swlistdev.get_info())
+					{
+						has_software = true;
+						int avail;
+						switch (auditor.audit_software(swlistdev, info, AUDIT_VALIDATE_FAST))
+						{
+						case media_auditor::CORRECT:
+						case media_auditor::BEST_AVAILABLE:
+						case media_auditor::NONE_NEEDED:
+							avail = QTUI_AVAIL_AVAILABLE;
+							break;
+						default:
+							avail = QTUI_AVAIL_UNAVAILABLE;
+							break;
+						}
+						availability.push_back(avail);
+
+						if (cancel.load(std::memory_order_relaxed))
+							return;
+					}
+				}
+			}
+			catch (...)
+			{
+				availability.clear();
+				has_software = false;
+			}
+		}
+
+		// Reported for every system (even those without software) so the
+		// caller's progress can reach the total.
+		on_system(name, availability, has_software);
+	}
+}

@@ -18,6 +18,7 @@
 #include "gamelistproxy.h"
 #include "gridview.h"
 #include "optionsdialog.h"
+#include "softwareauditmanager.h"
 #include "softwareloader.h"
 #include "softwaremodel.h"
 #include "softwareproxy.h"
@@ -120,9 +121,11 @@ MainWindow::MainWindow(QWidget *parent) :
 	// Background ROM availability: load the cache if present, otherwise run a
 	// first audit so the Available/Unavailable filters have data to work with.
 	m_audit = new AuditManager(m_model, this);
+	m_softwareAudit = new SoftwareAuditManager(this);
 	connect(m_cancelAuditButton, &QPushButton::clicked, this, [this] {
 		m_cancelAuditButton->setEnabled(false);
-		m_audit->cancelAudit();
+		m_audit->cancelAudit();          // only one audit runs at a time
+		m_softwareAudit->cancelAudit();
 		statusBar()->showMessage(tr("Cancelling audit…"));
 	});
 	connect(m_audit, &AuditManager::progress, this, [this] (int audited, int total) {
@@ -137,8 +140,37 @@ MainWindow::MainWindow(QWidget *parent) :
 		m_progressBar->setVisible(false);
 		m_cancelAuditButton->setVisible(false);
 		m_auditAct->setEnabled(true);
+		m_softwareAuditAct->setEnabled(true);
 		updateStatusCount();
 	});
+
+	// Bulk software-availability audit: streams per-system results into the
+	// software cache (the lazy per-selection caching still applies otherwise).
+	connect(m_softwareAudit, &SoftwareAuditManager::systemAudited, this,
+			[this] (const QString &system, const QVector<int> &availability) {
+		m_softwareAvail.insert(system, availability);
+	});
+	connect(m_softwareAudit, &SoftwareAuditManager::progress, this, [this] (int audited, int total) {
+		m_progressBar->setVisible(true);
+		m_cancelAuditButton->setVisible(true);
+		m_cancelAuditButton->setEnabled(true);
+		m_progressBar->setRange(0, total);
+		m_progressBar->setValue(audited);
+		statusBar()->showMessage(tr("Auditing software… %1 of %2").arg(audited).arg(total));
+	});
+	connect(m_softwareAudit, &SoftwareAuditManager::finished, this, [this] {
+		m_progressBar->setVisible(false);
+		m_cancelAuditButton->setVisible(false);
+		m_softwareAuditAct->setEnabled(true);
+		m_auditAct->setEnabled(true);
+		saveSoftwareCache();
+		// Re-apply availability to the currently shown software list, if any.
+		auto it = m_softwareAvail.constFind(m_softwareLoadSystem);
+		if (it != m_softwareAvail.constEnd() && it->size() == m_softwareModel->rowCount())
+			m_softwareModel->setAvailabilities(*it);
+		updateStatusCount();
+	});
+
 	if (!m_audit->loadCache())
 	{
 		m_auditAct->setEnabled(false);
@@ -592,12 +624,22 @@ void MainWindow::createMenus()
 	toolsMenu->addSeparator();
 	m_auditAct = toolsMenu->addAction(tr("&Refresh ROM Availability"));
 	connect(m_auditAct, &QAction::triggered, this, [this] {
-		if (m_audit && !m_audit->isRunning())
+		if (m_audit && !m_audit->isRunning() && !m_softwareAudit->isRunning())
 		{
 			// ROMs may have changed; the cached software availability is stale.
 			clearSoftwareCache();
 			m_auditAct->setEnabled(false);
 			m_audit->startAudit();
+		}
+	});
+
+	m_softwareAuditAct = toolsMenu->addAction(tr("Refresh &Software Availability (all)"));
+	connect(m_softwareAuditAct, &QAction::triggered, this, [this] {
+		if (m_softwareAudit && !m_softwareAudit->isRunning() && !m_audit->isRunning())
+		{
+			m_softwareAuditAct->setEnabled(false);
+			m_auditAct->setEnabled(false);
+			m_softwareAudit->startAudit();
 		}
 	});
 

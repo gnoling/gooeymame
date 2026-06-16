@@ -40,6 +40,7 @@ namespace osd::qtui {
 
 class ArtworkPanel;
 class AuditManager;
+class SoftwareAuditManager;
 class CheckableComboBox;
 class FamilyTreeModel;
 class FolderTree;
@@ -195,9 +196,11 @@ private:
 	QAction *m_playAct = nullptr;
 	QAction *m_propertiesAct = nullptr;
 	QAction *m_auditAct = nullptr;
+	QAction *m_softwareAuditAct = nullptr;
 	QActionGroup *m_iconSizeGroup = nullptr;
 	QActionGroup *m_layoutGroup = nullptr;
 	AuditManager *m_audit = nullptr;
+	SoftwareAuditManager *m_softwareAudit = nullptr;
 	SoftwareLoader *m_softwareLoader = nullptr;
 	QProgressBar *m_progressBar = nullptr;
 	QPushButton *m_cancelAuditButton = nullptr;
