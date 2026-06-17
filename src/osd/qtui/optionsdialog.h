@@ -60,6 +60,7 @@ private:
 	void buildFolderCategory();
 	void buildVersionsCategory();
 	void buildGridArtCategory();
+	void buildArtScaleCategory();
 	void addOptionRow(QFormLayout *form, const qtui_option &opt);
 
 	struct Editor
@@ -74,6 +75,13 @@ private:
 	{
 		QString key;
 		QWidget *widget;    // QLineEdit
+	};
+
+	struct ArtScaleEditor
+	{
+		QString key;
+		QComboBox *combo;
+		QCheckBox *integer;
 	};
 
 	QListWidget *m_categoryList = nullptr;
@@ -91,6 +99,7 @@ private:
 	QHash<QObject *, QString> m_help;   // editor widget -> description
 	std::vector<Editor> m_editors;
 	std::vector<FolderEditor> m_folderEditors;
+	std::vector<ArtScaleEditor> m_artScaleEditors;
 };
 
 } // namespace osd::qtui

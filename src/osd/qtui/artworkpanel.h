@@ -21,7 +21,9 @@
 #include <QtWidgets/QWidget>
 
 #include <QtCore/QByteArray>
+#include <QtCore/QPair>
 #include <QtCore/QString>
+#include <QtCore/QVector>
 
 #include <QtGui/QPixmap>
 
@@ -42,6 +44,17 @@ class VideoTab;
 class SoundtrackTab;
 class ManualTab;
 
+// Per-art-type scaling for the art view: how an image is resampled when scaled.
+enum ArtScaleMode { ArtScaleSmooth = 0, ArtScaleNearest = 1 };
+
+// The art-view image types eligible for a per-type scaling mode, as
+// (display label, settings key) — shared by the panel and the Options dialog.
+QVector<QPair<QString, QString>> artScaleTypes();
+int artScaleMode(const QString &key);                 // QSettings, default smooth
+void setArtScaleMode(const QString &key, int mode);
+bool artScaleInteger(const QString &key);             // integer (pixel-perfect) scaling, default off
+void setArtScaleInteger(const QString &key, bool on);
+
 class ArtworkPanel : public QWidget
 {
 	Q_OBJECT
@@ -54,6 +67,9 @@ public:
 
 	// Show artwork for a software item from a system's software list.
 	void setSoftware(const QString &list, const QString &software);
+
+	// Re-apply art scaling settings to the visible image (after Options changes).
+	void reloadScaling();
 
 	// Host an embedded game's video widget in the top of the panel and switch to
 	// a game view (adds "Game only / Game + Art / Game + Info" choices).  Pass
@@ -84,6 +100,8 @@ private:
 	void loadVisible(QTabWidget *group);
 	void stopAllMedia();     // pause every media tab
 	void stopOtherMedia(int keepIndex);
+	void showImageScaleMenu(int index, const QPoint &globalPos);   // right-click on an art image
+	QString scaleKey(int index) const;                             // settings key for an image tab
 
 	struct Tab
 	{

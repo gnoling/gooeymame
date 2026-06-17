@@ -9,6 +9,7 @@
 #include "optionsdialog.h"
 
 #include "emulator.h"
+#include "artworkpanel.h"
 #include "frontendpaths.h"
 #include "gamelistmodel.h"
 #include "regions.h"
@@ -223,6 +224,7 @@ void OptionsDialog::buildUi()
 	{
 		buildVersionsCategory();   // global only
 		buildGridArtCategory();    // grid thumbnail fallback (global only)
+		buildArtScaleCategory();   // per-art-type image scaling (global only)
 		buildFolderCategory();     // front-end folders are global only
 	}
 	if (m_categoryList->count() > 0)
@@ -635,6 +637,49 @@ void OptionsDialog::buildGridArtCategory()
 	addCategory(tr("Grid Artwork"), page);
 }
 
+void OptionsDialog::buildArtScaleCategory()
+{
+	QWidget *page = new QWidget;
+	QVBoxLayout *layout = new QVBoxLayout(page);
+
+	QLabel *intro = new QLabel(
+			tr("How each art-view image is resampled when scaled larger than its "
+			   "source.  Smooth blurs; nearest neighbour keeps crisp pixels.  Can "
+			   "also be changed by right-clicking an image in the art view."), page);
+	intro->setWordWrap(true);
+	layout->addWidget(intro);
+
+	QWidget *form = new QWidget;
+	QFormLayout *formLayout = new QFormLayout(form);
+	for (const auto &type : artScaleTypes())
+	{
+		QComboBox *combo = new QComboBox(form);
+		combo->addItem(tr("Smooth"), int(ArtScaleSmooth));
+		combo->addItem(tr("Nearest neighbour"), int(ArtScaleNearest));
+		int const idx = combo->findData(artScaleMode(type.second));
+		combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+		QCheckBox *integer = new QCheckBox(tr("Integer"), form);
+		integer->setToolTip(tr("Scale only by whole-pixel multiples"));
+		integer->setChecked(artScaleInteger(type.second));
+
+		QWidget *row = new QWidget(form);
+		QHBoxLayout *rowLayout = new QHBoxLayout(row);
+		rowLayout->setContentsMargins(0, 0, 0, 0);
+		rowLayout->addWidget(combo, 1);
+		rowLayout->addWidget(integer);
+		formLayout->addRow(type.first, row);
+		m_artScaleEditors.push_back({ type.second, combo, integer });
+	}
+
+	QScrollArea *scroll = new QScrollArea(page);
+	scroll->setWidgetResizable(true);
+	scroll->setWidget(form);
+	layout->addWidget(scroll, 1);
+
+	addCategory(tr("Art Scaling"), page);
+}
+
 void OptionsDialog::buildFolderCategory()
 {
 	QWidget *page = new QWidget;
@@ -798,6 +843,13 @@ void OptionsDialog::accept()
 					order << item->text();
 			}
 			QSettings().setValue(QStringLiteral("grid/artFallbackOrder"), order);
+		}
+
+		// Per-art-type image scaling.
+		for (const ArtScaleEditor &e : m_artScaleEditors)
+		{
+			setArtScaleMode(e.key, e.combo->currentData().toInt());
+			setArtScaleInteger(e.key, e.integer->isChecked());
 		}
 	}
 

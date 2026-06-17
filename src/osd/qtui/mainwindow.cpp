@@ -196,6 +196,8 @@ void MainWindow::openOptions()
 		// Grid artwork fallback order/folders may have changed.
 		applyMachineThumbSource();
 		applySoftwareThumbSource();
+		// Art-view image scaling may have changed.
+		m_artwork->reloadScaling();
 		// Path changes can affect availability; suggest a re-audit.
 		statusBar()->showMessage(
 				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),

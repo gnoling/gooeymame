@@ -19,10 +19,13 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
+#include <QtGui/QAction>
+#include <QtGui/QActionGroup>
 #include <QtGui/QPixmap>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QTextBrowser>
@@ -122,6 +125,48 @@ QStringList listTracks(const QString &base, const QString &folder)
 
 } // anonymous namespace
 
+// Settings key for an image type: its system key, or software key if it has no
+// system art (e.g. "covers").
+static QString imageTypeKey(const ImageDef &def)
+{
+	return (def.sysKey && def.sysKey[0]) ? QString::fromLatin1(def.sysKey)
+			: QString::fromLatin1(def.swKey);
+}
+
+QVector<QPair<QString, QString>> artScaleTypes()
+{
+	QVector<QPair<QString, QString>> out;
+	for (const ImageDef &def : kImageTabs)
+		out.append({ QString::fromLatin1(def.label), imageTypeKey(def) });
+	return out;
+}
+
+int artScaleMode(const QString &key)
+{
+	if (key.isEmpty())
+		return ArtScaleSmooth;
+	return QSettings().value(QStringLiteral("artscale/") + key, int(ArtScaleSmooth)).toInt();
+}
+
+void setArtScaleMode(const QString &key, int mode)
+{
+	if (!key.isEmpty())
+		QSettings().setValue(QStringLiteral("artscale/") + key, mode);
+}
+
+bool artScaleInteger(const QString &key)
+{
+	if (key.isEmpty())
+		return false;
+	return QSettings().value(QStringLiteral("artscaleint/") + key, false).toBool();
+}
+
+void setArtScaleInteger(const QString &key, bool on)
+{
+	if (!key.isEmpty())
+		QSettings().setValue(QStringLiteral("artscaleint/") + key, on);
+}
+
 ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	QWidget(parent)
 {
@@ -132,8 +177,16 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 		label->setAlignment(Qt::AlignCenter);
 		label->setMinimumSize(160, 120);
 		m_artTabs->addTab(label, tr(def.label));
+		int const viewIndex = int(m_views.size());
 		m_views.push_back({ KindImage, QString::fromLatin1(def.sysKey),
 				QString::fromLatin1(def.swKey), 0, label, false, QPixmap() });
+
+		// Right-click an image to choose its scaling (smooth / nearest).
+		label->setContextMenuPolicy(Qt::CustomContextMenu);
+		connect(label, &QWidget::customContextMenuRequested, this,
+				[this, viewIndex, label] (const QPoint &pos) {
+					showImageScaleMenu(viewIndex, label->mapToGlobal(pos));
+				});
 	}
 
 	// Multimedia tabs sit alongside the images, just after the Snapshot tab.
@@ -596,6 +649,14 @@ void ArtworkPanel::onInfoLoaded(quint64 epoch, int source, const QString &text)
 	}
 }
 
+QString ArtworkPanel::scaleKey(int index) const
+{
+	if (index < 0 || index >= int(m_views.size()))
+		return QString();
+	const Tab &tab = m_views[index];
+	return tab.sysKey.isEmpty() ? tab.swKey : tab.sysKey;
+}
+
 void ArtworkPanel::rescale(int index)
 {
 	if (index < 0 || index >= int(m_views.size()))
@@ -603,9 +664,71 @@ void ArtworkPanel::rescale(int index)
 	Tab &tab = m_views[index];
 	if (tab.kind != KindImage || tab.original.isNull())
 		return;
-	if (auto *label = qobject_cast<QLabel *>(tab.view))
-		label->setPixmap(tab.original.scaled(
-				label->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	auto *label = qobject_cast<QLabel *>(tab.view);
+	if (!label)
+		return;
+
+	QString const key = scaleKey(index);
+	Qt::TransformationMode const mode =
+			(artScaleMode(key) == ArtScaleNearest) ? Qt::FastTransformation : Qt::SmoothTransformation;
+	QSize const avail = label->size();
+	QSize const src = tab.original.size();
+
+	QSize target = avail;
+	if (artScaleInteger(key) && src.width() > 0 && src.height() > 0)
+	{
+		// Largest integer multiple of the source that still fits; the centred
+		// QLabel pillarboxes the result.  If the source is larger than the area,
+		// integer upscaling is impossible, so fall back to fitting it.
+		int const factor = qMin(avail.width() / src.width(), avail.height() / src.height());
+		if (factor >= 1)
+			target = src * factor;
+	}
+	label->setPixmap(tab.original.scaled(target, Qt::KeepAspectRatio, mode));
+}
+
+void ArtworkPanel::showImageScaleMenu(int index, const QPoint &globalPos)
+{
+	QString const key = scaleKey(index);
+	if (key.isEmpty())
+		return;
+
+	QMenu menu;
+	menu.addSection(tr("Image scaling"));
+	QActionGroup *group = new QActionGroup(&menu);
+	int const current = artScaleMode(key);
+	struct { const char *label; int mode; } const modes[] = {
+		{ "Smooth (blurry when enlarged)", ArtScaleSmooth },
+		{ "Nearest neighbour (sharp pixels)", ArtScaleNearest },
+	};
+	for (const auto &m : modes)
+	{
+		QAction *act = menu.addAction(tr(m.label));
+		act->setCheckable(true);
+		act->setChecked(current == m.mode);
+		group->addAction(act);
+		connect(act, &QAction::triggered, this, [this, key, mode = m.mode, index] {
+			setArtScaleMode(key, mode);
+			rescale(index);
+		});
+	}
+
+	menu.addSeparator();
+	QAction *integer = menu.addAction(tr("Integer scaling (whole-pixel multiples)"));
+	integer->setCheckable(true);
+	integer->setChecked(artScaleInteger(key));
+	connect(integer, &QAction::toggled, this, [this, key, index] (bool on) {
+		setArtScaleInteger(key, on);
+		rescale(index);
+	});
+
+	menu.exec(globalPos);
+}
+
+void ArtworkPanel::reloadScaling()
+{
+	// Re-apply scaling to the visible art image (after an Options change).
+	rescale(indexOfView(m_artTabs->currentWidget()));
 }
 
 void ArtworkPanel::resizeEvent(QResizeEvent *event)
