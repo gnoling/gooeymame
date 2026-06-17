@@ -19,6 +19,17 @@ includedirs {
 	MAME_DIR .. "src/frontend/mame",
 }
 
+-- On Windows/MinGW, qtdebuggerbuild() only adds the Qt headers under a
+-- configuration("mingw*") filter that does not match the gmake-mingw64-gcc
+-- build, so the front-end sources fail to find <QtCore/...>.  Add the Qt
+-- include path here (resolved at build time via qmake6) for every qtui
+-- project.  Linux/macOS get it from qtdebuggerbuild()'s other branches.
+if _OPTIONS["targetos"]=="windows" then
+	buildoptions {
+		"-I$(shell qmake6 -query QT_INSTALL_HEADERS)",
+	}
+end
+
 -- Drop the Qt PDF manual viewer where Qt PDF is unavailable (e.g. MSYS2's
 -- MinGW64, which has no qt6-pdf package).
 if _OPTIONS["NO_QTPDF"]=="1" then
