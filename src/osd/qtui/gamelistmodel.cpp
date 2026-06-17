@@ -69,12 +69,21 @@ GameListModel::GameListModel(QObject *parent) :
 	connect(m_thumbLoader, &ThumbnailLoader::loaded, this, &GameListModel::onThumbnailLoaded);
 }
 
-void GameListModel::setThumbnailSource(const QString &machineKey)
+void GameListModel::setThumbnailSources(const QStringList &machineKeys, bool familyFallback)
 {
-	if (machineKey == m_thumbKey)
+	QVector<QPair<QString, QString>> chain;
+	for (const QString &key : machineKeys)
+	{
+		if (key.isEmpty())
+			continue;
+		QString const path = frontendFolderPath(key);
+		if (!path.isEmpty())
+			chain.append({ key, path });
+	}
+	if (chain == m_thumbChain && familyFallback == m_thumbFamily)
 		return;
-	m_thumbKey = machineKey;
-	m_thumbPath = machineKey.isEmpty() ? QString() : frontendFolderPath(machineKey);
+	m_thumbChain = chain;
+	m_thumbFamily = familyFallback;
 	++m_thumbGen;   // discard any in-flight results for the previous source
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
@@ -85,7 +94,7 @@ void GameListModel::setThumbnailSource(const QString &machineKey)
 
 QVariant GameListModel::thumbnailForRow(int row) const
 {
-	if (m_thumbPath.isEmpty())
+	if (m_thumbChain.isEmpty())
 		return QVariant();
 
 	auto it = m_thumbCache.constFind(row);
@@ -95,11 +104,28 @@ QVariant GameListModel::thumbnailForRow(int row) const
 	if (!m_thumbRequested.contains(row))
 	{
 		m_thumbRequested.insert(row);
+
+		// Base names to try, in order: this set, its clone parent, then the
+		// other family members (different-region variants).
+		QStringList names;
 		const game_driver &drv = driverForRow(row);
-		ArtCandidates candidates;
-		candidates.append({ m_thumbPath, QString::fromLatin1(drv.name) + QStringLiteral(".png") });
+		names << QString::fromLatin1(drv.name);
 		if (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
-			candidates.append({ m_thumbPath, QString::fromLatin1(drv.parent) + QStringLiteral(".png") });
+			names << QString::fromLatin1(drv.parent);
+		if (m_thumbFamily)
+			for (int member : familyMemberRows(row))
+			{
+				QString const n = QString::fromLatin1(driverForRow(member).name);
+				if (!names.contains(n))
+					names << n;
+			}
+
+		// Try each art type (primary first) across every candidate name; the
+		// loader takes the first file that exists.
+		ArtCandidates candidates;
+		for (const auto &src : m_thumbChain)
+			for (const QString &n : names)
+				candidates.append({ src.second, n + QStringLiteral(".png") });
 		m_thumbLoader->request(row, m_thumbGen, candidates);
 	}
 	return QVariant();

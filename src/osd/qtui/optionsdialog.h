@@ -59,6 +59,7 @@ private:
 	void buildOptionCategories();
 	void buildFolderCategory();
 	void buildVersionsCategory();
+	void buildGridArtCategory();
 	void addOptionRow(QFormLayout *form, const qtui_option &opt);
 
 	struct Editor
@@ -82,6 +83,8 @@ private:
 	QComboBox *m_versionMode = nullptr;       // Versions & Regions page
 	QCheckBox *m_useSystemRegion = nullptr;
 	QListWidget *m_regionList = nullptr;      // checkable, reorderable priority
+	QListWidget *m_gridArtList = nullptr;     // Grid Artwork page: fallback order
+	QCheckBox *m_gridArtFamily = nullptr;     // try related sets (parent/regions)
 	QString m_system;                   // empty = global mame.ini; else per-machine
 	QString m_systemDescription;        // machine friendly name (per-machine mode)
 	QSet<QString> m_overridden;         // option names set by the machine's ini

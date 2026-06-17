@@ -257,14 +257,25 @@ void SoftwareModel::setHostSystem(const QString &system)
 	m_thumbRequested.clear();
 }
 
-void SoftwareModel::setThumbnailSource(const QString &softwareKey, const QString &machineKey)
+void SoftwareModel::setThumbnailSources(const QVector<QPair<QString, QString>> &keys, bool familyFallback)
 {
-	if (softwareKey == m_thumbSwKey && machineKey == m_thumbMachineKey)
+	QVector<ThumbSource> chain;
+	for (const auto &pair : keys)
+	{
+		ThumbSource src;
+		src.swPath = pair.first.isEmpty() ? QString() : frontendFolderPath(pair.first);
+		src.machinePath = pair.second.isEmpty() ? QString() : frontendFolderPath(pair.second);
+		if (!src.swPath.isEmpty() || !src.machinePath.isEmpty())
+			chain.append(src);
+	}
+	bool same = (familyFallback == m_thumbFamily) && (chain.size() == m_thumbChain.size());
+	for (int i = 0; same && i < chain.size(); ++i)
+		same = (chain[i].swPath == m_thumbChain[i].swPath) && (chain[i].machinePath == m_thumbChain[i].machinePath);
+	if (same)
 		return;
-	m_thumbSwKey = softwareKey;
-	m_thumbMachineKey = machineKey;
-	m_thumbSwPath = softwareKey.isEmpty() ? QString() : frontendFolderPath(softwareKey);
-	m_thumbMachinePath = machineKey.isEmpty() ? QString() : frontendFolderPath(machineKey);
+
+	m_thumbChain = chain;
+	m_thumbFamily = familyFallback;
 	++m_thumbGen;
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
@@ -275,7 +286,7 @@ void SoftwareModel::setThumbnailSource(const QString &softwareKey, const QString
 
 QVariant SoftwareModel::thumbnailForRow(int row) const
 {
-	if (m_thumbSwPath.isEmpty() && m_thumbMachinePath.isEmpty())
+	if (m_thumbChain.isEmpty())
 		return QVariant();
 
 	auto it = m_thumbCache.constFind(row);
@@ -285,17 +296,36 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 	if (!m_thumbRequested.contains(row))
 	{
 		m_thumbRequested.insert(row);
-		const qtui_software_entry &entry = m_entries[row];
+
+		// Software (_SL) names to try: this item, then the other family members.
+		QVector<QPair<QString, QString>> swNames;   // (list, shortname)
+		auto addSw = [&swNames] (const qtui_software_entry &e) {
+			if (e.list.empty() || e.shortname.empty())
+				return;
+			QPair<QString, QString> nm(QString::fromStdString(e.list), QString::fromStdString(e.shortname));
+			if (!swNames.contains(nm))
+				swNames.append(nm);
+		};
+		addSw(m_entries[row]);
+		if (m_thumbFamily)
+			for (int member : familyMemberRows(row))
+				if (member >= 0 && member < int(m_entries.size()))
+					addSw(m_entries[member]);
+
+		// For each art type (primary first): the software _SL images, then the
+		// host-machine image as a last resort for that type.
 		ArtCandidates candidates;
-		if (!m_thumbSwPath.isEmpty() && !entry.list.empty() && !entry.shortname.empty())
-			candidates.append({ m_thumbSwPath,
-					QString::fromStdString(entry.list) + QLatin1Char('/')
-							+ QString::fromStdString(entry.shortname) + QStringLiteral(".png") });
-		if (!m_thumbMachinePath.isEmpty() && !m_hostSystem.isEmpty())
+		for (const ThumbSource &src : m_thumbChain)
 		{
-			candidates.append({ m_thumbMachinePath, m_hostSystem + QStringLiteral(".png") });
-			if (!m_hostParent.isEmpty())
-				candidates.append({ m_thumbMachinePath, m_hostParent + QStringLiteral(".png") });
+			if (!src.swPath.isEmpty())
+				for (const auto &nm : swNames)
+					candidates.append({ src.swPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+			if (!src.machinePath.isEmpty() && !m_hostSystem.isEmpty())
+			{
+				candidates.append({ src.machinePath, m_hostSystem + QStringLiteral(".png") });
+				if (!m_hostParent.isEmpty())
+					candidates.append({ src.machinePath, m_hostParent + QStringLiteral(".png") });
+			}
 		}
 		if (!candidates.isEmpty())
 			m_thumbLoader->request(row, m_thumbGen, candidates);

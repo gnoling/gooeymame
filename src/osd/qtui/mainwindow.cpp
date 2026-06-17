@@ -193,6 +193,9 @@ void MainWindow::openOptions()
 		// Version/region preferences may have changed the representatives.
 		m_model->reloadVersionSettings();
 		m_softwareModel->reloadVersionSettings();
+		// Grid artwork fallback order/folders may have changed.
+		applyMachineThumbSource();
+		applySoftwareThumbSource();
 		// Path changes can affect availability; suggest a re-audit.
 		statusBar()->showMessage(
 				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),
@@ -1283,20 +1286,57 @@ QWidget *MainWindow::buildGridBar(QSlider *&size, QComboBox *&source, CheckableC
 	return bar;
 }
 
+QStringList MainWindow::gridFallbackLabels(bool *family) const
+{
+	QSettings settings;
+	if (family)
+		*family = settings.value(QStringLiteral("grid/artFallbackFamily"), true).toBool();
+	QStringList order = settings.value(QStringLiteral("grid/artFallbackOrder")).toStringList();
+	if (order.isEmpty())   // default: every art type, in table order
+		for (std::size_t i = 0; i < THUMBNAIL_SOURCE_COUNT; ++i)
+			order << QString::fromLatin1(THUMBNAIL_SOURCES[i].label);
+	return order;
+}
+
 void MainWindow::applyMachineThumbSource()
 {
 	int const i = m_gridSource->currentIndex();
-	if (i >= 0 && i < int(THUMBNAIL_SOURCE_COUNT))
-		m_model->setThumbnailSource(QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey));
+	if (i < 0 || i >= int(THUMBNAIL_SOURCE_COUNT))
+		return;
+
+	bool family = true;
+	QStringList const order = gridFallbackLabels(&family);
+
+	// Primary (selected) source first, then the enabled fallback types in order.
+	QStringList keys;
+	keys << QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey);
+	for (const QString &label : order)
+		for (std::size_t j = 0; j < THUMBNAIL_SOURCE_COUNT; ++j)
+			if (int(j) != i && label == QLatin1String(THUMBNAIL_SOURCES[j].label))
+				keys << QString::fromLatin1(THUMBNAIL_SOURCES[j].machineKey);
+
+	m_model->setThumbnailSources(keys, family);
 }
 
 void MainWindow::applySoftwareThumbSource()
 {
 	int const i = m_softwareGridSource->currentIndex();
-	if (i >= 0 && i < int(THUMBNAIL_SOURCE_COUNT))
-		m_softwareModel->setThumbnailSource(
-				QString::fromLatin1(THUMBNAIL_SOURCES[i].softwareKey),
-				QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey));
+	if (i < 0 || i >= int(THUMBNAIL_SOURCE_COUNT))
+		return;
+
+	bool family = true;
+	QStringList const order = gridFallbackLabels(&family);
+
+	QVector<QPair<QString, QString>> keys;
+	keys.append({ QString::fromLatin1(THUMBNAIL_SOURCES[i].softwareKey),
+			QString::fromLatin1(THUMBNAIL_SOURCES[i].machineKey) });
+	for (const QString &label : order)
+		for (std::size_t j = 0; j < THUMBNAIL_SOURCE_COUNT; ++j)
+			if (int(j) != i && label == QLatin1String(THUMBNAIL_SOURCES[j].label))
+				keys.append({ QString::fromLatin1(THUMBNAIL_SOURCES[j].softwareKey),
+						QString::fromLatin1(THUMBNAIL_SOURCES[j].machineKey) });
+
+	m_softwareModel->setThumbnailSources(keys, family);
 }
 
 void MainWindow::setMachineViewMode(int mode)

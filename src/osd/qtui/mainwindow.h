@@ -14,6 +14,7 @@
 #include "gamelistproxy.h"   // for FolderFilter (used by a moc'd slot signature)
 
 #include <QtCore/QHash>
+#include <QtCore/QStringList>
 #include <QtCore/QVector>
 #include <QtWidgets/QMainWindow>
 
@@ -146,6 +147,9 @@ private:
 	void setSoftwareViewMode(int mode);
 	void applyMachineThumbSource();
 	void applySoftwareThumbSource();
+	// Ordered art-type labels to fall back through (configured in Options), and
+	// whether to also try related sets (clone parent / other regions).
+	QStringList gridFallbackLabels(bool *family) const;
 
 	// Active view + source-row mapping (the three machine views differ).
 	QAbstractItemView *activeMachineView() const;

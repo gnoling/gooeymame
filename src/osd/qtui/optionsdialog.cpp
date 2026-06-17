@@ -222,6 +222,7 @@ void OptionsDialog::buildUi()
 	if (!gameMode)
 	{
 		buildVersionsCategory();   // global only
+		buildGridArtCategory();    // grid thumbnail fallback (global only)
 		buildFolderCategory();     // front-end folders are global only
 	}
 	if (m_categoryList->count() > 0)
@@ -562,6 +563,78 @@ void OptionsDialog::buildVersionsCategory()
 	addCategory(tr("Versions & Regions"), page);
 }
 
+void OptionsDialog::buildGridArtCategory()
+{
+	QWidget *page = new QWidget;
+	QVBoxLayout *layout = new QVBoxLayout(page);
+
+	QLabel *intro = new QLabel(
+			tr("When a grid tile has no image for the selected type, fall back to "
+			   "these art types in order (top = tried first).  Uncheck a type to "
+			   "skip it."), page);
+	intro->setWordWrap(true);
+	layout->addWidget(intro);
+
+	m_gridArtFamily = new QCheckBox(
+			tr("Also use images from related sets (clone parent / other regions)"), page);
+	layout->addWidget(m_gridArtFamily);
+
+	m_gridArtList = new QListWidget(page);
+	layout->addWidget(m_gridArtList, 1);
+
+	QHBoxLayout *buttons = new QHBoxLayout;
+	QPushButton *up = new QPushButton(tr("Move Up"), page);
+	QPushButton *down = new QPushButton(tr("Move Down"), page);
+	auto move = [this] (int delta) {
+		int const row = m_gridArtList->currentRow();
+		int const target = row + delta;
+		if (row < 0 || target < 0 || target >= m_gridArtList->count())
+			return;
+		QListWidgetItem *item = m_gridArtList->takeItem(row);
+		m_gridArtList->insertItem(target, item);
+		m_gridArtList->setCurrentRow(target);
+	};
+	connect(up, &QPushButton::clicked, this, [move] { move(-1); });
+	connect(down, &QPushButton::clicked, this, [move] { move(1); });
+	buttons->addWidget(up);
+	buttons->addWidget(down);
+	buttons->addStretch();
+	layout->addLayout(buttons);
+
+	// Load settings: the saved order is the checked subset; append the rest.
+	QSettings settings;
+	m_gridArtFamily->setChecked(settings.value(QStringLiteral("grid/artFallbackFamily"), true).toBool());
+
+	QStringList all;
+	for (std::size_t i = 0; i < THUMBNAIL_SOURCE_COUNT; ++i)
+		all << QString::fromLatin1(THUMBNAIL_SOURCES[i].label);
+
+	QStringList const saved = settings.value(QStringLiteral("grid/artFallbackOrder")).toStringList();
+	QStringList ordered;
+	QSet<QString> checked;
+	if (saved.isEmpty())
+	{
+		ordered = all;
+		checked = QSet<QString>(all.begin(), all.end());
+	}
+	else
+	{
+		ordered = saved;
+		checked = QSet<QString>(saved.begin(), saved.end());
+		for (const QString &label : all)
+			if (!ordered.contains(label))
+				ordered << label;
+	}
+	for (const QString &label : ordered)
+	{
+		QListWidgetItem *item = new QListWidgetItem(label, m_gridArtList);
+		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+		item->setCheckState(checked.contains(label) ? Qt::Checked : Qt::Unchecked);
+	}
+
+	addCategory(tr("Grid Artwork"), page);
+}
+
 void OptionsDialog::buildFolderCategory()
 {
 	QWidget *page = new QWidget;
@@ -710,6 +783,21 @@ void OptionsDialog::accept()
 					order << item->text();
 			}
 			QSettings().setValue(QStringLiteral("versions/order"), order);
+		}
+
+		// Grid artwork fallback.
+		if (m_gridArtFamily)
+			QSettings().setValue(QStringLiteral("grid/artFallbackFamily"), m_gridArtFamily->isChecked());
+		if (m_gridArtList)
+		{
+			QStringList order;
+			for (int i = 0; i < m_gridArtList->count(); i++)
+			{
+				QListWidgetItem *item = m_gridArtList->item(i);
+				if (item->checkState() == Qt::Checked)
+					order << item->text();
+			}
+			QSettings().setValue(QStringLiteral("grid/artFallbackOrder"), order);
 		}
 	}
 

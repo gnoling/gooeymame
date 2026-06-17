@@ -18,6 +18,7 @@
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QHash>
 #include <QtCore/QList>
+#include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -88,9 +89,11 @@ public:
 	// Host machine for the current entries (used for thumbnail fallback art).
 	void setHostSystem(const QString &system);
 
-	// Choose the image set for grid thumbnails: a software (_SL) key plus the
-	// host-machine key to fall back to.  Either may be empty.
-	void setThumbnailSource(const QString &softwareKey, const QString &machineKey);
+	// Choose the image sets for grid thumbnails: an ordered list of (software
+	// _SL key, host-machine key) pairs, primary first, tried in turn so a
+	// missing primary image falls back to other art types.  When familyFallback
+	// is true the other family members' images are tried too.
+	void setThumbnailSources(const QVector<QPair<QString, QString>> &keys, bool familyFallback);
 
 	// Apply availability results (qtui_availability) indexed to match the
 	// current entries, from the background audit phase.
@@ -133,10 +136,12 @@ private:
 	QStringList m_regionOrder;
 	QHash<QString, QString> m_overrides;   // "list\x1froot" -> member short name
 
-	// Grid thumbnails: software (_SL) art with host-machine fallback.
+	// Grid thumbnails: ordered art-type sources (each = software _SL path +
+	// host-machine fallback path), primary first.
+	struct ThumbSource { QString swPath; QString machinePath; };
 	ThumbnailLoader *m_thumbLoader = nullptr;
-	QString m_thumbSwKey,  m_thumbSwPath;       // software image set
-	QString m_thumbMachineKey, m_thumbMachinePath;   // host-machine fallback set
+	QVector<ThumbSource> m_thumbChain;
+	bool m_thumbFamily = true;
 	QString m_hostSystem, m_hostParent;
 	quint64 m_thumbGen = 0;
 	mutable QHash<int, QPixmap> m_thumbCache;

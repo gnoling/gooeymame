@@ -17,9 +17,11 @@
 #include <QtCore/QAbstractTableModel>
 #include <QtCore/QHash>
 #include <QtCore/QList>
+#include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
+#include <QtCore/QVector>
 #include <QtGui/QIcon>
 
 #include <cstdint>
@@ -138,9 +140,12 @@ public:
 	// Persist a per-family default-version override for the family of `row`.
 	void setVersionOverride(int row, const QString &memberShortName);
 
-	// Choose the image set used for grid thumbnails (a frontendpaths machine
-	// key, e.g. "snap"); invalidates the cache and reloads on demand.
-	void setThumbnailSource(const QString &machineKey);
+	// Choose the image sets used for grid thumbnails: an ordered list of
+	// frontendpaths machine keys (e.g. {"snap","titles",…}) tried in turn so a
+	// missing primary image falls back to other art types.  When familyFallback
+	// is true, each art type is also tried for the clone parent and the other
+	// family members (different-region variants).  Invalidates the cache.
+	void setThumbnailSources(const QStringList &machineKeys, bool familyFallback);
 
 private slots:
 	void onIconLoaded(int row, const QByteArray &bytes);
@@ -188,8 +193,8 @@ private:
 	// Lazy, cached grid thumbnails for the selected image set (worker thread).
 	// A generation counter invalidates in-flight loads when the source changes.
 	ThumbnailLoader *m_thumbLoader = nullptr;
-	QString m_thumbKey;     // frontendpaths machine key ("" = none)
-	QString m_thumbPath;    // resolved folder/zip for m_thumbKey
+	QVector<QPair<QString, QString>> m_thumbChain;   // ordered (key, resolved path), primary first
+	bool m_thumbFamily = true;                       // also try parent/sibling sets
 	quint64 m_thumbGen = 0;
 	mutable QHash<int, QPixmap> m_thumbCache;
 	mutable QSet<int> m_thumbRequested;
