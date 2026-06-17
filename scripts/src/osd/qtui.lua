@@ -37,23 +37,35 @@ function maintargetosdoptions(_target,_subtarget)
 		links {
 			"Qt6Multimedia.dll",
 			"Qt6MultimediaWidgets.dll",
-			"Qt6Pdf.dll",
-			"Qt6PdfWidgets.dll",
 		}
+		if _OPTIONS["NO_QTPDF"]~="1" then
+			links {
+				"Qt6Pdf.dll",
+				"Qt6PdfWidgets.dll",
+			}
+		end
 	elseif _OPTIONS["targetos"]=="macosx" then
 		links {
 			"QtMultimedia.framework",
 			"QtMultimediaWidgets.framework",
-			"QtPdf.framework",
-			"QtPdfWidgets.framework",
 		}
+		if _OPTIONS["NO_QTPDF"]~="1" then
+			links {
+				"QtPdf.framework",
+				"QtPdfWidgets.framework",
+			}
+		end
 	else
 		links {
 			"Qt6Multimedia",
 			"Qt6MultimediaWidgets",
-			"Qt6Pdf",
-			"Qt6PdfWidgets",
 		}
+		if _OPTIONS["NO_QTPDF"]~="1" then
+			links {
+				"Qt6Pdf",
+				"Qt6PdfWidgets",
+			}
+		end
 	end
 
 	-- MAME statically links its own copies of zlib, libpng, etc.  If those
@@ -225,6 +237,25 @@ if not _OPTIONS["NO_X11"] then
 		_OPTIONS["NO_X11"] = "1"
 	else
 		_OPTIONS["NO_X11"] = "0"
+	end
+end
+
+newoption {
+	trigger = "NO_QTPDF",
+	description = "Disable the Qt PDF manual viewer (for platforms without Qt PDF, e.g. MSYS2 MinGW64)",
+	allowed = {
+		{ "0",  "Enable Qt PDF"  },
+		{ "1",  "Disable Qt PDF" },
+	},
+}
+
+if not _OPTIONS["NO_QTPDF"] then
+	-- Qt PDF is not packaged for MSYS2's MinGW64 environment; default it off on
+	-- Windows and on elsewhere.
+	if _OPTIONS["targetos"]=="windows" then
+		_OPTIONS["NO_QTPDF"] = "1"
+	else
+		_OPTIONS["NO_QTPDF"] = "0"
 	end
 end
 
@@ -477,8 +508,6 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/infoloader.h",
 		MAME_DIR .. "src/osd/qtui/mediatabs.cpp",
 		MAME_DIR .. "src/osd/qtui/mediatabs.h",
-		MAME_DIR .. "src/osd/qtui/manualtab.cpp",
-		MAME_DIR .. "src/osd/qtui/manualtab.h",
 		MAME_DIR .. "src/osd/qtui/iconloader.cpp",
 		MAME_DIR .. "src/osd/qtui/thumbnailloader.cpp",
 		MAME_DIR .. "src/osd/qtui/thumbnailloader.h",
@@ -511,6 +540,14 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/familytreemodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/embedhost.moc.cpp",
 	}
+
+	-- The PDF manual viewer is only built where Qt PDF is available.
+	if _OPTIONS["NO_QTPDF"]~="1" then
+		files {
+			MAME_DIR .. "src/osd/qtui/manualtab.cpp",
+			MAME_DIR .. "src/osd/qtui/manualtab.h",
+		}
+	end
 
 	local MOC = qtui_find_moc()
 	custombuildtask {

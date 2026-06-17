@@ -19,6 +19,14 @@ includedirs {
 	MAME_DIR .. "src/frontend/mame",
 }
 
+-- Drop the Qt PDF manual viewer where Qt PDF is unavailable (e.g. MSYS2's
+-- MinGW64, which has no qt6-pdf package).
+if _OPTIONS["NO_QTPDF"]=="1" then
+	defines {
+		"QTUI_NO_PDF",
+	}
+end
+
 -- All code linked into the qtui executable that references Qt's exported
 -- data symbols must be position-independent, so those references go through
 -- the GOT.  Built without -fPIC, the linker instead emits copy relocations

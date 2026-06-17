@@ -12,8 +12,10 @@
 #include "emulator.h"
 #include "frontendpaths.h"
 #include "infoloader.h"
-#include "manualtab.h"
 #include "mediatabs.h"
+#ifndef QTUI_NO_PDF
+#include "manualtab.h"
+#endif
 
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
@@ -207,10 +209,13 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 		m_views.push_back({ KindText, QString(), QString(), def.source, browser, false, QPixmap() });
 	}
 
-	// Manual tab: a PDF viewer (manuals / manuals_SL).
+#ifndef QTUI_NO_PDF
+	// Manual tab: a PDF viewer (manuals / manuals_SL).  Omitted on platforms
+	// without Qt PDF (e.g. MSYS2 MinGW64, which has no qt6-pdf package).
 	m_manualTab = new ManualTab(m_infoTabs);
 	m_infoTabs->addTab(m_manualTab, tr("Manual"));
 	m_views.push_back({ KindManual, QString(), QString(), 0, m_manualTab, false, QPixmap() });
+#endif
 
 	connect(m_artTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
 	connect(m_infoTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
@@ -492,6 +497,7 @@ void ArtworkPanel::loadTab(int index)
 	}
 
 	// Manual tab: resolve a PDF (software first, then machine + clone parent).
+#ifndef QTUI_NO_PDF
 	if (tab.kind == KindManual)
 	{
 		QString const base = frontendFolderPath(QStringLiteral("manuals"));
@@ -522,6 +528,7 @@ void ArtworkPanel::loadTab(int index)
 		m_loader->request(m_epoch, index, candidates);
 		return;
 	}
+#endif
 
 	// Text database tab: look up the configured source for the current item.
 	if (tab.kind == KindText)
@@ -611,11 +618,13 @@ void ArtworkPanel::onLoaded(quint64 epoch, int tab, const QByteArray &bytes)
 	Tab &t = m_views[tab];
 
 	// Manuals are PDFs, not images: hand the bytes to the viewer.
+#ifndef QTUI_NO_PDF
 	if (t.kind == KindManual)
 	{
 		m_manualTab->setPdf(bytes);
 		return;
 	}
+#endif
 
 	if (bytes.isEmpty())
 	{
