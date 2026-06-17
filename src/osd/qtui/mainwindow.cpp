@@ -1539,10 +1539,22 @@ void MainWindow::setSoftwarePaneVisible(bool visible)
 	m_softwarePane->setVisible(visible);
 }
 
+void MainWindow::syncSoftwarePane()
+{
+	// A re-filter can hide the selected system without the active view emitting
+	// a selection change (stale current index after invalidateFilter), leaving
+	// the software pane stuck on a system no longer in the list.  Re-evaluate:
+	// if the shown system isn't the current (visible) selection, refresh, which
+	// hides the pane when nothing valid is selected.
+	if (selectedSystem() != m_softwareLoadSystem)
+		onSystemSelectionChanged();
+}
+
 void MainWindow::onFolderSelected(const FolderFilter &filter)
 {
 	m_proxy->setFolderFilter(filter);
 	invalidateMachineViews();
+	syncSoftwarePane();
 	updateStatusCount();
 }
 
@@ -1550,6 +1562,7 @@ void MainWindow::onSearchTextChanged(const QString &text)
 {
 	m_proxy->setSearchText(text);
 	invalidateMachineViews();
+	syncSoftwarePane();
 	updateStatusCount();
 }
 
@@ -1566,6 +1579,7 @@ void MainWindow::onStatusFilterChanged()
 		flags |= StatusUnavailable;
 	m_proxy->setStatusFilter(flags);
 	invalidateMachineViews();
+	syncSoftwarePane();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
@@ -1583,6 +1597,7 @@ void MainWindow::onVersionFilterChanged()
 	m_proxy->setHideHacks(m_actHideHacks->isChecked());
 	m_proxy->setHidePrototypes(m_actHidePrototypes->isChecked());
 	invalidateMachineViews();
+	syncSoftwarePane();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/hideClones"), m_actHideClones->isChecked());
@@ -1708,6 +1723,7 @@ void MainWindow::refreshSoftware()
 		m_softwareLoader->cancel();
 		m_softwareModel->setEntries({});
 		setSoftwarePaneVisible(false);
+		m_softwareLoadSystem.clear();
 		return;
 	}
 

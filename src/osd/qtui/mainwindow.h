@@ -134,6 +134,9 @@ private:
 	void createWidgets();
 	void updateStatusCount();
 	void setSoftwarePaneVisible(bool visible);
+	// After a machine-list re-filter, drop/refresh the software pane if the
+	// system it is showing is no longer the (visible) selection.
+	void syncSoftwarePane();
 	void selectPendingSoftware();   // re-select the restored software item once
 
 
