@@ -18,6 +18,26 @@ FamilyTreeModel::FamilyTreeModel(QAbstractItemModel *source, GroupsFn groups, Ch
 	m_groupsFn(std::move(groups)),
 	m_childrenFn(std::move(children))
 {
+	// Forward the flat model's per-row updates (lazily loaded icons/thumbnails,
+	// availability) to the matching tree indices, otherwise the tree only
+	// repaints a row on hover and shows icons late / glitches while scrolling.
+	if (m_source)
+		connect(m_source, &QAbstractItemModel::dataChanged, this,
+				[this] (const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles) {
+					if (!topLeft.isValid())
+						return;
+					int const c0 = topLeft.column();
+					int const c1 = bottomRight.column();
+					for (int r = topLeft.row(); r <= bottomRight.row(); ++r)
+					{
+						QModelIndex const idx = indexForSourceRow(r);
+						if (!idx.isValid())
+							continue;
+						emit dataChanged(createIndex(idx.row(), c0, idx.internalId()),
+								createIndex(idx.row(), c1, idx.internalId()), roles);
+					}
+				});
+
 	rebuild();
 }
 
