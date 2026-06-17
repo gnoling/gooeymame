@@ -21,8 +21,11 @@
 #include "emu.h"
 #include "emuopts.h"
 #include "main.h"
+#include "mame.h"
 #include "mameopts.h"
 #include "audit.h"
+#include "natkeyboard.h"
+#include "ui/ui.h"
 
 #include "drivenum.h"
 #include "softlist_dev.h"
@@ -45,7 +48,10 @@
 #include "strconv.h"
 
 #include <clocale>
+#include <locale.h>
 #include <string>
+
+#include "embedsession.h"
 
 #include <SDL2/SDL.h>
 
@@ -180,6 +186,206 @@ int qtui_run_software(const std::string &system, const std::string &software)
 {
 	std::vector<std::string> args{ "mame", system, software };
 	return qtui_run_args(args);
+}
+
+
+//============================================================
+//  Embedded in-process emulation
+//
+//  A qtui_osd_interface subclass captures the running_machine and, each frame
+//  (in update(), which runs on the emulation thread), drains the UI's command
+//  queue and applies it directly to the machine.  This is the faithful analog
+//  of NEWUI, whose native menu is serviced by the Windows OSD's message pump
+//  (src/osd/winui/newui.cpp invoke_command()).
+//============================================================
+
+namespace {
+
+class qtui_osd_interface : public sdl_osd_interface
+{
+public:
+	qtui_osd_interface(sdl_options &options, osd::qtui::EmbedSession &session) :
+		sdl_osd_interface(options),
+		m_session(session)
+	{
+	}
+
+	virtual void init(running_machine &machine) override
+	{
+		sdl_osd_interface::init(machine);
+		m_machine = &machine;
+		m_session.running.store(true);
+	}
+
+	virtual void update(bool skip_redraw) override
+	{
+		drain_commands();
+		if (m_machine)
+			m_session.paused.store(m_machine->paused());
+		sdl_osd_interface::update(skip_redraw);
+	}
+
+private:
+	void apply(const osd::qtui::EmbedAction &a)
+	{
+		using osd::qtui::EmbedCommand;
+		running_machine &m = *m_machine;
+		switch (a.cmd)
+		{
+		case EmbedCommand::TogglePause:
+			if (m.paused()) m.resume(); else m.pause();
+			break;
+		case EmbedCommand::SoftReset:
+			m.schedule_soft_reset();
+			break;
+		case EmbedCommand::HardReset:
+			m.schedule_hard_reset();
+			break;
+		case EmbedCommand::SaveState:
+			m.schedule_save(a.sval.empty() ? std::string("1") : std::string(a.sval));
+			break;
+		case EmbedCommand::LoadState:
+			m.schedule_load(a.sval.empty() ? std::string("1") : std::string(a.sval));
+			break;
+		case EmbedCommand::SaveSnapshot:
+			m.video().save_active_screen_snapshots();
+			break;
+		case EmbedCommand::ToggleFullscreen:
+			break;   // TODO: SDL window fullscreen toggle (deferred; needs OSD window hook)
+		case EmbedCommand::ToggleFps:
+			{
+				auto &ui = mame_machine_manager::instance()->ui();
+				ui.set_show_fps(!ui.show_fps());
+			}
+			break;
+		case EmbedCommand::SetThrottleRate:
+			m.video().set_throttle_rate(float(a.dval));
+			m.video().set_throttled(true);
+			break;
+		case EmbedCommand::ToggleThrottle:
+			m.video().set_throttled(!m.video().throttled());
+			break;
+		case EmbedCommand::SetFrameskip:
+			m.video().set_frameskip(a.ival);   // -1 = auto
+			break;
+		case EmbedCommand::SetRotate:
+			break;   // TODO: render-target orientation (deferred)
+		case EmbedCommand::KeyboardEmulated:
+			m.natkeyboard().set_in_use(false);
+			break;
+		case EmbedCommand::KeyboardNatural:
+			m.natkeyboard().set_in_use(true);
+			break;
+		case EmbedCommand::Paste:
+			m.natkeyboard().paste();
+			break;
+		case EmbedCommand::Exit:
+			m.schedule_exit();
+			break;
+		}
+	}
+
+	void drain_commands()
+	{
+		if (!m_machine)
+			return;
+		osd::qtui::EmbedAction a;
+		while (m_session.take(a))
+			apply(a);
+	}
+
+	osd::qtui::EmbedSession &m_session;
+	running_machine *m_machine = nullptr;
+};
+
+} // anonymous namespace
+
+
+bool qtui_renderer_needs_gl(const std::string &system)
+{
+	int const idx = driver_list::find(system.c_str());
+	if (idx < 0)
+		return true;
+
+	// Resolve the effective -video value through the standard ini hierarchy.
+	// core_guard serialises core access and forces the "C" locale the ini
+	// parser needs, so this is safe to call from the GUI thread too.
+	core_guard guard;
+	try
+	{
+		sdl_options probe;
+		std::ostringstream errors;
+		mame_options::parse_standard_inis(probe, errors, &driver_list::driver(idx));
+		std::string const v = probe.video();
+		return (v != "soft") && (v != "none");
+	}
+	catch (...)
+	{
+		return true;
+	}
+}
+
+
+int qtui_run_embedded(
+		const std::string &system,
+		const std::string &software,
+		unsigned long long attach_window_id,
+		osd::qtui::EmbedSession &session)
+{
+	int res = 0;
+
+	// Force the "C" locale for this thread only (uselocale is per-thread,
+	// unlike setlocale): the MAME ini/number parsers require it, but the Qt GUI
+	// thread keeps running in the user's locale.  See qtui_run_args() for why.
+	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcInit();
+#endif
+#endif
+
+	std::vector<std::string> args{ "mame", system };
+	if (!software.empty())
+		args.push_back(software);
+	args.push_back("-window");
+	args.push_back("-attach_window");
+	args.push_back(std::to_string(attach_window_id));
+
+	// MAME's attach path calls SDL_CreateWindowFrom() without flagging the
+	// window for OpenGL, so the GL-based renderers (opengl/accel) abort with
+	// "the specified window isn't an OpenGL window".  SDL's foreign-window hint
+	// fixes that, BUT it must be set only when the renderer actually needs GL:
+	// the software renderer can't get a window surface from a GL-flagged window,
+	// and requesting both GL and Vulkan flags fails outright ("Vulkan and OpenGL
+	// not supported on same window").  So enable the GL flag for everything
+	// except soft/none, and never request the Vulkan flag alongside it.
+	SDL_SetHintWithPriority(SDL_HINT_VIDEO_FOREIGN_WINDOW_OPENGL,
+			qtui_renderer_needs_gl(system) ? "1" : "0", SDL_HINT_OVERRIDE);
+
+	{
+		sdl_options options;
+		qtui_osd_interface osd(options, session);
+		osd.register_options();
+		res = emulator_info::start_frontend(options, osd, args);
+	}
+
+	session.running.store(false);
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcFini();
+#endif
+#endif
+
+	if (cloc)
+	{
+		uselocale(prev);
+		freelocale(cloc);
+	}
+
+	return res;
 }
 
 

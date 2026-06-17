@@ -55,6 +55,12 @@ public:
 	// Show artwork for a software item from a system's software list.
 	void setSoftware(const QString &list, const QString &software);
 
+	// Host an embedded game's video widget in the top of the panel and switch to
+	// a game view (adds "Game only / Game + Art / Game + Info" choices).  Pass
+	// nullptr / call detachGame() to remove it and restore the normal view.
+	void attachGame(QWidget *game);
+	void detachGame();
+
 protected:
 	void resizeEvent(QResizeEvent *event) override;
 	void hideEvent(QHideEvent *event) override;
@@ -67,7 +73,7 @@ private slots:
 
 private:
 	enum class Mode { System, Software };
-	enum Layout { Split = 0, ArtOnly, InfoOnly };
+	enum Layout { Split = 0, ArtOnly, InfoOnly, GameOnly, GameArt, GameInfo };
 	enum TabKind { KindImage, KindText, KindVideo, KindSoundtrack, KindManual };
 
 	void refresh();          // invalidate all tabs and (re)load the visible ones
@@ -101,6 +107,8 @@ private:
 	ManualTab *m_manualTab = nullptr;
 	std::vector<Tab> m_views;
 	int m_layout = Split;
+	QWidget *m_gameWidget = nullptr;   // embedded game surface (when playing in-pane)
+	int m_savedLayout = Split;         // layout to restore when the game detaches
 
 	Mode m_mode = Mode::System;
 	QString m_system;

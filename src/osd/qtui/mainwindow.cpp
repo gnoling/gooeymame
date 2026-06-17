@@ -10,6 +10,7 @@
 
 #include "artworkpanel.h"
 #include "auditmanager.h"
+#include "embedhost.h"
 #include "emulator.h"
 #include "familytreemodel.h"
 #include "foldertree.h"
@@ -29,15 +30,18 @@
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
+#include <QtCore/QEvent>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
 #include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
+#include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
@@ -306,9 +310,48 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+	// While a game runs embedded, the window's close button means "stop the
+	// game and return to the browser", not "quit the application".  The stop is
+	// asynchronous; onEmbeddedFinished() restores the UI when the run ends.
+	if (embedRunning())
+	{
+		stopEmbedded();
+		event->ignore();
+		return;
+	}
+
 	saveSettings();
 	saveSoftwareCache();
 	QMainWindow::closeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+	// Closing the detached play window stops the game and keeps the browser up.
+	if (watched == m_embedWindow && event->type() == QEvent::Close)
+	{
+		if (embedRunning())
+		{
+			stopEmbedded();
+			event->ignore();
+			return true;
+		}
+	}
+	return QMainWindow::eventFilter(watched, event);
+}
+
+bool MainWindow::embedRunning() const
+{
+	return m_embedThread.joinable() || (m_embedHost && m_embedHost->isChildRunning());
+}
+
+void MainWindow::stopEmbedded()
+{
+	// Both paths are asynchronous and converge on onEmbeddedFinished().
+	if (m_embedSession)
+		m_embedSession->post({ EmbedCommand::Exit, 0.0, 0, {} });   // in-process
+	if (m_embedHost && m_embedHost->isChildRunning())
+		m_embedHost->stopChild();                                   // child-process
 }
 
 void MainWindow::saveSettings() const
@@ -422,6 +465,13 @@ void MainWindow::restoreSettings()
 		if (act->data().toInt() == iconSize)
 			act->setChecked(true);
 
+	// Restore the play (embed) mode; clamps to a separate window off X11.
+	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedSeparate)).toInt());
+	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
+	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
+	if (m_hideBrowserAct)
+		m_hideBrowserAct->setChecked(m_hideBrowserWhilePlaying);
+
 	// Restore per-pane grid view state (group already ended, so use full keys).
 	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
 	m_gridSource->setCurrentIndex(settings.value(QStringLiteral("view/machineSource"), 0).toInt());
@@ -495,6 +545,14 @@ void MainWindow::restoreSettings()
 
 MainWindow::~MainWindow()
 {
+	// Make sure no embedded run outlives the window: ask an in-process emulation
+	// to exit and join its thread (a joinable std::thread would otherwise abort).
+	if (m_embedThread.joinable())
+	{
+		if (m_embedSession)
+			m_embedSession->post({ EmbedCommand::Exit, 0.0, 0, {} });
+		m_embedThread.join();
+	}
 }
 
 void MainWindow::createMenus()
@@ -553,6 +611,59 @@ void MainWindow::createMenus()
 			QSettings().setValue(QStringLiteral("mainwindow/iconSize"), size);
 		});
 	}
+
+	// Play mode: how a launched system runs (separate window vs embedded).
+	QMenu *playMenu = viewMenu->addMenu(tr("&Play Mode"));
+	m_embedModeGroup = new QActionGroup(this);
+	struct { const char *label; int mode; bool needsEmbed; } const playModes[] = {
+		{ "Separate window", EmbedSeparate, false },
+		{ "Embedded (in-process)", EmbedInProcess, true },
+		{ "Embedded (child process)", EmbedChild, true },
+	};
+	for (const auto &choice : playModes)
+	{
+		QAction *act = playMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.mode);
+		if (choice.needsEmbed && !embeddingSupported())
+			act->setEnabled(false);
+		m_embedModeGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, mode = choice.mode] { setEmbedMode(mode); });
+	}
+	if (!embeddingSupported())
+	{
+		playMenu->addSeparator();
+		QAction *note = playMenu->addAction(tr("(embedding needs an X11 session)"));
+		note->setEnabled(false);
+	}
+
+	// Where an embedded game appears (only meaningful for the embedded modes).
+	QMenu *locMenu = viewMenu->addMenu(tr("Embed &Location"));
+	m_embedLocationGroup = new QActionGroup(this);
+	struct { const char *label; int loc; } const locations[] = {
+		{ "Separate window", LocWindow },
+		{ "Browser right pane", LocBrowser },
+	};
+	for (const auto &choice : locations)
+	{
+		QAction *act = locMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.loc);
+		if (!embeddingSupported())
+			act->setEnabled(false);
+		m_embedLocationGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, loc = choice.loc] { setEmbedLocation(loc); });
+	}
+	locMenu->addSeparator();
+	m_hideBrowserAct = locMenu->addAction(tr("Hide browser window while playing"));
+	m_hideBrowserAct->setCheckable(true);
+	m_hideBrowserAct->setToolTip(tr("With a separate play window, hide the browser until the game exits"));
+	if (!embeddingSupported())
+		m_hideBrowserAct->setEnabled(false);
+	connect(m_hideBrowserAct, &QAction::toggled, this, [this] (bool on) {
+		m_hideBrowserWhilePlaying = on;
+		QSettings().setValue(QStringLiteral("play/hideBrowser"), on);
+	});
 
 	// Machine-list filters: shared QActions used by both the View ▸ Filters
 	// menu and the "Filters" button in the list's bar.
@@ -643,9 +754,148 @@ void MainWindow::createMenus()
 		}
 	});
 
+	buildMachineMenu();
+
 	QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 	QAction *aboutAct = helpMenu->addAction(tr("&About"));
 	connect(aboutAct, &QAction::triggered, this, &MainWindow::showAbout);
+}
+
+void MainWindow::buildMachineMenu()
+{
+	m_machineMenu = menuBar()->addMenu(tr("&Machine"));
+	populateMachineMenu(m_machineMenu);
+
+	// Poll the live machine's paused state to keep the Pause check in sync.
+	m_embedStatusTimer = new QTimer(this);
+	m_embedStatusTimer->setInterval(250);
+	connect(m_embedStatusTimer, &QTimer::timeout, this, &MainWindow::updateEmbedStatus);
+
+	setMachineControlsActive(false);
+}
+
+void MainWindow::populateMachineMenu(QMenu *menu)
+{
+	// In-game controls mirroring winui's NEWUI menu (src/osd/winui/newui.cpp).
+	// Active only while a game runs embedded in-process, where each action is
+	// applied directly to the live running_machine on the emulation thread.
+	// Called once for the main menu bar and again for the detached play window;
+	// every control action is tracked for enable/disable.
+	auto track = [this] (QAction *a) {
+		a->setEnabled(m_machineControlsActive);
+		m_machineActions.append(a);
+		return a;
+	};
+
+	QAction *pause = track(menu->addAction(tr("&Pause")));
+	pause->setCheckable(true);
+	m_pauseActions.append(pause);
+	connect(pause, &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::TogglePause, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	connect(track(menu->addAction(tr("&Soft Reset"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::SoftReset, 0.0, 0, {} }); });
+	connect(track(menu->addAction(tr("&Hard Reset"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::HardReset, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	connect(track(menu->addAction(tr("Save &State"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::SaveState, 0.0, 0, {} }); });
+	connect(track(menu->addAction(tr("&Load State"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::LoadState, 0.0, 0, {} }); });
+	connect(track(menu->addAction(tr("Save State &As…"))), &QAction::triggered, this, [this] {
+		bool ok = false;
+		QString const name = QInputDialog::getText(this, tr("Save State As"),
+				tr("State slot/file name:"), QLineEdit::Normal, QStringLiteral("1"), &ok);
+		if (ok && !name.isEmpty())
+			postEmbed({ EmbedCommand::SaveState, 0.0, 0, name.toStdString() });
+	});
+	connect(track(menu->addAction(tr("Save Scree&nshot"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::SaveSnapshot, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	QMenu *throttle = menu->addMenu(tr("&Throttle"));
+	track(throttle->menuAction());
+	struct { const char *label; double rate; } const rates[] = {
+		{ "50%", 0.5 }, { "100%", 1.0 }, { "200%", 2.0 }, { "500%", 5.0 }, { "1000%", 10.0 },
+	};
+	for (const auto &r : rates)
+		connect(throttle->addAction(tr(r.label)), &QAction::triggered, this,
+				[this, rate = r.rate] { postEmbed({ EmbedCommand::SetThrottleRate, rate, 0, {} }); });
+	throttle->addSeparator();
+	connect(throttle->addAction(tr("Toggle throttling")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::ToggleThrottle, 0.0, 0, {} }); });
+
+	QMenu *frameskip = menu->addMenu(tr("&Frameskip"));
+	track(frameskip->menuAction());
+	connect(frameskip->addAction(tr("Auto")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, -1, {} }); });
+	frameskip->addSeparator();
+	for (int i = 0; i <= 10; ++i)
+		connect(frameskip->addAction(QString::number(i)), &QAction::triggered, this,
+				[this, i] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, i, {} }); });
+
+	connect(track(menu->addAction(tr("Toggle &FPS display"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::ToggleFps, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	QMenu *keyboard = menu->addMenu(tr("&Keyboard"));
+	track(keyboard->menuAction());
+	QActionGroup *kbGroup = new QActionGroup(this);
+	QAction *kbEmu = keyboard->addAction(tr("Emulated"));
+	QAction *kbNat = keyboard->addAction(tr("Natural"));
+	for (QAction *a : { kbEmu, kbNat }) { a->setCheckable(true); kbGroup->addAction(a); }
+	kbEmu->setChecked(true);
+	connect(kbEmu, &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::KeyboardEmulated, 0.0, 0, {} }); });
+	connect(kbNat, &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::KeyboardNatural, 0.0, 0, {} }); });
+	connect(track(menu->addAction(tr("&Paste"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::Paste, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	connect(track(menu->addAction(tr("Stop &Game"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::Exit, 0.0, 0, {} }); });
+}
+
+void MainWindow::postEmbed(const EmbedAction &action)
+{
+	if (m_embedSession)
+		m_embedSession->post(action);
+}
+
+void MainWindow::setMachineControlsActive(bool active)
+{
+	// The controls are greyed unless an in-process embed is running (the only
+	// mode with live access to running_machine).  Toggling the actions (rather
+	// than the menus) covers both the main bar and the detached window's bar.
+	m_machineControlsActive = active;
+	// The main menu-bar Machine menu only appears while an in-process game runs.
+	if (m_machineMenu)
+		m_machineMenu->menuAction()->setVisible(active);
+	for (QAction *a : m_machineActions)
+		a->setEnabled(active);
+	if (!active)
+		for (QAction *p : m_pauseActions)
+			p->setChecked(false);
+	if (m_embedStatusTimer)
+	{
+		if (active)
+			m_embedStatusTimer->start();
+		else
+			m_embedStatusTimer->stop();
+	}
+}
+
+void MainWindow::updateEmbedStatus()
+{
+	if (m_embedSession && m_embedSession->running.load())
+	{
+		bool const paused = m_embedSession->paused.load();
+		for (QAction *p : m_pauseActions)
+			p->setChecked(paused);
+	}
 }
 
 void MainWindow::createWidgets()
@@ -977,9 +1227,17 @@ void MainWindow::createWidgets()
 	// restoreSettings() drive.  m_rightSplitter (vertical) always carries the
 	// software pane at the bottom; m_splitter (horizontal) is the central one.
 	m_rightSplitter = new QSplitter(Qt::Vertical);
-	m_splitter = new QSplitter(Qt::Horizontal, this);
-	setCentralWidget(m_splitter);
+	m_splitter = new QSplitter(Qt::Horizontal);
 	applyMainLayout(m_mainLayout);
+
+	// The browser splitter and the embedded-gameplay host share a stack as the
+	// central widget; the play page is shown only while a game runs embedded.
+	m_centralStack = new QStackedWidget(this);
+	m_centralStack->addWidget(m_splitter);    // page 0: browser
+	m_embedHost = new EmbedHost;
+	m_centralStack->addWidget(m_embedHost);   // page 1: embedded play
+	connect(m_embedHost, &EmbedHost::finished, this, &MainWindow::onEmbeddedFinished);
+	setCentralWidget(m_centralStack);
 
 	// Debounce timer for software enumeration.
 	m_softwareTimer = new QTimer(this);
@@ -1500,8 +1758,7 @@ void MainWindow::launchSelectedSystem()
 	QString const system = selectedSystem();
 	if (system.isEmpty())
 		return;
-
-	runModal(system, [system] { return qtui_run_system(system.toStdString()); });
+	launchSystem(system, QString());
 }
 
 void MainWindow::launchSelectedSoftware()
@@ -1520,8 +1777,227 @@ void MainWindow::launchSelectedSoftware()
 	if (software.isEmpty())
 		return;
 
-	runModal(QStringLiteral("%1 %2").arg(system, software),
-			[system, software] { return qtui_run_software(system.toStdString(), software.toStdString()); });
+	launchSystem(system, software);
+}
+
+bool MainWindow::embeddingSupported()
+{
+	// MAME's -attach_window is X11-only (src/osd/sdl/window.cpp); xcb covers
+	// both native X11 and XWayland.
+	return QGuiApplication::platformName() == QLatin1String("xcb");
+}
+
+void MainWindow::setEmbedMode(int mode)
+{
+	if (mode != EmbedSeparate && !embeddingSupported())
+		mode = EmbedSeparate;
+	m_embedMode = mode;
+	QSettings().setValue(QStringLiteral("play/embedMode"), mode);
+	for (QAction *act : m_embedModeGroup->actions())
+		if (act->data().toInt() == mode)
+			act->setChecked(true);
+}
+
+void MainWindow::setEmbedLocation(int location)
+{
+	// The retired "main pane" location maps to the separate window.
+	if (location == LocMainPane)
+		location = LocWindow;
+	m_embedLocation = location;
+	QSettings().setValue(QStringLiteral("play/embedLocation"), location);
+	if (m_embedLocationGroup)
+		for (QAction *act : m_embedLocationGroup->actions())
+			if (act->data().toInt() == location)
+				act->setChecked(true);
+}
+
+void MainWindow::placeEmbedSurface()
+{
+	// Reparent the host into the configured location and show it.  winId() is
+	// taken later (after layout), so the surface is created in its final parent
+	// at full size.
+	if (m_embedLocation == LocBrowser)
+	{
+		// Host the game in the right (artwork) pane; the panel adds the
+		// Game/Game+Art/Game+Info views while it is attached.
+		m_artwork->attachGame(m_embedHost);
+	}
+	else   // LocWindow
+	{
+		if (!m_embedWindow)
+		{
+			// A QMainWindow so the detached play window carries its own menu bar
+			// with the Machine controls in its proper context.
+			m_embedWindow = new QMainWindow(this, Qt::Window);
+			m_embedWindow->setWindowTitle(tr("MAME"));
+			m_embedWindow->resize(800, 600);
+			m_embedWindow->installEventFilter(this);
+
+			QMenu *fileMenu = m_embedWindow->menuBar()->addMenu(tr("&File"));
+			connect(fileMenu->addAction(tr("Stop &Game")), &QAction::triggered,
+					this, [this] { stopEmbedded(); });
+			QMenu *machine = m_embedWindow->menuBar()->addMenu(tr("&Machine"));
+			populateMachineMenu(machine);
+		}
+		m_embedWindow->setCentralWidget(m_embedHost);
+		m_embedWindow->show();
+		m_embedWindow->raise();
+		m_embedWindow->activateWindow();
+
+		if (m_hideBrowserWhilePlaying)
+			hide();
+	}
+	m_embedHost->show();
+}
+
+void MainWindow::returnFromEmbed()
+{
+	// Robust regardless of where the host ended up: restore the browser, take
+	// the game back out of the artwork pane, and hide the detached window.
+	if (isHidden())
+		show();
+	m_artwork->detachGame();
+	if (m_embedWindow)
+		m_embedWindow->hide();
+	// Re-home the host to the central stack (hidden) so it stays owned and is
+	// ready to be reparented for the next launch.
+	if (m_centralStack->indexOf(m_embedHost) < 0)
+		m_centralStack->addWidget(m_embedHost);
+	m_centralStack->setCurrentWidget(m_splitter);
+}
+
+void MainWindow::launchSystem(const QString &system, const QString &software)
+{
+	if (embedRunning())
+	{
+		// Quit the running game and start this one once it has stopped.
+		m_pendingLaunchSystem = system;
+		m_pendingLaunchSoftware = software;
+		m_hasPendingLaunch = true;
+		statusBar()->showMessage(tr("Stopping current game…"));
+		stopEmbedded();
+		return;
+	}
+
+	QString const label = software.isEmpty()
+			? system
+			: QStringLiteral("%1 %2").arg(system, software);
+
+	int mode = m_embedMode;
+	if (mode != EmbedSeparate && !embeddingSupported())
+		mode = EmbedSeparate;
+
+	switch (mode)
+	{
+	case EmbedChild:
+		{
+			QStringList args;
+			args << system;
+			if (!software.isEmpty())
+				args << software;
+			args << QStringLiteral("-window");
+			launchEmbeddedChild(label, args);
+		}
+		return;
+
+	case EmbedInProcess:
+		launchEmbeddedInProcess(label, system, software);
+		return;
+
+	case EmbedSeparate:
+	default:
+		if (software.isEmpty())
+			runModal(label, [system] { return qtui_run_system(system.toStdString()); });
+		else
+			runModal(label, [system, software] {
+				return qtui_run_software(system.toStdString(), software.toStdString());
+			});
+		return;
+	}
+}
+
+void MainWindow::launchEmbeddedChild(const QString &label, const QStringList &mameArgs)
+{
+	if (m_embedHost->isChildRunning())
+		return;
+
+	statusBar()->showMessage(tr("Running %1 (embedded)…").arg(label));
+	m_playAct->setEnabled(false);
+	placeEmbedSurface();
+	bool const wantsGl = qtui_renderer_needs_gl(mameArgs.value(0).toStdString());
+	QStringList const args = mameArgs;
+	// Defer so the host is laid out at full size before its XID is taken.
+	QTimer::singleShot(50, this, [this, args, wantsGl] {
+		m_embedHost->startChildProcess(args, wantsGl);
+	});
+}
+
+void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &system, const QString &software)
+{
+	if (m_embedSession || m_embedThread.joinable())
+		return;   // a run is already in progress
+
+	statusBar()->showMessage(tr("Running %1 (embedded, in-process)…").arg(label));
+	m_playAct->setEnabled(false);
+	placeEmbedSurface();
+	m_embedHost->showOverlay(true);
+	m_embedHost->setStatus(tr("Launching %1…").arg(label));
+
+	// Create the bridge now so a second launch is blocked while this one runs.
+	m_embedSession = std::make_unique<EmbedSession>();
+	setMachineControlsActive(true);
+
+	std::string const sys = system.toStdString();
+	std::string const sw = software.toStdString();
+
+	// Defer the actual launch one event-loop turn so the embed page is laid out
+	// and the native surface has its final size before MAME's SDL_CreateWindowFrom()
+	// adopts it — otherwise the game renders into a tiny, not-yet-sized window.
+	QTimer::singleShot(50, this, [this, sys, sw] {
+		EmbedSession *const session = m_embedSession.get();
+		if (!session)
+			return;
+		unsigned long long const xid = m_embedHost->surfaceId();
+		m_embedThread = std::thread([this, sys, sw, xid, session] {
+			int const code = qtui_run_embedded(sys, sw, xid, *session);
+			// Marshal completion back to the GUI thread.
+			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
+		});
+		// Hide the overlay once MAME has had a moment to put up its first frames.
+		QTimer::singleShot(1500, m_embedHost, [this] { m_embedHost->showOverlay(false); });
+	});
+}
+
+void MainWindow::onEmbeddedFinished(int exitCode)
+{
+	// Join the in-process emulation thread and tear down its bridge (no-op for
+	// the child-process embed path, which uses neither).
+	if (m_embedThread.joinable())
+		m_embedThread.join();
+	m_embedSession.reset();
+	setMachineControlsActive(false);
+
+	returnFromEmbed();
+	m_playAct->setEnabled(!selectedSystem().isEmpty());
+	activateWindow();
+	raise();
+
+	if (exitCode != 0)
+		statusBar()->showMessage(tr("Embedded run exited with code %1").arg(exitCode));
+	else
+		updateStatusCount();
+
+	// If a new game was requested while this one was running, start it now that
+	// the teardown is complete (deferred a turn so all state has settled).
+	if (m_hasPendingLaunch)
+	{
+		m_hasPendingLaunch = false;
+		QString const sys = m_pendingLaunchSystem;
+		QString const sw = m_pendingLaunchSoftware;
+		m_pendingLaunchSystem.clear();
+		m_pendingLaunchSoftware.clear();
+		QTimer::singleShot(0, this, [this, sys, sw] { launchSystem(sys, sw); });
+	}
 }
 
 void MainWindow::updateStatusCount()

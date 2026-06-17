@@ -18,12 +18,17 @@
 #include <QtWidgets/QMainWindow>
 
 #include <functional>
+#include <memory>
+#include <thread>
 #include <vector>
 
 class QActionGroup;
 class QCloseEvent;
 class QComboBox;
+class QEvent;
+class QObject;
 class QLineEdit;
+class QMenu;
 class QProgressBar;
 class QPushButton;
 class QSlider;
@@ -42,6 +47,7 @@ class ArtworkPanel;
 class AuditManager;
 class SoftwareAuditManager;
 class CheckableComboBox;
+class EmbedHost;
 class FamilyTreeModel;
 class FolderTree;
 class GameListModel;
@@ -65,6 +71,7 @@ public:
 
 protected:
 	void closeEvent(QCloseEvent *event) override;
+	bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
 	void showAbout();
@@ -84,10 +91,43 @@ private slots:
 	void refreshSoftware();
 	void onSoftwareLoaded(const std::vector<qtui_software_entry> &entries);
 	void onSoftwareAvailabilityReady(const QVector<int> &availability);
+	void onEmbeddedFinished(int exitCode);
 
 private:
 	// Arrangement of the system list, software list, and artwork panes.
 	enum MainLayout { SoftwareBesideArt = 0, SoftwareUnderSystems };
+
+	// How a selected system/software is launched.
+	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2 };
+
+	// Where an embedded game's video surface is shown.  (LocMainPane is retired
+	// but its value is kept so old settings remap cleanly.)  LocBrowser hosts
+	// the game in the right (artwork) pane via the panel's game view modes.
+	enum EmbedLocation { LocMainPane = 0, LocBrowser = 1, LocWindow = 2 };
+
+	// True when the platform supports attaching MAME to a Qt window (X11/xcb).
+	static bool embeddingSupported();
+	// Launch routing: dispatches on m_embedMode.
+	void launchSystem(const QString &system, const QString &software);
+	void launchEmbeddedChild(const QString &label, const QStringList &mameArgs);
+	void launchEmbeddedInProcess(const QString &label, const QString &system, const QString &software);
+	void setEmbedMode(int mode);
+	void setEmbedLocation(int location);
+	// Reparent the embed host into the configured location (pane/dock/window)
+	// and show it, ready to be attached to once it has been laid out.
+	void placeEmbedSurface();
+	// Stop a running embedded game (in-process or child) without quitting.
+	void stopEmbedded();
+	bool embedRunning() const;
+	// Restore the UI after an embedded run ends (per location).
+	void returnFromEmbed();
+
+	// NEWUI-parity in-game controls (active only during an in-process embed).
+	void buildMachineMenu();
+	void populateMachineMenu(QMenu *menu);       // fill a Machine menu (main bar or detached window)
+	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
+	void setMachineControlsActive(bool active);
+	void updateEmbedStatus();                    // sync the Pause check from the live machine
 
 	void createMenus();
 	void createWidgets();
@@ -165,6 +205,27 @@ private:
 	QComboBox *m_softwareViewMode = nullptr;
 	QSplitter *m_splitter = nullptr;
 	QSplitter *m_rightSplitter = nullptr;
+	QStackedWidget *m_centralStack = nullptr;   // browser page / embedded play page
+	EmbedHost *m_embedHost = nullptr;
+	int m_embedMode = EmbedSeparate;
+	int m_embedLocation = LocWindow;
+	bool m_hideBrowserWhilePlaying = false;
+	QActionGroup *m_embedModeGroup = nullptr;
+	QActionGroup *m_embedLocationGroup = nullptr;
+	QAction *m_hideBrowserAct = nullptr;
+	QMainWindow *m_embedWindow = nullptr;   // host when LocWindow (own menu bar)
+	std::unique_ptr<EmbedSession> m_embedSession;   // in-process embed command bridge
+	std::thread m_embedThread;                      // runs the in-process emulation
+	QMenu *m_machineMenu = nullptr;                 // NEWUI-parity in-game controls (main bar)
+	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
+	QList<QAction *> m_pauseActions;                // Pause toggles to keep in sync
+	bool m_machineControlsActive = false;           // current enable state (new actions inherit it)
+	// A launch requested while a game is still running: the running game is
+	// stopped, then this one starts once it finishes.
+	bool m_hasPendingLaunch = false;
+	QString m_pendingLaunchSystem;
+	QString m_pendingLaunchSoftware;
+	QTimer *m_embedStatusTimer = nullptr;           // polls live paused state
 	ArtworkPanel *m_artwork = nullptr;
 	QWidget *m_systemPane = nullptr;
 	QWidget *m_softwarePane = nullptr;

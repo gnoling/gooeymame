@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include "embedsession.h"
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -44,6 +46,22 @@ int qtui_run_system(const std::string &system);
 // Launch a system with a piece of software from one of its software lists
 // (e.g. system "nes", software "smb").  Returns the emulator exit code.
 int qtui_run_software(const std::string &system, const std::string &software);
+
+// True if the system's configured -video renderer needs an OpenGL-capable
+// window (everything except "soft"/"none").  Used to decide whether to set the
+// SDL foreign-window OpenGL hint when embedding.  Safe to call from any thread.
+bool qtui_renderer_needs_gl(const std::string &system);
+
+// Run `system` (+ optional `software`, "" for none) embedded into the native
+// window `attach_window_id` (an X11 XID), in-process on the CALLING thread.
+// Intended to run on a dedicated worker thread so the Qt event loop keeps
+// running; `session` is the command/status bridge the UI uses to drive the
+// live machine (pause, reset, save state, …).  Returns the emulator exit code.
+int qtui_run_embedded(
+		const std::string &system,
+		const std::string &software,
+		unsigned long long attach_window_id,
+		osd::qtui::EmbedSession &session);
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

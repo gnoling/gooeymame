@@ -18,6 +18,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QSettings>
+#include <QtCore/QSignalBlocker>
 #include <QtGui/QPixmap>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
@@ -241,20 +242,70 @@ void ArtworkPanel::setSoftware(const QString &list, const QString &software)
 void ArtworkPanel::onLayoutChanged(int index)
 {
 	int const layout = m_layoutCombo->itemData(index).toInt();
-	QSettings settings;
-	settings.setValue(QStringLiteral("artwork/layout"), layout);
+	// Persist only the normal (non-game) views; game views are transient.
+	if (layout >= Split && layout <= InfoOnly)
+		QSettings().setValue(QStringLiteral("artwork/layout"), layout);
 	applyLayout(layout);
 }
 
 void ArtworkPanel::applyLayout(int layout)
 {
 	m_layout = layout;
-	bool const artShown = (layout == Split || layout == ArtOnly);
+	bool const gameShown = (layout == GameOnly || layout == GameArt || layout == GameInfo);
+	bool const artShown = (layout == Split || layout == ArtOnly || layout == GameArt);
+	bool const infoShown = (layout == Split || layout == InfoOnly || layout == GameInfo);
+	if (m_gameWidget)
+		m_gameWidget->setVisible(gameShown);
 	m_artTabs->setVisible(artShown);
-	m_infoTabs->setVisible(layout == Split || layout == InfoOnly);
+	m_infoTabs->setVisible(infoShown);
 	if (!artShown)
 		stopAllMedia();   // no point playing what cannot be seen
 	loadCurrent();        // load anything newly shown
+}
+
+void ArtworkPanel::attachGame(QWidget *game)
+{
+	if (!game)
+		return;
+	m_gameWidget = game;
+	m_splitter->insertWidget(0, game);
+	m_splitter->setStretchFactor(0, 4);
+	game->show();
+
+	// Remember the non-game layout and offer the game views.
+	m_savedLayout = (m_layout >= GameOnly) ? Split : m_layout;
+	QSignalBlocker block(m_layoutCombo);
+	if (m_layoutCombo->findData(int(GameArt)) < 0)
+	{
+		m_layoutCombo->addItem(tr("Game only"), int(GameOnly));
+		m_layoutCombo->addItem(tr("Game + Art"), int(GameArt));
+		m_layoutCombo->addItem(tr("Game + Info"), int(GameInfo));
+	}
+	int const idx = m_layoutCombo->findData(int(GameOnly));
+	m_layoutCombo->setCurrentIndex(idx);
+	applyLayout(GameOnly);
+}
+
+void ArtworkPanel::detachGame()
+{
+	if (!m_gameWidget)
+		return;
+	// Remove the game from the splitter without destroying it (MainWindow owns
+	// it and reuses it for the next launch).
+	m_gameWidget->hide();
+	m_gameWidget->setParent(nullptr);
+	m_gameWidget = nullptr;
+
+	QSignalBlocker block(m_layoutCombo);
+	for (int v : { int(GameOnly), int(GameArt), int(GameInfo) })
+	{
+		int const i = m_layoutCombo->findData(v);
+		if (i >= 0)
+			m_layoutCombo->removeItem(i);
+	}
+	int const idx = m_layoutCombo->findData(m_savedLayout);
+	m_layoutCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+	applyLayout(m_savedLayout);
 }
 
 void ArtworkPanel::stopAllMedia()
