@@ -337,8 +337,12 @@ int qtui_run_embedded(
 	// Force the "C" locale for this thread only (uselocale is per-thread,
 	// unlike setlocale): the MAME ini/number parsers require it, but the Qt GUI
 	// thread keeps running in the user's locale.  See qtui_run_args() for why.
+	// uselocale/newlocale are POSIX (not in MinGW's CRT); embedded play is
+	// X11-only so this path never runs on Windows, but it must still compile.
+#ifdef SDLMAME_UNIX
 	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
+#endif
 
 #ifdef SDLMAME_UNIX
 #if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
@@ -379,11 +383,13 @@ int qtui_run_embedded(
 #endif
 #endif
 
+#ifdef SDLMAME_UNIX
 	if (cloc)
 	{
 		uselocale(prev);
 		freelocale(cloc);
 	}
+#endif
 
 	return res;
 }
