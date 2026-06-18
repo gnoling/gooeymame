@@ -41,6 +41,7 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
@@ -859,9 +860,68 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 	connect(track(menu->addAction(tr("&Paste"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Paste, 0.0, 0, {} }); });
 
+	// Media: mount/unload disk/cart/tape images on the live machine.  Rebuilt
+	// each time it opens from the image snapshot the OSD publishes.
+	menu->addSeparator();
+	QMenu *media = menu->addMenu(tr("&Media"));
+	track(media->menuAction());
+	connect(media, &QMenu::aboutToShow, this, [this, media] { rebuildMediaMenu(media); });
+
 	menu->addSeparator();
 	connect(track(menu->addAction(tr("Stop &Game"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Exit, 0.0, 0, {} }); });
+}
+
+void MainWindow::rebuildMediaMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+
+	std::vector<EmbedImage> const images = m_embedSession->imagesSnapshot();
+	if (images.empty())
+	{
+		menu->addAction(tr("(this machine has no media slots)"))->setEnabled(false);
+		return;
+	}
+
+	for (const EmbedImage &img : images)
+	{
+		QString const label = QString::fromStdString(img.label);
+		QString const file = img.filename.empty() ? tr("(empty)") : QString::fromStdString(img.filename);
+		QMenu *dev = menu->addMenu(QStringLiteral("%1 — %2").arg(label, file));
+		std::string const brief = img.brief;
+
+		connect(dev->addAction(tr("Mount…")), &QAction::triggered, this, [this, brief] {
+			QString const path = QFileDialog::getOpenFileName(this, tr("Mount Image"));
+			if (!path.isEmpty())
+			{
+				postEmbed({ EmbedCommand::MountImage, 0.0, 0, brief, path.toStdString() });
+				showMediaOverlay();
+			}
+		});
+		QAction *unload = dev->addAction(tr("Unload"));
+		unload->setEnabled(img.loaded);
+		connect(unload, &QAction::triggered, this, [this, brief] {
+			postEmbed({ EmbedCommand::UnloadImage, 0.0, 0, brief, {} });
+			showMediaOverlay();
+		});
+	}
+}
+
+void MainWindow::showMediaOverlay()
+{
+	// A cart/disk change can trigger a machine reset; cover the reload gap with
+	// correct feedback rather than letting stale surface pixels (e.g. the old
+	// "Launching…" frame) show through.  Auto-hides shortly after.
+	if (!m_embedHost)
+		return;
+	m_embedHost->setStatus(tr("Changing media…"));
+	m_embedHost->showOverlay(true);
+	QTimer::singleShot(1800, m_embedHost, [this] { m_embedHost->showOverlay(false); });
 }
 
 void MainWindow::postEmbed(const EmbedAction &action)

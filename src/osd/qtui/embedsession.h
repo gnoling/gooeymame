@@ -20,6 +20,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 
 namespace osd::qtui {
@@ -43,6 +44,8 @@ enum class EmbedCommand
 	KeyboardEmulated,
 	KeyboardNatural,
 	Paste,
+	MountImage,       // sval = device brief name, sval2 = file path
+	UnloadImage,      // sval = device brief name
 	Exit
 };
 
@@ -52,6 +55,17 @@ struct EmbedAction
 	double       dval = 0.0;
 	int          ival = 0;
 	std::string  sval;
+	std::string  sval2;
+};
+
+// A mountable image device on the live machine, published by the emulation
+// thread so the GUI can build the Media menu without touching running_machine.
+struct EmbedImage
+{
+	std::string brief;      // brief_instance_name(), e.g. "flop1" — command key
+	std::string label;      // human label, e.g. "Floppy Disk 1 [flop1]"
+	std::string filename;   // current image basename, "" if empty
+	bool        loaded = false;
 };
 
 //============================================================
@@ -78,6 +92,24 @@ public:
 		return true;
 	}
 
+	// Image-device snapshot published by the emulation thread (publishImages)
+	// and read by the GUI (imagesSnapshot) to build the Media menu.  The
+	// generation counter lets the UI tell when it changed.
+	void publishImages(std::vector<EmbedImage> images)
+	{
+		std::lock_guard<std::mutex> lk(m_imgMutex);
+		m_images = std::move(images);
+		m_imagesGen.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	std::vector<EmbedImage> imagesSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_imgMutex);
+		return m_images;
+	}
+
+	unsigned imagesGeneration() const { return m_imagesGen.load(std::memory_order_relaxed); }
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -85,6 +117,10 @@ public:
 private:
 	std::mutex m_mutex;
 	std::deque<EmbedAction> m_queue;
+
+	mutable std::mutex m_imgMutex;
+	std::vector<EmbedImage> m_images;
+	std::atomic<unsigned> m_imagesGen{0};
 };
 
 } // namespace osd::qtui

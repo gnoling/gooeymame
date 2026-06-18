@@ -24,6 +24,7 @@
 #include "mame.h"
 #include "mameopts.h"
 #include "audit.h"
+#include "diimage.h"
 #include "natkeyboard.h"
 #include "ui/ui.h"
 
@@ -215,13 +216,25 @@ public:
 		sdl_osd_interface::init(machine);
 		m_machine = &machine;
 		m_session.running.store(true);
+		refresh_images();
 	}
 
 	virtual void update(bool skip_redraw) override
 	{
 		drain_commands();
 		if (m_machine)
+		{
 			m_session.paused.store(m_machine->paused());
+			// Re-publish the image snapshot a couple of times a second so the
+			// Media menu reflects reality: software/carts mount AFTER osd init(),
+			// a cart load can trigger a reset, and MAME's own Tab UI can change
+			// media too.  Iterating the few image devices is cheap.
+			if (++m_imageRefreshTick >= 30)
+			{
+				m_imageRefreshTick = 0;
+				refresh_images();
+			}
+		}
 		sdl_osd_interface::update(skip_redraw);
 	}
 
@@ -279,6 +292,20 @@ private:
 		case EmbedCommand::Paste:
 			m.natkeyboard().paste();
 			break;
+		case EmbedCommand::MountImage:
+			if (device_image_interface *const img = find_image(a.sval))
+			{
+				img->load(a.sval2);   // ignore the (error, message) result; UI re-reads state
+				refresh_images();
+			}
+			break;
+		case EmbedCommand::UnloadImage:
+			if (device_image_interface *const img = find_image(a.sval))
+			{
+				img->unload();
+				refresh_images();
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -294,8 +321,41 @@ private:
 			apply(a);
 	}
 
+	// Locate a user-loadable image device by its brief instance name ("flop1").
+	device_image_interface *find_image(const std::string &brief)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (device_image_interface &img : image_interface_enumerator(m_machine->root_device()))
+			if (img.brief_instance_name() == brief)
+				return &img;
+		return nullptr;
+	}
+
+	// Publish the current mountable image devices for the GUI's Media menu.
+	void refresh_images()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedImage> out;
+		for (device_image_interface &img : image_interface_enumerator(m_machine->root_device()))
+		{
+			if (!img.user_loadable())
+				continue;
+			osd::qtui::EmbedImage e;
+			e.brief = img.brief_instance_name();
+			e.label = img.instance_name() + " [" + img.brief_instance_name() + "]";
+			e.loaded = img.exists();
+			if (img.exists())
+				e.filename = (img.basename() && img.basename()[0]) ? img.basename() : "(loaded)";
+			out.push_back(std::move(e));
+		}
+		m_session.publishImages(std::move(out));
+	}
+
 	osd::qtui::EmbedSession &m_session;
 	running_machine *m_machine = nullptr;
+	unsigned m_imageRefreshTick = 0;
 };
 
 } // anonymous namespace

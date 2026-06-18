@@ -126,6 +126,8 @@ private:
 	// NEWUI-parity in-game controls (active only during an in-process embed).
 	void buildMachineMenu();
 	void populateMachineMenu(QMenu *menu);       // fill a Machine menu (main bar or detached window)
+	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
+	void showMediaOverlay();                     // brief "Changing media…" overlay over the reset/reload gap
 	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
 	void setMachineControlsActive(bool active);
 	void updateEmbedStatus();                    // sync the Pause check from the live machine
