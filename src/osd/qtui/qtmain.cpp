@@ -17,6 +17,7 @@
 #include "emulator.h"
 #include "mainwindow.h"
 
+#include <QtCore/QSettings>
 #include <QtWidgets/QApplication>
 
 
@@ -33,6 +34,13 @@ int main(int argc, char *argv[])
 	QApplication app(argc, argv);
 	QApplication::setApplicationName("MAMEUI");
 	QApplication::setOrganizationName("MAMEUI");
+
+#ifdef _WIN32
+	// Store GUI settings in an INI file rather than the Windows registry, so the
+	// config is inspectable/portable and consistent with the .conf used on Unix
+	// (location: %APPDATA%\MAMEUI\MAMEUI.ini).  Must precede any QSettings use.
+	QSettings::setDefaultFormat(QSettings::IniFormat);
+#endif
 
 	osd::qtui::MainWindow window;
 	window.show();
