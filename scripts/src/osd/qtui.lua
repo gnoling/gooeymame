@@ -250,10 +250,17 @@ newoption {
 }
 
 if not _OPTIONS["NO_QTPDF"] then
-	-- Qt PDF is not packaged for MSYS2's MinGW64 environment; default it off on
-	-- Windows and on elsewhere.
+	-- Default the Qt PDF manual viewer on where the QtPdf headers are present,
+	-- off otherwise.  Linux/macOS ship Qt PDF; on Windows it depends on the MSYS2
+	-- environment: the UCRT64 packages include qt6-pdf, the legacy MinGW64 ones do
+	-- not.  Auto-detect via qmake6 so the right default is picked either way.
 	if _OPTIONS["targetos"]=="windows" then
-		_OPTIONS["NO_QTPDF"] = "1"
+		local qt_headers = backtick("qmake6 -query QT_INSTALL_HEADERS")
+		if qt_headers and qt_headers~="" and os.isdir(qt_headers .. "/QtPdf") then
+			_OPTIONS["NO_QTPDF"] = "0"
+		else
+			_OPTIONS["NO_QTPDF"] = "1"
+		end
 	else
 		_OPTIONS["NO_QTPDF"] = "0"
 	end
