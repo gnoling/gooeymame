@@ -16,6 +16,7 @@
 #include "emulator.h"
 
 #include <QtCore/QAbstractTableModel>
+#include <QtCore/QByteArray>
 #include <QtCore/QHash>
 #include <QtCore/QList>
 #include <QtCore/QPair>
@@ -23,6 +24,7 @@
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QVector>
+#include <QtGui/QIcon>
 #include <QtGui/QPixmap>
 
 #include <cstdint>
@@ -31,6 +33,7 @@
 
 namespace osd::qtui {
 
+class IconLoader;
 class ThumbnailLoader;
 
 class SoftwareModel : public QAbstractTableModel
@@ -115,9 +118,11 @@ signals:
 
 private slots:
 	void onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes);
+	void onIconLoaded(int row, const QByteArray &bytes);
 
 private:
 	QVariant thumbnailForRow(int row) const;
+	QVariant iconForRow(int row) const;   // lazily requests/caches the row icon
 	void buildFamilies();           // families + region + version flags
 	void computeRepresentatives();  // (re)derive representatives from settings
 	void applyVersionSettings();    // read versions/* + computeRepresentatives (no emit)
@@ -146,6 +151,12 @@ private:
 	quint64 m_thumbGen = 0;
 	mutable QHash<int, QPixmap> m_thumbCache;
 	mutable QSet<int> m_thumbRequested;
+
+	// Row icons: per-software icon if present, else the host machine's icon.
+	IconLoader *m_iconLoader = nullptr;
+	QString m_iconsPath;
+	mutable QHash<int, QIcon> m_iconCache;
+	mutable QSet<int> m_iconRequested;
 };
 
 } // namespace osd::qtui

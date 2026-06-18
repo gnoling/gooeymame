@@ -9,6 +9,7 @@
 #include "softwaremodel.h"
 
 #include "frontendpaths.h"
+#include "iconloader.h"
 #include "regions.h"
 #include "thumbnailloader.h"
 
@@ -25,6 +26,11 @@ SoftwareModel::SoftwareModel(QObject *parent) :
 {
 	m_thumbLoader = new ThumbnailLoader(this);
 	connect(m_thumbLoader, &ThumbnailLoader::loaded, this, &SoftwareModel::onThumbnailLoaded);
+
+	// Row icons (icons.zip) loaded lazily on a worker thread, like the machine list.
+	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
+	m_iconLoader = new IconLoader(this);
+	connect(m_iconLoader, &IconLoader::loaded, this, &SoftwareModel::onIconLoaded);
 }
 
 void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
@@ -34,6 +40,8 @@ void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
 	++m_thumbGen;   // entries replaced: invalidate thumbnails
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
+	m_iconCache.clear();      // row->entry mapping changed: invalidate icons
+	m_iconRequested.clear();
 	buildFamilies();
 	applyVersionSettings();   // compute representatives without emitting mid-reset
 	endResetModel();          // endResetModel signals the change to proxies
@@ -251,10 +259,12 @@ void SoftwareModel::setHostSystem(const QString &system)
 	m_hostSystem = system;
 	std::string const parent = qtui_parent_of(system.toStdString());
 	m_hostParent = QString::fromStdString(parent);
-	// New host: any machine-fallback thumbnails are stale.
+	// New host: any machine-fallback thumbnails and host-icon rows are stale.
 	++m_thumbGen;
 	m_thumbCache.clear();
 	m_thumbRequested.clear();
+	m_iconCache.clear();
+	m_iconRequested.clear();
 }
 
 void SoftwareModel::setThumbnailSources(const QVector<QPair<QString, QString>> &keys, bool familyFallback)
@@ -350,6 +360,58 @@ void SoftwareModel::onThumbnailLoaded(int row, quint64 generation, const QByteAr
 	}
 }
 
+QVariant SoftwareModel::iconForRow(int row) const
+{
+	if (m_iconsPath.isEmpty() || row < 0 || row >= int(m_entries.size()))
+		return QVariant();
+
+	auto it = m_iconCache.constFind(row);
+	if (it != m_iconCache.constEnd())
+		return it.value();
+
+	// Not cached: queue a one-time async load.  Prefer a per-software icon (in
+	// case a software-list icon pack keyed <list>/<software>.ico is present),
+	// then fall back to the host machine's icon so every row is still iconified.
+	if (!m_iconRequested.contains(row))
+	{
+		m_iconRequested.insert(row);
+		const qtui_software_entry &e = m_entries[row];
+		QString const list = QString::fromStdString(e.list);
+		QString const sw = QString::fromStdString(e.shortname);
+		QStringList entries;
+		if (!list.isEmpty() && !sw.isEmpty())
+			entries << list + QLatin1Char('/') + sw + QStringLiteral(".ico");
+		if (!sw.isEmpty())
+			entries << sw + QStringLiteral(".ico");
+		if (!m_hostSystem.isEmpty())
+			entries << m_hostSystem + QStringLiteral(".ico");
+		if (!m_hostParent.isEmpty())
+			entries << m_hostParent + QStringLiteral(".ico");
+		if (!entries.isEmpty())
+			m_iconLoader->request(row, m_iconsPath, entries);
+	}
+	return QVariant();
+}
+
+void SoftwareModel::onIconLoaded(int row, const QByteArray &bytes)
+{
+	QIcon icon;
+	if (!bytes.isEmpty())
+	{
+		QPixmap pixmap;
+		if (pixmap.loadFromData(bytes))
+			icon = QIcon(pixmap);
+	}
+
+	// Cache (even an empty icon) so we neither re-request nor re-decode.
+	m_iconCache.insert(row, icon);
+	if (!icon.isNull())
+	{
+		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
+		emit dataChanged(idx, idx, { Qt::DecorationRole });
+	}
+}
+
 void SoftwareModel::setAvailabilities(const QVector<int> &availability)
 {
 	int const count = qMin(int(m_entries.size()), int(availability.size()));
@@ -403,6 +465,9 @@ QVariant SoftwareModel::data(const QModelIndex &index, int role) const
 
 	if (role == kThumbnailRole)
 		return thumbnailForRow(index.row());
+
+	if (role == Qt::DecorationRole && index.column() == COLUMN_DESCRIPTION)
+		return iconForRow(index.row());
 
 	if (role == IsCloneRole)
 		return isClone(index.row());

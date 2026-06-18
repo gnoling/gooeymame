@@ -1255,6 +1255,32 @@ void MainWindow::applyIconSize(int size)
 {
 	m_view->setIconSize(QSize(size, size));
 	m_view->verticalHeader()->setDefaultSectionSize(size + 6);
+
+	// The grouped (tree) view shows the same machine list, so it honours the same
+	// icon/row size.  With uniform row heights the row height is derived from the
+	// delegate's decoration size, so setIconSize() drives both the icon and the
+	// row height — but the uniform height is cached, so toggle it to force a
+	// relayout at the new size.
+	if (m_tree)
+	{
+		m_tree->setIconSize(QSize(size, size));
+		m_tree->setUniformRowHeights(false);
+		m_tree->setUniformRowHeights(true);
+	}
+
+	// The software pane honours the same size: its rows now carry icons too
+	// (per-software icon if available, else the host machine's).
+	if (m_softwareView)
+	{
+		m_softwareView->setIconSize(QSize(size, size));
+		m_softwareView->verticalHeader()->setDefaultSectionSize(size + 6);
+	}
+	if (m_softwareTree)
+	{
+		m_softwareTree->setIconSize(QSize(size, size));
+		m_softwareTree->setUniformRowHeights(false);
+		m_softwareTree->setUniformRowHeights(true);
+	}
 }
 
 QWidget *MainWindow::buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption)
