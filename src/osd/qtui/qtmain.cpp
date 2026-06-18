@@ -18,7 +18,33 @@
 #include "mainwindow.h"
 
 #include <QtCore/QSettings>
+#include <QtCore/QString>
+#include <QtCore/QtGlobal>
 #include <QtWidgets/QApplication>
+
+
+#ifdef _WIN32
+namespace {
+
+QtMessageHandler g_prev_message_handler = nullptr;
+
+// MAME's executable manifest already declares the process DPI-aware
+// (scripts/resources/windows/mame/mame.man, <dpiAware>true</dpiAware>), which
+// Windows applies at process creation.  The Qt platform plugin then tries to
+// switch the process to Per-Monitor-v2 awareness and fails harmlessly with
+// ACCESS_DENIED because the awareness is already locked in.  The app stays
+// DPI-aware and renders correctly; this just drops that one noisy startup
+// warning while forwarding every other Qt diagnostic untouched.
+void qtui_message_filter(QtMsgType type, const QMessageLogContext &context, const QString &message)
+{
+	if (message.contains(QLatin1String("SetProcessDpiAwarenessContext")))
+		return;
+	if (g_prev_message_handler)
+		g_prev_message_handler(type, context, message);
+}
+
+} // anonymous namespace
+#endif
 
 
 int main(int argc, char *argv[])
@@ -31,6 +57,13 @@ int main(int argc, char *argv[])
 		return qtui_run_emulation(argc, argv);
 
 	// No arguments: show the Qt front-end.
+#ifdef _WIN32
+	// Filter the benign DPI-awareness warning the Qt platform plugin emits at
+	// startup (see qtui_message_filter).  Installed before QApplication so it
+	// catches the warning raised during platform initialisation.
+	g_prev_message_handler = qInstallMessageHandler(qtui_message_filter);
+#endif
+
 	QApplication app(argc, argv);
 	QApplication::setApplicationName("MAMEUI");
 	QApplication::setOrganizationName("MAMEUI");
