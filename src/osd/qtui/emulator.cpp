@@ -25,6 +25,7 @@
 #include "mameopts.h"
 #include "audit.h"
 #include "diimage.h"
+#include "dislot.h"
 #include "natkeyboard.h"
 #include "ui/ui.h"
 
@@ -37,6 +38,7 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -217,6 +219,7 @@ public:
 		m_machine = &machine;
 		m_session.running.store(true);
 		refresh_images();
+		refresh_slots();
 	}
 
 	virtual void update(bool skip_redraw) override
@@ -306,6 +309,16 @@ private:
 				refresh_images();
 			}
 			break;
+		case EmbedCommand::SetSlot:
+			// Slot devices are fixed at machine creation, so apply the new option
+			// and hard-reset; the rebuilt machine re-publishes the slot snapshot.
+			if (::slot_option *const opt = m.options().find_slot_option(a.sval))
+			{
+				try { opt->specify(a.sval2); }
+				catch (...) { break; }
+				m.schedule_hard_reset();
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -351,6 +364,29 @@ private:
 			out.push_back(std::move(e));
 		}
 		m_session.publishImages(std::move(out));
+	}
+
+	// Publish the user-configurable device slots for the GUI's Slots menu.
+	void refresh_slots()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedSlot> out;
+		for (device_slot_interface &slot : slot_interface_enumerator(m_machine->root_device()))
+		{
+			if (!slot.has_selectable_options())
+				continue;
+			osd::qtui::EmbedSlot s;
+			s.name = std::string(slot.slot_name());
+			s.current = m_machine->options().slot_option(s.name).value();
+			s.defaultOption = slot.default_option() ? slot.default_option() : "";
+			for (const auto &ent : slot.option_list())
+				if (ent.second->selectable())
+					s.options.emplace_back(ent.second->name());   // string_view -> std::string
+			std::sort(s.options.begin(), s.options.end());
+			out.push_back(std::move(s));
+		}
+		m_session.publishSlots(std::move(out));
 	}
 
 	osd::qtui::EmbedSession &m_session;

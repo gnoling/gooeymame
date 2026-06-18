@@ -867,6 +867,13 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 	track(media->menuAction());
 	connect(media, &QMenu::aboutToShow, this, [this, media] { rebuildMediaMenu(media); });
 
+	// Slots: change which device occupies a configurable slot.  This can't be
+	// done live (slots are fixed at machine creation), so it sets the option and
+	// hard-resets.  Rebuilt each time it opens from the slot snapshot.
+	QMenu *slotMenu = menu->addMenu(tr("S&lots"));
+	track(slotMenu->menuAction());
+	connect(slotMenu, &QMenu::aboutToShow, this, [this, slotMenu] { rebuildSlotsMenu(slotMenu); });
+
 	menu->addSeparator();
 	connect(track(menu->addAction(tr("Stop &Game"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Exit, 0.0, 0, {} }); });
@@ -900,26 +907,70 @@ void MainWindow::rebuildMediaMenu(QMenu *menu)
 			if (!path.isEmpty())
 			{
 				postEmbed({ EmbedCommand::MountImage, 0.0, 0, brief, path.toStdString() });
-				showMediaOverlay();
+				showReloadOverlay(tr("Changing media…"));
 			}
 		});
 		QAction *unload = dev->addAction(tr("Unload"));
 		unload->setEnabled(img.loaded);
 		connect(unload, &QAction::triggered, this, [this, brief] {
 			postEmbed({ EmbedCommand::UnloadImage, 0.0, 0, brief, {} });
-			showMediaOverlay();
+			showReloadOverlay(tr("Changing media…"));
 		});
 	}
 }
 
-void MainWindow::showMediaOverlay()
+void MainWindow::rebuildSlotsMenu(QMenu *menu)
 {
-	// A cart/disk change can trigger a machine reset; cover the reload gap with
-	// correct feedback rather than letting stale surface pixels (e.g. the old
-	// "Launching…" frame) show through.  Auto-hides shortly after.
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+
+	std::vector<EmbedSlot> const slotList = m_embedSession->slotsSnapshot();
+	if (slotList.empty())
+	{
+		menu->addAction(tr("(this machine has no configurable slots)"))->setEnabled(false);
+		return;
+	}
+
+	for (const EmbedSlot &slot : slotList)
+	{
+		QMenu *sm = menu->addMenu(QString::fromStdString(slot.name));
+		QActionGroup *group = new QActionGroup(sm);
+		std::string const name = slot.name;
+
+		auto addOption = [&] (const QString &display, const std::string &value) {
+			QAction *a = sm->addAction(display);
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(value == slot.current);
+			connect(a, &QAction::triggered, this, [this, name, value] {
+				postEmbed({ EmbedCommand::SetSlot, 0.0, 0, name, value });
+				showReloadOverlay(tr("Changing slot (resetting)…"));
+			});
+		};
+
+		addOption(tr("(none)"), std::string());
+		for (const std::string &opt : slot.options)
+		{
+			QString label = QString::fromStdString(opt);
+			if (opt == slot.defaultOption)
+				label += tr("  (default)");
+			addOption(label, opt);
+		}
+	}
+}
+
+void MainWindow::showReloadOverlay(const QString &message)
+{
+	// A media or slot change can trigger a machine reset; cover the reload gap
+	// with correct feedback rather than letting stale surface pixels (e.g. the
+	// old "Launching…" frame) show through.  Auto-hides shortly after.
 	if (!m_embedHost)
 		return;
-	m_embedHost->setStatus(tr("Changing media…"));
+	m_embedHost->setStatus(message);
 	m_embedHost->showOverlay(true);
 	QTimer::singleShot(1800, m_embedHost, [this] { m_embedHost->showOverlay(false); });
 }

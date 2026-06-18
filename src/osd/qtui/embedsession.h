@@ -46,6 +46,7 @@ enum class EmbedCommand
 	Paste,
 	MountImage,       // sval = device brief name, sval2 = file path
 	UnloadImage,      // sval = device brief name
+	SetSlot,          // sval = slot name, sval2 = option value ("" = none); triggers hard reset
 	Exit
 };
 
@@ -66,6 +67,17 @@ struct EmbedImage
 	std::string label;      // human label, e.g. "Floppy Disk 1 [flop1]"
 	std::string filename;   // current image basename, "" if empty
 	bool        loaded = false;
+};
+
+// A user-configurable device slot on the live machine.  Changing the selected
+// option requires a reconfigure (hard reset), so this snapshot is published at
+// machine init (slots don't change mid-run).
+struct EmbedSlot
+{
+	std::string name;                  // slot_name(), the emu_options key — command key
+	std::string current;               // currently selected option value ("" = none)
+	std::string defaultOption;         // the slot's default option name
+	std::vector<std::string> options;  // selectable option values (excluding "(none)")
 };
 
 //============================================================
@@ -110,6 +122,19 @@ public:
 
 	unsigned imagesGeneration() const { return m_imagesGen.load(std::memory_order_relaxed); }
 
+	// Slot-device snapshot (published at machine init, read by the GUI's Slots menu).
+	void publishSlots(std::vector<EmbedSlot> list)
+	{
+		std::lock_guard<std::mutex> lk(m_slotMutex);
+		m_slots = std::move(list);
+	}
+
+	std::vector<EmbedSlot> slotsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_slotMutex);
+		return m_slots;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -121,6 +146,9 @@ private:
 	mutable std::mutex m_imgMutex;
 	std::vector<EmbedImage> m_images;
 	std::atomic<unsigned> m_imagesGen{0};
+
+	mutable std::mutex m_slotMutex;
+	std::vector<EmbedSlot> m_slots;
 };
 
 } // namespace osd::qtui

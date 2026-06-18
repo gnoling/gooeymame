@@ -127,7 +127,8 @@ private:
 	void buildMachineMenu();
 	void populateMachineMenu(QMenu *menu);       // fill a Machine menu (main bar or detached window)
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
-	void showMediaOverlay();                     // brief "Changing media…" overlay over the reset/reload gap
+	void rebuildSlotsMenu(QMenu *menu);          // (re)populate the Slots submenu from the live slot snapshot
+	void showReloadOverlay(const QString &message); // brief overlay over a media/slot reset gap
 	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
 	void setMachineControlsActive(bool active);
 	void updateEmbedStatus();                    // sync the Pause check from the live machine
