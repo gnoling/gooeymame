@@ -571,6 +571,34 @@ bool qtui_write_options(
 	core_guard guard;
 
 	sdl_options options;
+
+	// Find the mame.ini that is actually loaded, by searching the *default*
+	// inipath (the search MAME itself uses on startup) before parse_standard_inis
+	// overwrites inipath with the value the file contains.  We must write back to
+	// that same file; otherwise the new mame.ini lands in a directory that is
+	// searched later and gets shadowed by the one in effect, so edits silently
+	// have no effect.
+	std::string load_path;
+	{
+		std::string const search = options.ini_path();
+		std::string::size_type pos = 0;
+		while (pos <= search.size())
+		{
+			std::string::size_type const sep = search.find(';', pos);
+			std::string const dir = search.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
+			pos = (sep == std::string::npos) ? search.size() + 1 : sep + 1;
+			if (dir.empty())
+				continue;
+			std::filesystem::path const candidate = std::filesystem::path(dir) / "mame.ini";
+			std::error_code ec;
+			if (std::filesystem::exists(candidate, ec))
+			{
+				load_path = candidate.string();
+				break;
+			}
+		}
+	}
+
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors);
 
@@ -581,18 +609,32 @@ bool qtui_write_options(
 			e->set_value(std::string(change.second), OPTION_PRIORITY_HIGH);
 	}
 
-	// Write the full ini to the first configured ini directory.
-	std::string dir;
-	if (options.value("inipath"))
+	// Prefer the file we loaded; otherwise create and use the first configured
+	// ini directory (the directory may not exist yet, so create it like the
+	// per-machine writer does).
+	std::string path = load_path;
+	if (path.empty())
 	{
-		std::string const inipath = options.value("inipath");
-		std::string::size_type const sep = inipath.find(';');
-		dir = (sep == std::string::npos) ? inipath : inipath.substr(0, sep);
+		std::string dir;
+		if (options.value("inipath"))
+		{
+			std::string const inipath = options.value("inipath");
+			std::string::size_type const sep = inipath.find(';');
+			dir = (sep == std::string::npos) ? inipath : inipath.substr(0, sep);
+		}
+		if (dir.empty())
+			dir = ".";
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+		path = dir + "/mame.ini";
 	}
-	if (dir.empty())
-		dir = ".";
-
-	std::string const path = dir + "/mame.ini";
+	else
+	{
+		std::error_code ec;
+		std::filesystem::path const parent = std::filesystem::path(path).parent_path();
+		if (!parent.empty())
+			std::filesystem::create_directories(parent, ec);
+	}
 
 	std::ofstream file(path, std::ios::out | std::ios::trunc);
 	if (!file.is_open())
