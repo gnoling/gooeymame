@@ -9,6 +9,7 @@
 #include "gamelistproxy.h"
 
 #include "gamelistmodel.h"
+#include "naturalsort.h"
 
 
 namespace osd::qtui {
@@ -18,6 +19,15 @@ GameListProxy::GameListProxy(QObject *parent) :
 {
 	setSortCaseSensitivity(Qt::CaseInsensitive);
 	setSortLocaleAware(true);
+}
+
+bool GameListProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+	QVariant const l = left.data(sortRole());
+	QVariant const r = right.data(sortRole());
+	if (l.typeId() == QMetaType::QString && r.typeId() == QMetaType::QString)
+		return naturalCompare(l.toString(), r.toString()) < 0;
+	return QSortFilterProxyModel::lessThan(left, right);
 }
 
 void GameListProxy::setFolderFilter(const FolderFilter &filter)

@@ -8,6 +8,8 @@
 
 #include "familytreemodel.h"
 
+#include "naturalsort.h"
+
 
 namespace osd::qtui {
 
@@ -174,6 +176,15 @@ bool TreeFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceP
 	return m_flatProxy->mapFromSource(m_flatModel->index(row, 0)).isValid();
 }
 
+bool TreeFilterProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+	QVariant const l = left.data(sortRole());
+	QVariant const r = right.data(sortRole());
+	if (l.typeId() == QMetaType::QString && r.typeId() == QMetaType::QString)
+		return naturalCompare(l.toString(), r.toString()) < 0;
+	return QSortFilterProxyModel::lessThan(left, right);
+}
+
 
 //============================================================
 //  RepresentativeProxy
@@ -197,6 +208,15 @@ bool RepresentativeProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sou
 		return false;
 	// Defer the remaining filters to the flat proxy's acceptance of this row.
 	return m_flatProxy->mapFromSource(m_source->index(sourceRow, 0, sourceParent)).isValid();
+}
+
+bool RepresentativeProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+	QVariant const l = left.data(sortRole());
+	QVariant const r = right.data(sortRole());
+	if (l.typeId() == QMetaType::QString && r.typeId() == QMetaType::QString)
+		return naturalCompare(l.toString(), r.toString()) < 0;
+	return QSortFilterProxyModel::lessThan(left, right);
 }
 
 } // namespace osd::qtui

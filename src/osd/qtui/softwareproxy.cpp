@@ -8,6 +8,7 @@
 
 #include "softwareproxy.h"
 
+#include "naturalsort.h"
 #include "softwaremodel.h"
 
 
@@ -18,6 +19,15 @@ SoftwareProxy::SoftwareProxy(QObject *parent) :
 {
 	setSortCaseSensitivity(Qt::CaseInsensitive);
 	setSortLocaleAware(true);
+}
+
+bool SoftwareProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
+{
+	QVariant const l = left.data(sortRole());
+	QVariant const r = right.data(sortRole());
+	if (l.typeId() == QMetaType::QString && r.typeId() == QMetaType::QString)
+		return naturalCompare(l.toString(), r.toString()) < 0;
+	return QSortFilterProxyModel::lessThan(left, right);
 }
 
 void SoftwareProxy::setSearchText(const QString &text)

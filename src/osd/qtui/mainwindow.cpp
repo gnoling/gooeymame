@@ -1078,6 +1078,7 @@ void MainWindow::createWidgets()
 	m_softwareView->setSelectionBehavior(QAbstractItemView::SelectRows);
 	m_softwareView->setSelectionMode(QAbstractItemView::SingleSelection);
 	m_softwareView->setSortingEnabled(true);
+	m_softwareView->sortByColumn(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_softwareView->setAlternatingRowColors(true);
 	m_softwareView->setShowGrid(false);
 	m_softwareView->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -1125,6 +1126,7 @@ void MainWindow::createWidgets()
 	m_softwareTree->setSelectionBehavior(QAbstractItemView::SelectRows);
 	m_softwareTree->setSelectionMode(QAbstractItemView::SingleSelection);
 	m_softwareTree->setSortingEnabled(true);
+	m_softwareTree->sortByColumn(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_softwareTree->setAlternatingRowColors(true);
 	m_softwareTree->setUniformRowHeights(true);
 	m_softwareTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
