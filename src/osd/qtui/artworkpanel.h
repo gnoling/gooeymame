@@ -65,8 +65,9 @@ public:
 	// Show artwork for a system (by short name).
 	void setSystem(const QString &shortName);
 
-	// Show artwork for a software item from a system's software list.
-	void setSoftware(const QString &list, const QString &software);
+	// Show artwork for a software item from a system's software list.  `parent`
+	// is the clone parent (cloneof) short name, "" for a parent item.
+	void setSoftware(const QString &list, const QString &software, const QString &parent = QString());
 
 	// Re-apply art scaling settings to the visible image (after Options changes).
 	void reloadScaling();
@@ -90,11 +91,16 @@ private slots:
 private:
 	enum class Mode { System, Software };
 	enum Layout { Split = 0, ArtOnly, InfoOnly, GameOnly, GameArt, GameInfo };
-	enum TabKind { KindImage, KindText, KindVideo, KindSoundtrack, KindManual };
+	enum TabKind { KindImage, KindText, KindVideo, KindSoundtrack, KindManual, KindMusic };
 
 	void refresh();          // invalidate all tabs and (re)load the visible ones
 	void applyLayout(int layout);
 	void loadTab(int index); // load one tab by index into m_views
+	// Append fallback candidates from the optional secondary media root
+	// (folders/secondaryRoot, laid out <root>/<key>/<list>/<sw>.<ext>) for the
+	// current item.  No-op when the root is unset.  `key` is the art-type key.
+	void addSecondaryCandidates(QVector<QPair<QString, QString>> &candidates,
+			const QString &key, const QString &ext) const;
 	void rescale(int index);
 	int indexOfView(QWidget *view) const;
 	void loadVisible(QTabWidget *group);
@@ -121,8 +127,11 @@ private:
 	ArtLoader *m_loader = nullptr;
 	InfoLoader *m_info = nullptr;
 	VideoTab *m_videoTab = nullptr;
+	VideoTab *m_advertTab = nullptr;
 	SoundtrackTab *m_soundtrackTab = nullptr;
+	SoundtrackTab *m_musicTab = nullptr;
 	ManualTab *m_manualTab = nullptr;
+	ManualTab *m_mapTab = nullptr;
 	std::vector<Tab> m_views;
 	int m_layout = Split;
 	QWidget *m_gameWidget = nullptr;   // embedded game surface (when playing in-pane)
@@ -132,6 +141,7 @@ private:
 	QString m_system;
 	QString m_swList;
 	QString m_swName;
+	QString m_swParent;   // clone parent short name ("" if a parent)
 	quint64 m_epoch = 0;
 };
 

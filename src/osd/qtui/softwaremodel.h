@@ -108,6 +108,9 @@ public:
 	// Software list name for a row, e.g. "nes", or empty if out of range.
 	QString listForRow(int row) const;
 
+	// Clone parent short name for a row (cloneof), or empty if this is a parent.
+	QString parentForRow(int row) const;
+
 	int rowCount(const QModelIndex &parent = QModelIndex()) const override;
 	int columnCount(const QModelIndex &parent = QModelIndex()) const override;
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
@@ -143,7 +146,7 @@ private:
 
 	// Grid thumbnails: ordered art-type sources (each = software _SL path +
 	// host-machine fallback path), primary first.
-	struct ThumbSource { QString swPath; QString machinePath; };
+	struct ThumbSource { QString swPath; QString machinePath; QString swKey; QString machineKey; };
 	ThumbnailLoader *m_thumbLoader = nullptr;
 	QVector<ThumbSource> m_thumbChain;
 	bool m_thumbFamily = true;

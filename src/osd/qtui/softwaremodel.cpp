@@ -273,14 +273,18 @@ void SoftwareModel::setThumbnailSources(const QVector<QPair<QString, QString>> &
 	for (const auto &pair : keys)
 	{
 		ThumbSource src;
+		src.swKey = pair.first;
+		src.machineKey = pair.second;
 		src.swPath = pair.first.isEmpty() ? QString() : frontendFolderPath(pair.first);
 		src.machinePath = pair.second.isEmpty() ? QString() : frontendFolderPath(pair.second);
-		if (!src.swPath.isEmpty() || !src.machinePath.isEmpty())
-			chain.append(src);
+		// Keep the source even if neither primary path is configured: the
+		// secondary media root (resolved at request time) may still supply it.
+		chain.append(src);
 	}
 	bool same = (familyFallback == m_thumbFamily) && (chain.size() == m_thumbChain.size());
 	for (int i = 0; same && i < chain.size(); ++i)
-		same = (chain[i].swPath == m_thumbChain[i].swPath) && (chain[i].machinePath == m_thumbChain[i].machinePath);
+		same = (chain[i].swPath == m_thumbChain[i].swPath) && (chain[i].machinePath == m_thumbChain[i].machinePath)
+				&& (chain[i].swKey == m_thumbChain[i].swKey) && (chain[i].machineKey == m_thumbChain[i].machineKey);
 	if (same)
 		return;
 
@@ -323,7 +327,9 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 					addSw(m_entries[member]);
 
 		// For each art type (primary first): the software _SL images, then the
-		// host-machine image as a last resort for that type.
+		// host-machine image as a last resort for that type; finally the optional
+		// secondary media root (<root>/<key>/<list>/<sw>.png) fills any gaps.
+		QString const secondaryRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
 		ArtCandidates candidates;
 		for (const ThumbSource &src : m_thumbChain)
 		{
@@ -335,6 +341,22 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 				candidates.append({ src.machinePath, m_hostSystem + QStringLiteral(".png") });
 				if (!m_hostParent.isEmpty())
 					candidates.append({ src.machinePath, m_hostParent + QStringLiteral(".png") });
+			}
+			if (!secondaryRoot.isEmpty())
+			{
+				if (!src.swKey.isEmpty())
+				{
+					QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
+					for (const auto &nm : swNames)
+						candidates.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+				}
+				if (!src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
+				{
+					QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
+					candidates.append({ base, m_hostSystem + QStringLiteral(".png") });
+					if (!m_hostParent.isEmpty())
+						candidates.append({ base, m_hostParent + QStringLiteral(".png") });
+				}
 			}
 		}
 		if (!candidates.isEmpty())
@@ -434,6 +456,13 @@ QString SoftwareModel::listForRow(int row) const
 	if (row < 0 || row >= int(m_entries.size()))
 		return QString();
 	return QString::fromStdString(m_entries[row].list);
+}
+
+QString SoftwareModel::parentForRow(int row) const
+{
+	if (row < 0 || row >= int(m_entries.size()))
+		return QString();
+	return QString::fromStdString(m_entries[row].parent);
 }
 
 int SoftwareModel::rowCount(const QModelIndex &parent) const

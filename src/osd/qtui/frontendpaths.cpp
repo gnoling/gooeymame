@@ -54,6 +54,27 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 	{ "topscores",  "Top scores (MARP scores3.htm)", true },
 	{ "manuals",    "Manuals (folder or .zip of PDFs)",        false },
 	{ "manuals_sl", "Software manuals (folder or .zip of PDFs)", false },
+	// Extended software-list art sets (tools/optimize-sl-media.py output).  Each
+	// may be set individually, or left blank to resolve from the secondary root.
+	{ "box_sl",       "Software box (2D front)",   false },
+	{ "box3d_sl",     "Software box (3D)",         false },
+	{ "boxback_sl",   "Software box (back)",       false },
+	{ "boxfull_sl",   "Software box (full)",       false },
+	{ "boxspine_sl",  "Software box (spine)",      false },
+	{ "cart_sl",      "Software cartridge",        false },
+	{ "cart3d_sl",    "Software cartridge (3D)",   false },
+	{ "carttop_sl",   "Software cartridge (top)",  false },
+	{ "background_sl", "Software backgrounds",     false },
+	{ "logos_sl",     "Software logos",            false },
+	{ "banner_sl",    "Software banners",          false },
+	{ "marquees_sl",  "Software marquees",         false },
+	{ "advertimg_sl", "Software advert images",    false },
+	{ "advert_sl",    "Software advert videos",    false },
+	{ "maps_sl",      "Software maps (folder of PDFs)", false },
+	{ "music_sl",     "Software music",            false },
+	// Fallback art root (tools/optimize-sl-media.py output): consulted only when
+	// the primary source above has nothing.  Layout <root>/<key>/<list>/<sw>.png.
+	{ "secondaryRoot", "Secondary media root (title-matched fallback)", false },
 };
 
 const std::size_t FRONTEND_FOLDER_COUNT = sizeof(FRONTEND_FOLDERS) / sizeof(FRONTEND_FOLDERS[0]);
@@ -65,8 +86,14 @@ const ThumbnailSource THUMBNAIL_SOURCES[] =
 	{ "Cover",    "",           "covers"    },
 	{ "Flyer",    "flyers",     ""          },
 	{ "Cabinet",  "cabinets",   ""          },
-	{ "Marquee",  "marquees",   ""          },
+	{ "Marquee",  "marquees",   "marquees_sl" },
 	{ "Artwork",  "artpreview", "artpreview"},
+	// Software-list art from the secondary media root (optimize-sl-media.py).
+	{ "Box",      "",           "box_sl"    },
+	{ "Box 3D",   "",           "box3d_sl"  },
+	{ "Cart",     "",           "cart_sl"   },
+	{ "Logo",     "logos",      "logos_sl"  },
+	{ "Banner",   "",           "banner_sl" },
 };
 
 const std::size_t THUMBNAIL_SOURCE_COUNT = sizeof(THUMBNAIL_SOURCES) / sizeof(THUMBNAIL_SOURCES[0]);

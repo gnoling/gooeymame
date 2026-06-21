@@ -1846,9 +1846,10 @@ void MainWindow::onSoftwareSelectionChanged()
 	{
 		QString const list = m_softwareModel->listForRow(sourceRow);
 		QString const software = m_softwareModel->shortNameForRow(sourceRow);
+		QString const parent = m_softwareModel->parentForRow(sourceRow);
 		if (!list.isEmpty() && !software.isEmpty())
 		{
-			m_artwork->setSoftware(list, software);
+			m_artwork->setSoftware(list, software, parent);
 			return;
 		}
 	}

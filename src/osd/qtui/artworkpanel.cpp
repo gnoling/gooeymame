@@ -47,13 +47,24 @@ const ImageDef kImageTabs[] =
 	{ "Title",         "titles",    "titles_sl" },
 	{ "Flyer",         "flyers",    ""          },
 	{ "Cabinet",       "cabinets",  ""          },
-	{ "Marquee",       "marquees",  ""          },
+	{ "Marquee",       "marquees",  "marquees_sl" },
 	{ "Control Panel", "cpanel",    ""          },
 	{ "PCB",           "pcb",       ""          },
 	{ "Cover",         "",          "covers"    },
 	{ "Boss",          "bosses",    ""          },
-	{ "Logo",          "logos",     ""          },
+	{ "Logo",          "logos",     "logos_sl"  },
 	{ "Artwork",       "artpreview","artpreview"},
+	// Software-list art, resolved from the secondary media root when present.
+	{ "Box",           "",          "box_sl"       },
+	{ "Box 3D",        "",          "box3d_sl"     },
+	{ "Box Back",      "",          "boxback_sl"   },
+	{ "Box Full",      "",          "boxfull_sl"   },
+	{ "Cart",          "",          "cart_sl"      },
+	{ "Cart 3D",       "",          "cart3d_sl"    },
+	{ "Cart Top",      "",          "carttop_sl"   },
+	{ "Background",    "",          "background_sl"},
+	{ "Banner",        "",          "banner_sl"    },
+	{ "Advert Art",    "",          "advertimg_sl" },
 	{ "Select",        "select",    ""          },
 	{ "Versus",        "versus",    ""          },
 	{ "Score",         "scores",    ""          },
@@ -94,18 +105,35 @@ const char *const kVideoExtensions[] = { ".mp4", ".mkv", ".avi", ".webm" };
 // Audio formats found in soundtrack folders.
 const char *const kAudioFilters[] = { "*.mp3", "*.flac", "*.ogg", "*.opus", "*.m4a", "*.wav" };
 
-// Return base/stem.<ext> for the first container that exists on disk, else "".
-QString resolveVideo(const QString &base, const QString &stem)
+// Single-track audio formats for the per-game Music tab.
+const char *const kMusicExtensions[] = { ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav" };
+
+// Return base/stem.<ext> for the first file that exists, trying `extensions`.
+QString resolveByExt(const QString &base, const QString &stem,
+		const char *const *extensions, std::size_t count)
 {
 	if (base.isEmpty() || stem.isEmpty())
 		return QString();
-	for (const char *ext : kVideoExtensions)
+	for (std::size_t i = 0; i < count; ++i)
 	{
-		QString const path = base + QLatin1Char('/') + stem + QString::fromLatin1(ext);
+		QString const path = base + QLatin1Char('/') + stem + QString::fromLatin1(extensions[i]);
 		if (QFileInfo::exists(path))
 			return path;
 	}
 	return QString();
+}
+
+// Return base/stem.<ext> for the first container that exists on disk, else "".
+QString resolveVideo(const QString &base, const QString &stem)
+{
+	return resolveByExt(base, stem, kVideoExtensions,
+			sizeof(kVideoExtensions) / sizeof(kVideoExtensions[0]));
+}
+
+QString resolveAudio(const QString &base, const QString &stem)
+{
+	return resolveByExt(base, stem, kMusicExtensions,
+			sizeof(kMusicExtensions) / sizeof(kMusicExtensions[0]));
 }
 
 // List the audio tracks in base/folder (sorted), or empty if the dir is absent.
@@ -192,13 +220,28 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	}
 
 	// Multimedia tabs sit alongside the images, just after the Snapshot tab.
+	// Video keys are carried on the Tab (like images) so each video tab resolves
+	// its own source: the main snap (videosnaps/_sl) and the advert clip (advert_sl,
+	// from the secondary media root only).
 	m_videoTab = new VideoTab(m_artTabs);
 	m_artTabs->insertTab(1, m_videoTab, tr("Video"));
-	m_views.push_back({ KindVideo, QString(), QString(), 0, m_videoTab, false, QPixmap() });
+	m_views.push_back({ KindVideo, QStringLiteral("videosnaps"), QStringLiteral("videosnaps_sl"),
+			0, m_videoTab, false, QPixmap() });
+
+	m_advertTab = new VideoTab(m_artTabs);
+	m_artTabs->insertTab(2, m_advertTab, tr("Advert"));
+	m_views.push_back({ KindVideo, QString(), QStringLiteral("advert_sl"),
+			0, m_advertTab, false, QPixmap() });
 
 	m_soundtrackTab = new SoundtrackTab(m_artTabs);
-	m_artTabs->insertTab(2, m_soundtrackTab, tr("Soundtrack"));
+	m_artTabs->insertTab(3, m_soundtrackTab, tr("Soundtrack"));
 	m_views.push_back({ KindSoundtrack, QString(), QString(), 0, m_soundtrackTab, false, QPixmap() });
+
+	// Per-game music: a single audio file (music_sl, secondary root) in the same
+	// player UI as the soundtrack list.
+	m_musicTab = new SoundtrackTab(m_artTabs);
+	m_artTabs->insertTab(4, m_musicTab, tr("Music"));
+	m_views.push_back({ KindMusic, QString(), QStringLiteral("music_sl"), 0, m_musicTab, false, QPixmap() });
 
 	m_infoTabs = new QTabWidget(this);
 	for (const InfoDef &def : kInfoTabs)
@@ -210,11 +253,17 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	}
 
 #ifndef QTUI_NO_PDF
-	// Manual tab: a PDF viewer (manuals / manuals_SL).  Omitted on platforms
-	// without Qt PDF (e.g. MSYS2 MinGW64, which has no qt6-pdf package).
+	// PDF tabs: a manual (manuals / manuals_SL) and a game map (maps_sl, secondary
+	// root).  Omitted on platforms without Qt PDF (e.g. MSYS2 MinGW64).  Keys are
+	// carried on the Tab so each viewer resolves its own document.
 	m_manualTab = new ManualTab(m_infoTabs);
 	m_infoTabs->addTab(m_manualTab, tr("Manual"));
-	m_views.push_back({ KindManual, QString(), QString(), 0, m_manualTab, false, QPixmap() });
+	m_views.push_back({ KindManual, QStringLiteral("manuals"), QStringLiteral("manuals_sl"),
+			0, m_manualTab, false, QPixmap() });
+
+	m_mapTab = new ManualTab(m_infoTabs);
+	m_infoTabs->addTab(m_mapTab, tr("Map"));
+	m_views.push_back({ KindManual, QString(), QStringLiteral("maps_sl"), 0, m_mapTab, false, QPixmap() });
 #endif
 
 	connect(m_artTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
@@ -287,13 +336,14 @@ void ArtworkPanel::setSystem(const QString &shortName)
 	refresh();
 }
 
-void ArtworkPanel::setSoftware(const QString &list, const QString &software)
+void ArtworkPanel::setSoftware(const QString &list, const QString &software, const QString &parent)
 {
 	if (m_mode == Mode::Software && list == m_swList && software == m_swName)
 		return;
 	m_mode = Mode::Software;
 	m_swList = list;
 	m_swName = software;
+	m_swParent = parent;
 	refresh();
 }
 
@@ -368,10 +418,13 @@ void ArtworkPanel::detachGame()
 
 void ArtworkPanel::stopAllMedia()
 {
-	if (m_videoTab)
-		m_videoTab->stop();
-	if (m_soundtrackTab)
-		m_soundtrackTab->stop();
+	for (const Tab &tab : m_views)
+	{
+		if (tab.kind == KindVideo)
+			static_cast<VideoTab *>(tab.view)->stop();
+		else if (tab.kind == KindSoundtrack || tab.kind == KindMusic)
+			static_cast<SoundtrackTab *>(tab.view)->stop();
+	}
 }
 
 void ArtworkPanel::stopOtherMedia(int keepIndex)
@@ -381,9 +434,9 @@ void ArtworkPanel::stopOtherMedia(int keepIndex)
 		if (i == keepIndex)
 			continue;
 		if (m_views[i].kind == KindVideo)
-			m_videoTab->stop();
-		else if (m_views[i].kind == KindSoundtrack)
-			m_soundtrackTab->stop();
+			static_cast<VideoTab *>(m_views[i].view)->stop();
+		else if (m_views[i].kind == KindSoundtrack || m_views[i].kind == KindMusic)
+			static_cast<SoundtrackTab *>(m_views[i].view)->stop();
 	}
 }
 
@@ -430,6 +483,32 @@ void ArtworkPanel::loadCurrent()
 		loadVisible(m_infoTabs);
 }
 
+void ArtworkPanel::addSecondaryCandidates(
+		QVector<QPair<QString, QString>> &candidates, const QString &key, const QString &ext) const
+{
+	if (key.isEmpty())
+		return;
+	QString const root = frontendFolderPath(QStringLiteral("secondaryRoot"));
+	if (root.isEmpty())
+		return;
+	QString const base = root + QLatin1Char('/') + key;
+	if (m_mode == Mode::Software)
+	{
+		if (m_swList.isEmpty() || m_swName.isEmpty())
+			return;
+		candidates.append({ base, m_swList + QLatin1Char('/') + m_swName + ext });
+		if (!m_swParent.isEmpty())
+			candidates.append({ base, m_swList + QLatin1Char('/') + m_swParent + ext });
+	}
+	else if (!m_system.isEmpty())
+	{
+		candidates.append({ base, m_system + ext });
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		if (!parent.empty())
+			candidates.append({ base, QString::fromStdString(parent) + ext });
+	}
+}
+
 void ArtworkPanel::loadTab(int index)
 {
 	if (index < 0 || index >= int(m_views.size()))
@@ -442,26 +521,38 @@ void ArtworkPanel::loadTab(int index)
 		if (tab.kind == KindImage)
 			rescale(index);
 		else if (tab.kind == KindVideo)
-			m_videoTab->resume();
-		else if (tab.kind == KindSoundtrack)
-			m_soundtrackTab->play();
+		{
+			if (VideoTab *const video = static_cast<VideoTab *>(tab.view))
+				video->resume();
+		}
+		else if (tab.kind == KindSoundtrack || tab.kind == KindMusic)
+			static_cast<SoundtrackTab *>(tab.view)->play();
 		return;
 	}
 	tab.loaded = true;
 
-	// Video snap tab: resolve a loose file (software first, machine fallback).
+	// Video tab: resolve a loose file (software first, machine fallback, then the
+	// secondary media root).  Keys come from the Tab so each video tab (snap,
+	// advert) resolves independently.
 	if (tab.kind == KindVideo)
 	{
-		QString const base = frontendFolderPath(QStringLiteral("videosnaps"));
-		QString const slBase = frontendFolderPath(QStringLiteral("videosnaps_sl"));
-		if (base.isEmpty() && slBase.isEmpty())
-		{
-			m_videoTab->setFile(QString(), tr("Video folder not configured."));
-			return;
-		}
+		VideoTab *const video = static_cast<VideoTab *>(tab.view);
+		QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
+		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+		QString const secBase = (tab.swKey.isEmpty() || frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty())
+				? QString()
+				: frontendFolderPath(QStringLiteral("secondaryRoot")) + QLatin1Char('/') + tab.swKey;
+
 		QString path;
-		if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
-			path = resolveVideo(slBase, m_swList + QLatin1Char('/') + m_swName);
+		auto trySoftware = [&] (const QString &dir) {
+			if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+			{
+				path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swName);
+				if (path.isEmpty() && !m_swParent.isEmpty())
+					path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swParent);
+			}
+		};
+		trySoftware(slBase);
 		if (path.isEmpty() && !base.isEmpty() && !m_system.isEmpty())
 		{
 			path = resolveVideo(base, m_system);
@@ -472,7 +563,8 @@ void ArtworkPanel::loadTab(int index)
 					path = resolveVideo(base, QString::fromStdString(parent));
 			}
 		}
-		m_videoTab->setFile(path, tr("No video for this item."));
+		trySoftware(secBase);   // secondary media root last
+		video->setFile(path, tr("No video for this item."));
 		return;
 	}
 
@@ -496,21 +588,53 @@ void ArtworkPanel::loadTab(int index)
 		return;
 	}
 
-	// Manual tab: resolve a PDF (software first, then machine + clone parent).
+	// Music tab: a single per-game audio file (software + clone parent + secondary).
+	if (tab.kind == KindMusic)
+	{
+		SoundtrackTab *const music = static_cast<SoundtrackTab *>(tab.view);
+		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+		QString const secBase = (tab.swKey.isEmpty() || frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty())
+				? QString()
+				: frontendFolderPath(QStringLiteral("secondaryRoot")) + QLatin1Char('/') + tab.swKey;
+
+		QString path;
+		auto trySoftware = [&] (const QString &dir) {
+			if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+			{
+				path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swName);
+				if (path.isEmpty() && !m_swParent.isEmpty())
+					path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swParent);
+			}
+		};
+		trySoftware(slBase);
+		trySoftware(secBase);
+		music->setTracks(path.isEmpty() ? QStringList() : QStringList{ path },
+				tr("No music for this item."));
+		return;
+	}
+
+	// PDF tab (Manual / Map): resolve a PDF (software first, then machine + clone
+	// parent, then the secondary root).  Keys come from the Tab.
 #ifndef QTUI_NO_PDF
 	if (tab.kind == KindManual)
 	{
-		QString const base = frontendFolderPath(QStringLiteral("manuals"));
-		QString const slBase = frontendFolderPath(QStringLiteral("manuals_sl"));
-		if (base.isEmpty() && slBase.isEmpty())
+		ManualTab *const pdf = static_cast<ManualTab *>(tab.view);
+		QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
+		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+		bool const haveSecondary = !frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty();
+		if (base.isEmpty() && slBase.isEmpty() && !haveSecondary)
 		{
-			m_manualTab->setMessage(tr("Manuals folder not configured."));
+			pdf->setMessage(tr("Folder not configured."));
 			return;
 		}
 
 		ArtCandidates candidates;
 		if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
+		{
 			candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".pdf") });
+			if (!m_swParent.isEmpty())
+				candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".pdf") });
+		}
 		if (!base.isEmpty() && !m_system.isEmpty())
 		{
 			candidates.append({ base, m_system + QStringLiteral(".pdf") });
@@ -519,12 +643,15 @@ void ArtworkPanel::loadTab(int index)
 				candidates.append({ base, QString::fromStdString(parent) + QStringLiteral(".pdf") });
 		}
 
+		addSecondaryCandidates(candidates,
+				m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".pdf"));
+
 		if (candidates.isEmpty())
 		{
-			m_manualTab->setMessage(tr("No manual"));
+			pdf->setMessage(tr("Not available"));
 			return;
 		}
-		m_manualTab->setMessage(tr("Loading…"));
+		pdf->setMessage(tr("Loading…"));
 		m_loader->request(m_epoch, index, candidates);
 		return;
 	}
@@ -591,7 +718,13 @@ void ArtworkPanel::loadTab(int index)
 		{
 			QString const path = frontendFolderPath(tab.swKey);
 			if (!path.isEmpty())
+			{
 				candidates.append({ path, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".png") });
+				// Fall back to the software clone parent: variants often share art,
+				// and the media optimizer prunes a clone's copy when it matches.
+				if (!m_swParent.isEmpty())
+					candidates.append({ path, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".png") });
+			}
 		}
 		addSystemArt();   // machine fallback
 	}
@@ -599,6 +732,10 @@ void ArtworkPanel::loadTab(int index)
 	{
 		addSystemArt();
 	}
+
+	// Secondary media root fills gaps the primary sources don't cover.
+	addSecondaryCandidates(candidates,
+			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".png"));
 
 	if (candidates.isEmpty())
 	{
@@ -617,11 +754,11 @@ void ArtworkPanel::onLoaded(quint64 epoch, int tab, const QByteArray &bytes)
 
 	Tab &t = m_views[tab];
 
-	// Manuals are PDFs, not images: hand the bytes to the viewer.
+	// Manuals/maps are PDFs, not images: hand the bytes to that tab's viewer.
 #ifndef QTUI_NO_PDF
 	if (t.kind == KindManual)
 	{
-		m_manualTab->setPdf(bytes);
+		static_cast<ManualTab *>(t.view)->setPdf(bytes);
 		return;
 	}
 #endif
