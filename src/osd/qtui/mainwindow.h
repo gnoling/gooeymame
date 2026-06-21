@@ -59,6 +59,13 @@ class SoftwareModel;
 class SoftwareProxy;
 class TreeFilterProxy;
 
+// Apply the persisted Qt widget style (QSettings appearance/style) at startup,
+// recording the platform default first so it can be restored.  Call once after
+// QApplication is constructed and the QSettings format is chosen.
+void applyPersistedStyle();
+// The widget style in effect before any user override (the platform default).
+QString defaultStyleName();
+
 //============================================================
 //  The main MAMEUI browser window.
 //============================================================
@@ -145,6 +152,7 @@ private:
 
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
+	void applyStyle(const QString &name);   // set + persist the Qt widget style ("" = default)
 
 	// List / Grouped / Grid view modes (per pane).
 	enum ViewMode { ViewList = 0, ViewGrouped = 1, ViewGrid = 2, ViewGridGrouped = 3 };
@@ -270,6 +278,7 @@ private:
 	QAction *m_softwareAuditAct = nullptr;
 	QActionGroup *m_iconSizeGroup = nullptr;
 	QActionGroup *m_layoutGroup = nullptr;
+	QActionGroup *m_styleGroup = nullptr;
 	AuditManager *m_audit = nullptr;
 	SoftwareAuditManager *m_softwareAudit = nullptr;
 	SoftwareLoader *m_softwareLoader = nullptr;

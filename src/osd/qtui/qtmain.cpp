@@ -75,6 +75,9 @@ int main(int argc, char *argv[])
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 #endif
 
+	// Apply the user's chosen Qt widget style (if any) before building the UI.
+	osd::qtui::applyPersistedStyle();
+
 	osd::qtui::MainWindow window;
 	window.show();
 

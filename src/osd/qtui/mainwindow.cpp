@@ -38,6 +38,8 @@
 #include <QtGui/QCloseEvent>
 #include <QtGui/QGuiApplication>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QStyle>
+#include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -62,6 +64,28 @@
 
 
 namespace osd::qtui {
+
+// The platform's default widget style, captured before any user override so the
+// "System default" choice can restore it.
+static QString g_defaultStyleName;
+
+QString defaultStyleName()
+{
+	return g_defaultStyleName;
+}
+
+void applyPersistedStyle()
+{
+	if (QStyle *const current = QApplication::style())
+		g_defaultStyleName = current->name();
+
+	QString const saved = QSettings().value(QStringLiteral("appearance/style")).toString();
+	if (!saved.isEmpty())
+	{
+		if (QStyle *const style = QStyleFactory::create(saved))
+			QApplication::setStyle(style);   // takes ownership
+	}
+}
 
 namespace {
 
@@ -616,6 +640,33 @@ void MainWindow::createMenus()
 			applyIconSize(size);
 			QSettings().setValue(QStringLiteral("mainwindow/iconSize"), size);
 		});
+	}
+
+	// Application style: choose the Qt widget style (e.g. Fusion).  On Linux the
+	// native platform theme is usually fine; on Windows the default style looks
+	// dated, so this lets the user switch (Fusion is a clean cross-platform pick).
+	QMenu *styleMenu = viewMenu->addMenu(tr("&Style"));
+	m_styleGroup = new QActionGroup(this);
+	QString const savedStyle = QSettings().value(QStringLiteral("appearance/style")).toString();
+	QString const activeStyle = QApplication::style() ? QApplication::style()->name() : QString();
+	{
+		QAction *act = styleMenu->addAction(tr("System default"));
+		act->setCheckable(true);
+		act->setChecked(savedStyle.isEmpty());
+		m_styleGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this] { applyStyle(QString()); });
+	}
+	styleMenu->addSeparator();
+	for (const QString &key : QStyleFactory::keys())
+	{
+		QAction *act = styleMenu->addAction(key);
+		act->setCheckable(true);
+		// Check the saved style, or (when none saved) the one actually in use.
+		act->setChecked(savedStyle.isEmpty()
+				? key.compare(activeStyle, Qt::CaseInsensitive) == 0
+				: key.compare(savedStyle, Qt::CaseInsensitive) == 0);
+		m_styleGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, key] { applyStyle(key); });
 	}
 
 	// Play mode: how a launched system runs (separate window vs embedded).
@@ -1394,6 +1445,21 @@ void MainWindow::applyIconSize(int size)
 		m_softwareTree->setUniformRowHeights(false);
 		m_softwareTree->setUniformRowHeights(true);
 	}
+}
+
+void MainWindow::applyStyle(const QString &name)
+{
+	// "" = restore the platform default captured at startup and drop the override.
+	QString const target = name.isEmpty() ? defaultStyleName() : name;
+	if (!target.isEmpty())
+	{
+		if (QStyle *const style = QStyleFactory::create(target))
+			QApplication::setStyle(style);   // restyles all live widgets; takes ownership
+	}
+	if (name.isEmpty())
+		QSettings().remove(QStringLiteral("appearance/style"));
+	else
+		QSettings().setValue(QStringLiteral("appearance/style"), name);
 }
 
 QWidget *MainWindow::buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption)
