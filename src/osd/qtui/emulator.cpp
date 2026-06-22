@@ -14,6 +14,7 @@
 
 // OSD headers
 #include "osdsdl.h"
+#include "window.h"   // sdl_window_info (live fullscreen toggle for own-window embed)
 #include "modules/lib/osdlib.h"
 #include "modules/diagnostics/diagnostics_module.h"
 
@@ -270,7 +271,18 @@ private:
 			m.video().save_active_screen_snapshots();
 			break;
 		case EmbedCommand::ToggleFullscreen:
-			break;   // Handled GUI-side (Qt): SDL fullscreen on an attached window is unsafe.
+			// Only posted in own-window mode (no -attach_window); the GUI handles
+			// fullscreen for attached surfaces, where destroy+recreate is unsafe.
+			// Toggle the live SDL window between windowed and fullscreen.
+			for (const auto &win : window_list())
+			{
+				if (osd_window *const w = win.get())
+				{
+					static_cast<sdl_window_info *>(w)->toggle_full_screen();
+					break;
+				}
+			}
+			break;
 		case EmbedCommand::ToggleFps:
 			{
 				auto &ui = mame_machine_manager::instance()->ui();
@@ -515,14 +527,18 @@ int qtui_run_embedded(
 {
 	int res = 0;
 
-	// Force the "C" locale for this thread only (uselocale is per-thread,
-	// unlike setlocale): the MAME ini/number parsers require it, but the Qt GUI
-	// thread keeps running in the user's locale.  See qtui_run_args() for why.
-	// uselocale/newlocale are POSIX (not in MinGW's CRT); embedded play is
-	// X11-only so this path never runs on Windows, but it must still compile.
+	// Force the "C" locale for this thread only: the MAME ini/number parsers
+	// require it, but the Qt GUI thread keeps running in the user's locale (an
+	// embedded run shares the process with the live GUI).  See qtui_run_args().
+	// Unix uses POSIX uselocale; Windows uses per-thread CRT locale (the
+	// own-window embed mode runs this path on Windows too).
 #ifdef SDLMAME_UNIX
 	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
+#elif defined(_WIN32)
+	_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+	std::string const win_prev_locale = std::setlocale(LC_ALL, nullptr);
+	std::setlocale(LC_ALL, "C");
 #endif
 
 #ifdef SDLMAME_UNIX
@@ -535,19 +551,26 @@ int qtui_run_embedded(
 	if (!software.empty())
 		args.push_back(software);
 	args.push_back("-window");
-	args.push_back("-attach_window");
-	args.push_back(std::to_string(attach_window_id));
+	// attach_window_id == 0 means "no attach": MAME opens its OWN window (the
+	// separate-window-with-live-controls mode, which also works on Windows since
+	// it avoids the foreign-window keyboard-focus problem of SDL_CreateWindowFrom).
+	if (attach_window_id != 0)
+	{
+		args.push_back("-attach_window");
+		args.push_back(std::to_string(attach_window_id));
 
-	// MAME's attach path calls SDL_CreateWindowFrom() without flagging the
-	// window for OpenGL, so the GL-based renderers (opengl/accel) abort with
-	// "the specified window isn't an OpenGL window".  SDL's foreign-window hint
-	// fixes that, BUT it must be set only when the renderer actually needs GL:
-	// the software renderer can't get a window surface from a GL-flagged window,
-	// and requesting both GL and Vulkan flags fails outright ("Vulkan and OpenGL
-	// not supported on same window").  So enable the GL flag for everything
-	// except soft/none, and never request the Vulkan flag alongside it.
-	SDL_SetHintWithPriority(SDL_HINT_VIDEO_FOREIGN_WINDOW_OPENGL,
-			qtui_renderer_needs_gl(system) ? "1" : "0", SDL_HINT_OVERRIDE);
+		// MAME's attach path calls SDL_CreateWindowFrom() without flagging the
+		// window for OpenGL, so the GL-based renderers (opengl/accel) abort with
+		// "the specified window isn't an OpenGL window".  SDL's foreign-window hint
+		// fixes that, BUT it must be set only when the renderer actually needs GL:
+		// the software renderer can't get a window surface from a GL-flagged window,
+		// and requesting both GL and Vulkan flags fails outright ("Vulkan and OpenGL
+		// not supported on same window").  So enable the GL flag for everything
+		// except soft/none, and never request the Vulkan flag alongside it.  Only
+		// relevant for a foreign window — MAME's own window is created normally.
+		SDL_SetHintWithPriority(SDL_HINT_VIDEO_FOREIGN_WINDOW_OPENGL,
+				qtui_renderer_needs_gl(system) ? "1" : "0", SDL_HINT_OVERRIDE);
+	}
 
 	{
 		sdl_options options;
@@ -570,6 +593,8 @@ int qtui_run_embedded(
 		uselocale(prev);
 		freelocale(cloc);
 	}
+#elif defined(_WIN32)
+	std::setlocale(LC_ALL, win_prev_locale.c_str());
 #endif
 
 	return res;

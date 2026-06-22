@@ -795,17 +795,19 @@ void MainWindow::createMenus()
 	// Play mode: how a launched system runs (separate window vs embedded).
 	QMenu *playMenu = viewMenu->addMenu(tr("&Play Mode"));
 	m_embedModeGroup = new QActionGroup(this);
-	struct { const char *label; int mode; bool needsEmbed; } const playModes[] = {
-		{ "Separate window", EmbedSeparate, false },
-		{ "Embedded (in-process)", EmbedInProcess, true },
-		{ "Embedded (child process)", EmbedChild, true },
+	struct { const char *label; int mode; } const playModes[] = {
+		{ "Separate window", EmbedSeparate },
+		{ "Separate window (live controls)", EmbedInProcessWindow },
+		{ "Embedded in browser (in-process)", EmbedInProcess },
+		{ "Embedded in browser (child process)", EmbedChild },
 	};
 	for (const auto &choice : playModes)
 	{
 		QAction *act = playMenu->addAction(tr(choice.label));
 		act->setCheckable(true);
 		act->setData(choice.mode);
-		if (choice.needsEmbed && !embeddingSupported())
+		// Only the attach-based (browser-embedded) modes require X11.
+		if (modeNeedsX11(choice.mode) && !embeddingSupported())
 			act->setEnabled(false);
 		m_embedModeGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, mode = choice.mode] { setEmbedMode(mode); });
@@ -813,7 +815,7 @@ void MainWindow::createMenus()
 	if (!embeddingSupported())
 	{
 		playMenu->addSeparator();
-		QAction *note = playMenu->addAction(tr("(embedding needs an X11 session)"));
+		QAction *note = playMenu->addAction(tr("(browser-embedded modes need an X11 session)"));
 		note->setEnabled(false);
 	}
 
@@ -1214,6 +1216,14 @@ void MainWindow::setEmbedFullscreen(bool on)
 	{
 		QSignalBlocker block(a);
 		a->setChecked(on);
+	}
+
+	// Own-window mode: the game is in MAME's own SDL window (not a Qt surface),
+	// so toggle that window's fullscreen via the OSD rather than the Qt window.
+	if (m_embedMode == EmbedInProcessWindow)
+	{
+		postEmbed({ EmbedCommand::ToggleFullscreen, 0.0, 0, {} });
+		return;
 	}
 
 	// A game hosted in its own window: just fullscreen that window.
@@ -2317,7 +2327,7 @@ bool MainWindow::embeddingSupported()
 
 void MainWindow::setEmbedMode(int mode)
 {
-	if (mode != EmbedSeparate && !embeddingSupported())
+	if (modeNeedsX11(mode) && !embeddingSupported())
 		mode = EmbedSeparate;
 	m_embedMode = mode;
 	QSettings().setValue(QStringLiteral("play/embedMode"), mode);
@@ -2423,7 +2433,7 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 			: QStringLiteral("%1 %2").arg(system, software);
 
 	int mode = m_embedMode;
-	if (mode != EmbedSeparate && !embeddingSupported())
+	if (modeNeedsX11(mode) && !embeddingSupported())
 		mode = EmbedSeparate;
 
 	switch (mode)
@@ -2441,6 +2451,10 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 
 	case EmbedInProcess:
 		launchEmbeddedInProcess(label, system, software);
+		return;
+
+	case EmbedInProcessWindow:
+		launchEmbeddedInProcessWindow(label, system, software);
 		return;
 
 	case EmbedSeparate:
@@ -2504,6 +2518,30 @@ void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &sy
 		});
 		// Hide the overlay once MAME has had a moment to put up its first frames.
 		QTimer::singleShot(1500, m_embedHost, [this] { m_embedHost->showOverlay(false); });
+	});
+}
+
+void MainWindow::launchEmbeddedInProcessWindow(const QString &label, const QString &system, const QString &software)
+{
+	if (m_embedSession || m_embedThread.joinable())
+		return;   // a run is already in progress
+
+	// In-process on a worker thread (so the browser + live Machine menu stay
+	// responsive), but with NO -attach_window: MAME opens its own separate
+	// window.  This sidesteps the foreign-window keyboard-focus problem, so it
+	// works on Windows too — no embed surface, no X11 requirement.
+	statusBar()->showMessage(tr("Running %1 (separate window, live controls)…").arg(label));
+	m_playAct->setEnabled(false);
+
+	m_embedSession = std::make_unique<EmbedSession>();
+	setMachineControlsActive(true);
+
+	std::string const sys = system.toStdString();
+	std::string const sw = software.toStdString();
+	EmbedSession *const session = m_embedSession.get();
+	m_embedThread = std::thread([this, sys, sw, session] {
+		int const code = qtui_run_embedded(sys, sw, 0 /* no attach: own window */, *session);
+		QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 	});
 }
 

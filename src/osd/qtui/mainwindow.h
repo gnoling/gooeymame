@@ -110,7 +110,10 @@ private:
 	enum MainLayout { SoftwareBesideArt = 0, SoftwareUnderSystems };
 
 	// How a selected system/software is launched.
-	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2 };
+	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2, EmbedInProcessWindow = 3 };
+	// Attach-based modes (in-process / child) need X11's -attach_window; the
+	// own-window mode does not, so it is available everywhere (incl. Windows).
+	static bool modeNeedsX11(int mode) { return mode == EmbedInProcess || mode == EmbedChild; }
 
 	// Where an embedded game's video surface is shown.  (LocMainPane is retired
 	// but its value is kept so old settings remap cleanly.)  LocBrowser hosts
@@ -123,6 +126,9 @@ private:
 	void launchSystem(const QString &system, const QString &software);
 	void launchEmbeddedChild(const QString &label, const QStringList &mameArgs);
 	void launchEmbeddedInProcess(const QString &label, const QString &system, const QString &software);
+	// In-process on a worker thread, but MAME opens its own separate window (no
+	// attach) — live Machine controls, works on Windows.
+	void launchEmbeddedInProcessWindow(const QString &label, const QString &system, const QString &software);
 	void setEmbedMode(int mode);
 	void setEmbedLocation(int location);
 	// Reparent the embed host into the configured location (pane/dock/window)
