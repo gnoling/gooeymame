@@ -701,6 +701,32 @@ void MainWindow::createMenus()
 		});
 	}
 
+	// Panes: collapse/show the main areas.  Each toggle hides its pane and
+	// persists; the splitters redistribute the freed space.
+	QMenu *panesMenu = viewMenu->addMenu(tr("&Panes"));
+	QSettings paneSettings;
+	struct { const char *label; QAction **act; const char *key; const char *tip; } const panes[] = {
+		{ "&Categories",   &m_actShowFolders, "view/showFolders",
+			"Show the folders/categories list on the left" },
+		{ "&Machine List", &m_actShowSystems, "view/showSystems",
+			"Show the machine list (hide it to give a software list more room)" },
+		{ "&Details",      &m_actShowArtwork, "view/showArtwork",
+			"Show the artwork/info panel on the right" },
+	};
+	for (const auto &p : panes)
+	{
+		QAction *act = panesMenu->addAction(tr(p.label));
+		act->setCheckable(true);
+		act->setChecked(paneSettings.value(QString::fromLatin1(p.key), true).toBool());
+		act->setStatusTip(tr(p.tip));
+		*p.act = act;
+		QString const key = QString::fromLatin1(p.key);
+		connect(act, &QAction::toggled, this, [this, key] (bool on) {
+			QSettings().setValue(key, on);
+			applyPaneVisibility();
+		});
+	}
+
 	QMenu *iconMenu = viewMenu->addMenu(tr("&Icon Size"));
 	m_iconSizeGroup = new QActionGroup(this);
 	struct { const char *label; int size; } const iconSizes[] = {
@@ -1853,6 +1879,21 @@ void MainWindow::applyMainLayout(int layout)
 	m_systemPane->show();
 	m_artwork->show();
 	m_rightSplitter->show();
+
+	// Then honour the user's collapse/show toggles for the main panes.
+	applyPaneVisibility();
+}
+
+void MainWindow::applyPaneVisibility()
+{
+	// Guard: createMenus() builds the toggles before the panes exist on the very
+	// first applyMainLayout(); they're set up together, but be defensive.
+	if (m_actShowFolders && m_folders)
+		m_folders->setVisible(m_actShowFolders->isChecked());
+	if (m_actShowSystems && m_systemPane)
+		m_systemPane->setVisible(m_actShowSystems->isChecked());
+	if (m_actShowArtwork && m_artwork)
+		m_artwork->setVisible(m_actShowArtwork->isChecked());
 }
 
 void MainWindow::setSoftwarePaneVisible(bool visible)
