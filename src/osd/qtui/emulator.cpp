@@ -297,13 +297,19 @@ private:
 				case 270: orient = ROT270; break;
 				default:  orient = ROT0;   break;
 				}
-				// Apply to the game target (skip the UI/menu overlay target).
-				for (render_target *t = m.render().first_target(); t; t = t->next())
+				// The game window's target is what the renderer draws (and is also
+				// the UI target in a single-window run), so set it directly — do NOT
+				// skip is_ui_target() or we'd rotate nothing.  Mirror NEWUI: when it
+				// is the UI target, rotate the UI container too.
+				render_manager &rm = m.render();
+				if (render_target *const t = rm.first_target())
 				{
-					if (!t->is_ui_target())
+					t->set_orientation(orient);
+					if (t->is_ui_target())
 					{
-						t->set_orientation(orient);
-						break;
+						render_container::user_settings s = rm.ui_container().get_user_settings();
+						s.m_orientation = orient;
+						rm.ui_container().set_user_settings(s);
 					}
 				}
 			}
