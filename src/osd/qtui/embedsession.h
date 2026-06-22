@@ -50,6 +50,8 @@ enum class EmbedCommand
 	UnloadImage,      // sval = device brief name
 	SetSlot,          // sval = slot name, sval2 = option value ("" = none); triggers hard reset
 	SetField,         // sval = port tag, mask = field mask, value = chosen setting value (DIP/config)
+	SetView,          // ival = render view index
+	SetVisibility,    // ival = visibility-toggle index, value = 1 enable / 0 disable (bezel/artwork)
 	Exit
 };
 
@@ -98,6 +100,17 @@ struct EmbedSetting
 	std::string current;          // current setting's display name
 	// Selectable settings: (value, display name), enabled ones only.
 	std::vector<std::pair<std::uint32_t, std::string>> options;
+};
+
+// The running machine's render views and the current view's artwork-visibility
+// toggles (bezel/overlay/backdrop/cpanel or named layout collections).
+// Published by the emulation thread for the GUI's Video menu.
+struct EmbedVideo
+{
+	std::vector<std::string> views;     // selectable view names
+	int currentView = -1;               // index into views
+	struct Toggle { std::string name; bool enabled = false; };
+	std::vector<Toggle> toggles;        // current view's visibility toggles (index = command key)
 };
 
 //============================================================
@@ -172,6 +185,19 @@ public:
 
 	unsigned settingsGeneration() const { return m_settingsGen.load(std::memory_order_relaxed); }
 
+	// Render view / artwork-visibility snapshot for the Video menu.
+	void publishVideo(EmbedVideo v)
+	{
+		std::lock_guard<std::mutex> lk(m_videoMutex);
+		m_video = std::move(v);
+	}
+
+	EmbedVideo videoSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_videoMutex);
+		return m_video;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -190,6 +216,9 @@ private:
 	mutable std::mutex m_settingMutex;
 	std::vector<EmbedSetting> m_settings;
 	std::atomic<unsigned> m_settingsGen{0};
+
+	mutable std::mutex m_videoMutex;
+	EmbedVideo m_video;
 };
 
 } // namespace osd::qtui

@@ -1035,6 +1035,12 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 	m_fullscreenActions.append(fullscreen);
 	connect(fullscreen, &QAction::triggered, this, [this] (bool on) { setEmbedFullscreen(on); });
 
+	// Video: switch render view + toggle artwork layers (bezel/overlay/...).
+	// Rebuilt each open from the snapshot the OSD publishes.
+	QMenu *videoMenu = menu->addMenu(tr("&Video"));
+	track(videoMenu->menuAction());
+	connect(videoMenu, &QMenu::aboutToShow, this, [this, videoMenu] { rebuildVideoMenu(videoMenu); });
+
 	menu->addSeparator();
 	QMenu *keyboard = menu->addMenu(tr("&Keyboard"));
 	track(keyboard->menuAction());
@@ -1204,6 +1210,57 @@ void MainWindow::rebuildSettingsMenu(QMenu *menu, bool config)
 		menu->addAction(config
 				? tr("(this machine has no configuration settings)")
 				: tr("(this machine has no DIP switches)"))->setEnabled(false);
+}
+
+void MainWindow::rebuildVideoMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+
+	EmbedVideo const video = m_embedSession->videoSnapshot();
+
+	// Render views (radio): switching changes the whole view (e.g. with/without
+	// bezel for layouts that ship separate views).
+	if (video.views.size() > 1)
+	{
+		menu->addSection(tr("View"));
+		QActionGroup *group = new QActionGroup(menu);
+		for (int i = 0; i < int(video.views.size()); ++i)
+		{
+			QAction *a = menu->addAction(QString::fromStdString(video.views[i]));
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(i == video.currentView);
+			connect(a, &QAction::triggered, this, [this, i] {
+				postEmbed({ EmbedCommand::SetView, 0.0, i, {} });
+			});
+		}
+	}
+
+	// Artwork-visibility toggles for the current view (bezel, overlay, ...).
+	menu->addSection(tr("Artwork"));
+	if (video.toggles.empty())
+	{
+		menu->addAction(tr("(this view has no artwork layers)"))->setEnabled(false);
+		return;
+	}
+	for (int i = 0; i < int(video.toggles.size()); ++i)
+	{
+		QAction *a = menu->addAction(QString::fromStdString(video.toggles[i].name));
+		a->setCheckable(true);
+		a->setChecked(video.toggles[i].enabled);
+		connect(a, &QAction::toggled, this, [this, i] (bool on) {
+			EmbedAction act;
+			act.cmd = EmbedCommand::SetVisibility;
+			act.ival = i;
+			act.value = on ? 1u : 0u;
+			postEmbed(act);
+		});
+	}
 }
 
 void MainWindow::setEmbedFullscreen(bool on)

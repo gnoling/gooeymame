@@ -31,6 +31,7 @@
 #include "ui/ui.h"
 
 #include "drivenum.h"
+#include "rendlay.h"   // layout_view visibility toggles (bezel/artwork)
 #include "softlist_dev.h"
 #include "softlist.h"
 
@@ -222,6 +223,7 @@ public:
 		refresh_images();
 		refresh_slots();
 		refresh_settings();
+		refresh_video();
 	}
 
 	virtual void update(bool skip_redraw) override
@@ -238,8 +240,9 @@ public:
 			{
 				m_imageRefreshTick = 0;
 				refresh_images();
-				// DIP/config can also change via MAME's own Tab UI; keep ours fresh.
+				// DIP/config + render view can also change via MAME's own Tab UI.
 				refresh_settings();
+				refresh_video();
 			}
 		}
 		sdl_osd_interface::update(skip_redraw);
@@ -371,6 +374,22 @@ private:
 				refresh_settings();
 			}
 			break;
+		case EmbedCommand::SetView:
+			if (render_target *const t = m.render().first_target())
+			{
+				t->set_view(unsigned(a.ival));
+				refresh_video();
+			}
+			break;
+		case EmbedCommand::SetVisibility:
+			// Toggle an artwork-visibility layer (bezel/overlay/backdrop or a named
+			// layout collection) on the current view — live, no reset.
+			if (render_target *const t = m.render().first_target())
+			{
+				t->set_visibility_toggle(unsigned(a.ival), a.value != 0);
+				refresh_video();
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -429,6 +448,31 @@ private:
 			}
 		}
 		m_session.publishSettings(std::move(out));
+	}
+
+	// Publish the render views + the current view's artwork-visibility toggles
+	// (bezel/overlay/...) for the GUI's Video menu.
+	void refresh_video()
+	{
+		if (!m_machine)
+			return;
+		osd::qtui::EmbedVideo v;
+		if (render_target *const t = m_machine->render().first_target())
+		{
+			for (unsigned i = 0; const char *const name = t->view_name(i); ++i)
+				v.views.emplace_back(name);
+			v.currentView = int(t->view());
+
+			layout_view const &view = t->current_view();
+			u32 const mask = t->visibility_mask();
+			unsigned idx = 0;
+			for (const auto &toggle : view.visibility_toggles())
+			{
+				v.toggles.push_back({ toggle.name(), BIT(mask, idx) != 0 });
+				++idx;
+			}
+		}
+		m_session.publishVideo(std::move(v));
 	}
 
 	// Locate a user-loadable image device by its brief instance name ("flop1").

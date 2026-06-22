@@ -146,6 +146,7 @@ private:
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
 	void rebuildSlotsMenu(QMenu *menu);          // (re)populate the Slots submenu from the live slot snapshot
 	void rebuildSettingsMenu(QMenu *menu, bool config); // DIP switches / machine-config submenu from the live snapshot
+	void rebuildVideoMenu(QMenu *menu);          // render view + artwork-visibility (bezel) toggles
 	void setEmbedFullscreen(bool on);            // GUI-level fullscreen of the embedded game surface
 	void showReloadOverlay(const QString &message); // brief overlay over a media/slot reset gap
 	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
