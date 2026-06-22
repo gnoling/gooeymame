@@ -2240,7 +2240,11 @@ void MainWindow::placeEmbedSurface()
 	if (m_embedLocation == LocBrowser)
 	{
 		// Host the game in the right (artwork) pane; the panel adds the
-		// Game/Game+Art/Game+Info views while it is attached.
+		// Game/Game+Art/Game+Info views while it is attached.  Force the Details
+		// pane visible if the user has it collapsed — the game renders there, and
+		// returnFromEmbed() restores the toggle afterwards.  (Only this location
+		// needs it; LocWindow uses its own window.)
+		m_artwork->setVisible(true);
 		m_artwork->attachGame(m_embedHost);
 	}
 	else   // LocWindow
@@ -2278,6 +2282,9 @@ void MainWindow::returnFromEmbed()
 	if (isHidden())
 		show();
 	m_artwork->detachGame();
+	// Restore the user's pane toggles: the Details pane may have been force-shown
+	// to host an in-process embedded game (placeEmbedSurface, LocBrowser).
+	applyPaneVisibility();
 	if (m_embedWindow)
 		m_embedWindow->hide();
 	// Re-home the host to the central stack (hidden) so it stays owned and is
