@@ -1223,6 +1223,27 @@ void MainWindow::rebuildVideoMenu(QMenu *menu)
 
 	EmbedVideo const video = m_embedSession->videoSnapshot();
 
+	// Screen scaling: sharp (nearest) vs smooth (bilinear).  The most-wanted
+	// control — the default bilinear filter looks blurry on pixel art.
+	menu->addSection(tr("Pixels"));
+	{
+		QActionGroup *group = new QActionGroup(menu);
+		struct { const char *label; int smooth; } const modes[] = {
+			{ "Sharp (crisp pixels)", 0 },
+			{ "Smooth (bilinear)", 1 },
+		};
+		for (const auto &m : modes)
+		{
+			QAction *a = menu->addAction(tr(m.label));
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(video.smooth == (m.smooth != 0));
+			connect(a, &QAction::triggered, this, [this, smooth = m.smooth] {
+				postEmbed({ EmbedCommand::SetFilter, 0.0, smooth, {} });
+			});
+		}
+	}
+
 	// Render views (radio): switching changes the whole view (e.g. with/without
 	// bezel for layouts that ship separate views).
 	if (video.views.size() > 1)

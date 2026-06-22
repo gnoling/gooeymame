@@ -390,6 +390,19 @@ private:
 				refresh_video();
 			}
 			break;
+		case EmbedCommand::SetFilter:
+			// Screen scaling: bilinear (smooth/blurry) vs nearest (sharp pixels).
+			// The renderers read the global video_config.filter at texture-create
+			// time, so flip it and force every window to rebuild its textures —
+			// live on the next frame, no reset.  Re-set the SDL render hint too so
+			// the SDL2/SDL3 accelerated renderers pick it up on rebuild.
+			video_config.filter = a.ival ? 1 : 0;
+			SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, video_config.filter ? "1" : "0");
+			for (const auto &win : window_list())
+				if (osd_window *const w = win.get())
+					static_cast<sdl_window_info *>(w)->notify_changed();
+			refresh_video();
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -472,6 +485,7 @@ private:
 				++idx;
 			}
 		}
+		v.smooth = (video_config.filter != 0);
 		m_session.publishVideo(std::move(v));
 	}
 

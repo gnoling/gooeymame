@@ -52,6 +52,7 @@ enum class EmbedCommand
 	SetField,         // sval = port tag, mask = field mask, value = chosen setting value (DIP/config)
 	SetView,          // ival = render view index
 	SetVisibility,    // ival = visibility-toggle index, value = 1 enable / 0 disable (bezel/artwork)
+	SetFilter,        // ival = 1 smooth (bilinear) / 0 sharp (nearest-neighbour) screen scaling
 	Exit
 };
 
@@ -111,6 +112,7 @@ struct EmbedVideo
 	int currentView = -1;               // index into views
 	struct Toggle { std::string name; bool enabled = false; };
 	std::vector<Toggle> toggles;        // current view's visibility toggles (index = command key)
+	bool smooth = true;                 // screen scaling: true = bilinear (blurry), false = nearest (sharp)
 };
 
 //============================================================
