@@ -266,14 +266,26 @@ ArtworkPanel::ArtworkPanel(QWidget *parent) :
 	m_views.push_back({ KindManual, QString(), QStringLiteral("maps_sl"), 0, m_mapTab, false, QPixmap() });
 #endif
 
+	// Capture the full tab order now (all tabs present), so updateTabVisibility()
+	// can rebuild each group from a stable canonical order as empty tabs come and
+	// go.  Tab positions in the live widget change with content, so selection is
+	// persisted by canonical position, not the live index.
+	for (int i = 0; i < m_artTabs->count(); ++i)
+		m_artOrder.push_back({ m_artTabs->widget(i), m_artTabs->tabText(i) });
+	for (int i = 0; i < m_infoTabs->count(); ++i)
+		m_infoOrder.push_back({ m_infoTabs->widget(i), m_infoTabs->tabText(i) });
+
 	connect(m_artTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
 	connect(m_infoTabs, &QTabWidget::currentChanged, this, &ArtworkPanel::loadCurrent);
-	// Remember the selected tab in each group across sessions.
-	connect(m_artTabs, &QTabWidget::currentChanged, this, [] (int index) {
-		QSettings().setValue(QStringLiteral("artwork/artTab"), index);
+	// Remember the selected tab in each group across sessions (by canonical
+	// position, since the live tab index shifts as empty tabs are hidden).
+	connect(m_artTabs, &QTabWidget::currentChanged, this, [this] (int) {
+		QSettings().setValue(QStringLiteral("artwork/artTab"),
+				canonicalTab(m_artOrder, m_artTabs->currentWidget()));
 	});
-	connect(m_infoTabs, &QTabWidget::currentChanged, this, [] (int index) {
-		QSettings().setValue(QStringLiteral("artwork/infoTab"), index);
+	connect(m_infoTabs, &QTabWidget::currentChanged, this, [this] (int) {
+		QSettings().setValue(QStringLiteral("artwork/infoTab"),
+				canonicalTab(m_infoOrder, m_infoTabs->currentWidget()));
 	});
 
 	m_splitter = new QSplitter(Qt::Vertical, this);
@@ -463,6 +475,14 @@ int ArtworkPanel::indexOfView(QWidget *view) const
 		if (m_views[i].view == view)
 			return i;
 	return -1;
+}
+
+int ArtworkPanel::canonicalTab(const std::vector<TabSlot> &order, QWidget *view) const
+{
+	for (int i = 0; i < int(order.size()); ++i)
+		if (order[i].view == view)
+			return i;
+	return 0;
 }
 
 void ArtworkPanel::loadVisible(QTabWidget *group)
@@ -682,53 +702,68 @@ bool ArtworkPanel::tabHasContent(const Tab &tab) const
 
 void ArtworkPanel::updateTabVisibility(QTabWidget *group)
 {
-	int const count = group->count();
-	if (count == 0)
+	std::vector<TabSlot> const &order = (group == m_artTabs) ? m_artOrder : m_infoOrder;
+	int const n = int(order.size());
+	if (n == 0)
 		return;
 
-	QVector<bool> visible(count, true);
-	int firstVisible = -1;
-	for (int i = 0; i < count; ++i)
+	// The view currently shown, so it can stay current if it survives.
+	QWidget *const curView = group->currentWidget();
+
+	// Decide which canonical slots have content for this item.
+	std::vector<bool> show(n, true);
+	int firstShown = -1, curPos = -1;
+	for (int i = 0; i < n; ++i)
 	{
-		int const v = indexOfView(group->widget(i));
-		bool const show = (v < 0) ? true : tabHasContent(m_views[v]);
-		visible[i] = show;
-		if (show && firstVisible < 0)
-			firstVisible = i;
+		if (order[i].view == curView)
+			curPos = i;
+		int const v = indexOfView(order[i].view);
+		show[i] = (v < 0) ? true : tabHasContent(m_views[v]);
+		if (show[i] && firstShown < 0)
+			firstShown = i;
 	}
 
-	// Never leave the group with no tabs: keep the first one as a placeholder
-	// (it will show its own "Not available" message).
-	if (firstVisible < 0)
+	// Never leave the group empty: keep the first slot as a placeholder (it
+	// shows its own "Not available" message).
+	if (firstShown < 0)
 	{
-		visible[0] = true;
-		firstVisible = 0;
+		show[0] = true;
+		firstShown = 0;
 	}
 
-	// If the current tab is about to be hidden, move selection to the nearest
-	// visible tab on the left; failing that, the nearest on the right.
-	int const cur = group->currentIndex();
-	int target = cur;
-	if (cur < 0 || cur >= count || !visible[cur])
+	// Keep the current tab if it survives; otherwise the nearest surviving slot
+	// to its left, then to its right, then the first shown.
+	int targetPos = (curPos >= 0 && show[curPos]) ? curPos : -1;
+	if (targetPos < 0)
 	{
-		target = -1;
-		for (int i = cur - 1; i >= 0; --i)
-			if (visible[i]) { target = i; break; }
-		if (target < 0)
-			for (int i = cur + 1; i < count; ++i)
-				if (visible[i]) { target = i; break; }
-		if (target < 0)
-			target = firstVisible;
+		for (int i = curPos - 1; i >= 0; --i)
+			if (show[i]) { targetPos = i; break; }
+		if (targetPos < 0)
+			for (int i = curPos + 1; i < n; ++i)
+				if (show[i]) { targetPos = i; break; }
+		if (targetPos < 0)
+			targetPos = firstShown;
 	}
+	QWidget *const targetView = order[targetPos].view;
 
-	// Apply visibility without thrashing the current-tab signal, then settle on
-	// the chosen tab (which loads it via currentChanged).
+	// Rebuild the tab set to exactly the shown slots, in canonical order.  We
+	// remove/re-add rather than setTabVisible(): the latter is buggy on Qt 6.4
+	// (hidden tabs corrupt the tab bar's current-index bookkeeping, so clicking
+	// a tab then hides the ones to its right).  removeTab keeps the page widget
+	// alive (still parented to the tab widget's stack), so re-adding is cheap.
+	QSignalBlocker block(group);
+	while (group->count() > 0)
+		group->removeTab(0);
+	int targetIndex = 0;
+	for (int i = 0; i < n; ++i)
 	{
-		QSignalBlocker block(group);
-		for (int i = 0; i < count; ++i)
-			group->setTabVisible(i, visible[i]);
-		group->setCurrentIndex(target);
+		if (!show[i])
+			continue;
+		int const at = group->addTab(order[i].view, order[i].label);
+		if (order[i].view == targetView)
+			targetIndex = at;
 	}
+	group->setCurrentIndex(targetIndex);
 }
 
 void ArtworkPanel::loadTab(int index)

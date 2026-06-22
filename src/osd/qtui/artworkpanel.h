@@ -143,6 +143,15 @@ private:
 	ManualTab *m_manualTab = nullptr;
 	ManualTab *m_mapTab = nullptr;
 	std::vector<Tab> m_views;
+
+	// Canonical tab order per group (view + label), captured once after the tabs
+	// are built.  updateTabVisibility() rebuilds each group from this so the tab
+	// order is stable as empty tabs come and go.
+	struct TabSlot { QWidget *view; QString label; };
+	std::vector<TabSlot> m_artOrder;
+	std::vector<TabSlot> m_infoOrder;
+	int canonicalTab(const std::vector<TabSlot> &order, QWidget *view) const;
+
 	int m_layout = Split;
 	QWidget *m_gameWidget = nullptr;   // embedded game surface (when playing in-pane)
 	int m_savedLayout = Split;         // layout to restore when the game detaches
