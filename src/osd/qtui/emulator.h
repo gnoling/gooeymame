@@ -163,6 +163,11 @@ bool qtui_write_game_options(
 // vector if the path or entry does not exist.
 std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::string &entry);
 
+// Cheap existence probe for an asset: like qtui_load_asset but only reports
+// whether `entry` is present (and non-empty) under `path`, without reading or
+// decompressing the data.  Used to hide art tabs that would have no content.
+bool qtui_asset_exists(const std::string &path, const std::string &entry);
+
 // Short name of a system's parent/clone source (for artwork fallback), or an
 // empty string if it has none.
 std::string qtui_parent_of(const std::string &system);

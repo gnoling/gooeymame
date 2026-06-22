@@ -450,6 +450,10 @@ void ArtworkPanel::refresh()
 		tab.original = QPixmap();
 		setViewText(tab.view, QString());
 	}
+	// Hide tabs with no content for this item, re-homing the selection if the
+	// active tab vanished, then load whatever is now current.
+	updateTabVisibility(m_artTabs);
+	updateTabVisibility(m_infoTabs);
 	loadCurrent();
 }
 
@@ -509,6 +513,224 @@ void ArtworkPanel::addSecondaryCandidates(
 	}
 }
 
+ArtCandidates ArtworkPanel::imageCandidates(const Tab &tab) const
+{
+	ArtCandidates candidates;
+
+	auto addSystemArt = [&] {
+		if (tab.sysKey.isEmpty() || m_system.isEmpty())
+			return;
+		QString const path = frontendFolderPath(tab.sysKey);
+		if (path.isEmpty())
+			return;
+		candidates.append({ path, m_system + QStringLiteral(".png") });
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		if (!parent.empty())
+			candidates.append({ path, QString::fromStdString(parent) + QStringLiteral(".png") });
+	};
+
+	if (m_mode == Mode::Software)
+	{
+		if (!tab.swKey.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
+		{
+			QString const path = frontendFolderPath(tab.swKey);
+			if (!path.isEmpty())
+			{
+				candidates.append({ path, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".png") });
+				// Fall back to the software clone parent: variants often share art,
+				// and the media optimizer prunes a clone's copy when it matches.
+				if (!m_swParent.isEmpty())
+					candidates.append({ path, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".png") });
+			}
+		}
+		addSystemArt();   // machine fallback
+	}
+	else
+	{
+		addSystemArt();
+	}
+
+	// Secondary media root fills gaps the primary sources don't cover.
+	addSecondaryCandidates(candidates,
+			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".png"));
+	return candidates;
+}
+
+ArtCandidates ArtworkPanel::manualCandidates(const Tab &tab) const
+{
+	ArtCandidates candidates;
+	QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
+	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+
+	if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
+	{
+		candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".pdf") });
+		if (!m_swParent.isEmpty())
+			candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".pdf") });
+	}
+	if (!base.isEmpty() && !m_system.isEmpty())
+	{
+		candidates.append({ base, m_system + QStringLiteral(".pdf") });
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		if (!parent.empty())
+			candidates.append({ base, QString::fromStdString(parent) + QStringLiteral(".pdf") });
+	}
+	addSecondaryCandidates(candidates,
+			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".pdf"));
+	return candidates;
+}
+
+QString ArtworkPanel::videoPathFor(const Tab &tab) const
+{
+	QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
+	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+	QString const secRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
+	QString const secBase = (tab.swKey.isEmpty() || secRoot.isEmpty())
+			? QString()
+			: secRoot + QLatin1Char('/') + tab.swKey;
+
+	QString path;
+	auto trySoftware = [&] (const QString &dir) {
+		if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+		{
+			path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swName);
+			if (path.isEmpty() && !m_swParent.isEmpty())
+				path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swParent);
+		}
+	};
+	trySoftware(slBase);
+	if (path.isEmpty() && !base.isEmpty() && !m_system.isEmpty())
+	{
+		path = resolveVideo(base, m_system);
+		if (path.isEmpty())
+		{
+			std::string const parent = qtui_parent_of(m_system.toStdString());
+			if (!parent.empty())
+				path = resolveVideo(base, QString::fromStdString(parent));
+		}
+	}
+	trySoftware(secBase);   // secondary media root last
+	return path;
+}
+
+QString ArtworkPanel::musicPathFor(const Tab &tab) const
+{
+	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
+	QString const secRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
+	QString const secBase = (tab.swKey.isEmpty() || secRoot.isEmpty())
+			? QString()
+			: secRoot + QLatin1Char('/') + tab.swKey;
+
+	QString path;
+	auto trySoftware = [&] (const QString &dir) {
+		if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+		{
+			path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swName);
+			if (path.isEmpty() && !m_swParent.isEmpty())
+				path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swParent);
+		}
+	};
+	trySoftware(slBase);
+	trySoftware(secBase);
+	return path;
+}
+
+QStringList ArtworkPanel::soundtrackTracks() const
+{
+	QString const base = frontendFolderPath(QStringLiteral("soundtrack"));
+	if (base.isEmpty())
+		return QStringList();
+	QStringList tracks = listTracks(base, m_system);
+	if (tracks.isEmpty() && !m_system.isEmpty())
+	{
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		if (!parent.empty())
+			tracks = listTracks(base, QString::fromStdString(parent));
+	}
+	return tracks;
+}
+
+// Would this tab show anything for the current selection?  Used to hide empty
+// tabs.  Cheap: images/manuals probe existence only (no decode), media tabs
+// resolve a path.  Text tabs are always considered to have content (their
+// availability is decided by the async InfoLoader).
+bool ArtworkPanel::tabHasContent(const Tab &tab) const
+{
+	switch (tab.kind)
+	{
+	case KindImage:
+		for (const auto &c : imageCandidates(tab))
+			if (qtui_asset_exists(c.first.toStdString(), c.second.toStdString()))
+				return true;
+		return false;
+	case KindManual:
+		for (const auto &c : manualCandidates(tab))
+			if (qtui_asset_exists(c.first.toStdString(), c.second.toStdString()))
+				return true;
+		return false;
+	case KindVideo:
+		return !videoPathFor(tab).isEmpty();
+	case KindMusic:
+		return !musicPathFor(tab).isEmpty();
+	case KindSoundtrack:
+		return !soundtrackTracks().isEmpty();
+	case KindText:
+	default:
+		return true;
+	}
+}
+
+void ArtworkPanel::updateTabVisibility(QTabWidget *group)
+{
+	int const count = group->count();
+	if (count == 0)
+		return;
+
+	QVector<bool> visible(count, true);
+	int firstVisible = -1;
+	for (int i = 0; i < count; ++i)
+	{
+		int const v = indexOfView(group->widget(i));
+		bool const show = (v < 0) ? true : tabHasContent(m_views[v]);
+		visible[i] = show;
+		if (show && firstVisible < 0)
+			firstVisible = i;
+	}
+
+	// Never leave the group with no tabs: keep the first one as a placeholder
+	// (it will show its own "Not available" message).
+	if (firstVisible < 0)
+	{
+		visible[0] = true;
+		firstVisible = 0;
+	}
+
+	// If the current tab is about to be hidden, move selection to the nearest
+	// visible tab on the left; failing that, the nearest on the right.
+	int const cur = group->currentIndex();
+	int target = cur;
+	if (cur < 0 || cur >= count || !visible[cur])
+	{
+		target = -1;
+		for (int i = cur - 1; i >= 0; --i)
+			if (visible[i]) { target = i; break; }
+		if (target < 0)
+			for (int i = cur + 1; i < count; ++i)
+				if (visible[i]) { target = i; break; }
+		if (target < 0)
+			target = firstVisible;
+	}
+
+	// Apply visibility without thrashing the current-tab signal, then settle on
+	// the chosen tab (which loads it via currentChanged).
+	{
+		QSignalBlocker block(group);
+		for (int i = 0; i < count; ++i)
+			group->setTabVisible(i, visible[i]);
+		group->setCurrentIndex(target);
+	}
+}
+
 void ArtworkPanel::loadTab(int index)
 {
 	if (index < 0 || index >= int(m_views.size()))
@@ -536,79 +758,26 @@ void ArtworkPanel::loadTab(int index)
 	// advert) resolves independently.
 	if (tab.kind == KindVideo)
 	{
-		VideoTab *const video = static_cast<VideoTab *>(tab.view);
-		QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
-		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-		QString const secBase = (tab.swKey.isEmpty() || frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty())
-				? QString()
-				: frontendFolderPath(QStringLiteral("secondaryRoot")) + QLatin1Char('/') + tab.swKey;
-
-		QString path;
-		auto trySoftware = [&] (const QString &dir) {
-			if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
-			{
-				path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swName);
-				if (path.isEmpty() && !m_swParent.isEmpty())
-					path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swParent);
-			}
-		};
-		trySoftware(slBase);
-		if (path.isEmpty() && !base.isEmpty() && !m_system.isEmpty())
-		{
-			path = resolveVideo(base, m_system);
-			if (path.isEmpty())
-			{
-				std::string const parent = qtui_parent_of(m_system.toStdString());
-				if (!parent.empty())
-					path = resolveVideo(base, QString::fromStdString(parent));
-			}
-		}
-		trySoftware(secBase);   // secondary media root last
-		video->setFile(path, tr("No video for this item."));
+		static_cast<VideoTab *>(tab.view)->setFile(videoPathFor(tab), tr("No video for this item."));
 		return;
 	}
 
 	// Soundtrack tab: list the audio files in the machine's folder.
 	if (tab.kind == KindSoundtrack)
 	{
-		QString const base = frontendFolderPath(QStringLiteral("soundtrack"));
-		if (base.isEmpty())
-		{
+		if (frontendFolderPath(QStringLiteral("soundtrack")).isEmpty())
 			m_soundtrackTab->setTracks(QStringList(), tr("Soundtrack folder not configured."));
-			return;
-		}
-		QStringList tracks = listTracks(base, m_system);
-		if (tracks.isEmpty() && !m_system.isEmpty())
-		{
-			std::string const parent = qtui_parent_of(m_system.toStdString());
-			if (!parent.empty())
-				tracks = listTracks(base, QString::fromStdString(parent));
-		}
-		m_soundtrackTab->setTracks(tracks, tr("No soundtrack for this item."));
+		else
+			m_soundtrackTab->setTracks(soundtrackTracks(), tr("No soundtrack for this item."));
 		return;
 	}
 
 	// Music tab: a single per-game audio file (software + clone parent + secondary).
 	if (tab.kind == KindMusic)
 	{
-		SoundtrackTab *const music = static_cast<SoundtrackTab *>(tab.view);
-		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-		QString const secBase = (tab.swKey.isEmpty() || frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty())
-				? QString()
-				: frontendFolderPath(QStringLiteral("secondaryRoot")) + QLatin1Char('/') + tab.swKey;
-
-		QString path;
-		auto trySoftware = [&] (const QString &dir) {
-			if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
-			{
-				path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swName);
-				if (path.isEmpty() && !m_swParent.isEmpty())
-					path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swParent);
-			}
-		};
-		trySoftware(slBase);
-		trySoftware(secBase);
-		music->setTracks(path.isEmpty() ? QStringList() : QStringList{ path },
+		QString const path = musicPathFor(tab);
+		static_cast<SoundtrackTab *>(tab.view)->setTracks(
+				path.isEmpty() ? QStringList() : QStringList{ path },
 				tr("No music for this item."));
 		return;
 	}
@@ -619,33 +788,7 @@ void ArtworkPanel::loadTab(int index)
 	if (tab.kind == KindManual)
 	{
 		ManualTab *const pdf = static_cast<ManualTab *>(tab.view);
-		QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
-		QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-		bool const haveSecondary = !frontendFolderPath(QStringLiteral("secondaryRoot")).isEmpty();
-		if (base.isEmpty() && slBase.isEmpty() && !haveSecondary)
-		{
-			pdf->setMessage(tr("Folder not configured."));
-			return;
-		}
-
-		ArtCandidates candidates;
-		if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
-		{
-			candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".pdf") });
-			if (!m_swParent.isEmpty())
-				candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".pdf") });
-		}
-		if (!base.isEmpty() && !m_system.isEmpty())
-		{
-			candidates.append({ base, m_system + QStringLiteral(".pdf") });
-			std::string const parent = qtui_parent_of(m_system.toStdString());
-			if (!parent.empty())
-				candidates.append({ base, QString::fromStdString(parent) + QStringLiteral(".pdf") });
-		}
-
-		addSecondaryCandidates(candidates,
-				m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".pdf"));
-
+		ArtCandidates const candidates = manualCandidates(tab);
 		if (candidates.isEmpty())
 		{
 			pdf->setMessage(tr("Not available"));
@@ -698,45 +841,7 @@ void ArtworkPanel::loadTab(int index)
 	// Image tab.  Build the candidate chain, most-specific first.  In software
 	// mode we try the software's own art, then fall back to the host machine's
 	// art (so e.g. an NES cartridge still shows the NES cabinet).
-	ArtCandidates candidates;
-
-	auto addSystemArt = [&] {
-		if (tab.sysKey.isEmpty() || m_system.isEmpty())
-			return;
-		QString const path = frontendFolderPath(tab.sysKey);
-		if (path.isEmpty())
-			return;
-		candidates.append({ path, m_system + QStringLiteral(".png") });
-		std::string const parent = qtui_parent_of(m_system.toStdString());
-		if (!parent.empty())
-			candidates.append({ path, QString::fromStdString(parent) + QStringLiteral(".png") });
-	};
-
-	if (m_mode == Mode::Software)
-	{
-		if (!tab.swKey.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
-		{
-			QString const path = frontendFolderPath(tab.swKey);
-			if (!path.isEmpty())
-			{
-				candidates.append({ path, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".png") });
-				// Fall back to the software clone parent: variants often share art,
-				// and the media optimizer prunes a clone's copy when it matches.
-				if (!m_swParent.isEmpty())
-					candidates.append({ path, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".png") });
-			}
-		}
-		addSystemArt();   // machine fallback
-	}
-	else
-	{
-		addSystemArt();
-	}
-
-	// Secondary media root fills gaps the primary sources don't cover.
-	addSecondaryCandidates(candidates,
-			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".png"));
-
+	ArtCandidates const candidates = imageCandidates(tab);
 	if (candidates.isEmpty())
 	{
 		setViewText(tab.view, tr("Not available"));

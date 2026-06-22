@@ -950,7 +950,10 @@ struct zip_index
 	bool valid = false;
 };
 
-std::unordered_map<std::string, std::shared_ptr<zip_index>> g_zip_cache;   // guarded by s_asset_mutex
+std::unordered_map<std::string, std::shared_ptr<zip_index>> g_zip_cache;   // guarded by g_asset_mutex
+// Serialises asset reads + the zip cache across the artwork/icon worker threads
+// and the UI-thread existence probe (qtui_asset_exists).
+std::mutex g_asset_mutex;
 
 std::shared_ptr<zip_index> get_zip_index(const std::string &path)
 {
@@ -1079,8 +1082,7 @@ std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::st
 
 	// Serialise asset reads (artwork + icon worker threads) so concurrent
 	// access to MAME's archive cache is safe.
-	static std::mutex s_asset_mutex;
-	std::lock_guard<std::mutex> lk(s_asset_mutex);
+	std::lock_guard<std::mutex> lk(g_asset_mutex);
 
 	std::error_code ec;
 	if (std::filesystem::is_directory(path, ec))
@@ -1134,6 +1136,50 @@ std::vector<std::uint8_t> qtui_load_asset(const std::string &path, const std::st
 	if (archive->decompress(out.data(), out.size()))
 		out.clear();
 	return out;
+}
+
+bool qtui_asset_exists(const std::string &path, const std::string &entry)
+{
+	if (path.empty() || entry.empty())
+		return false;
+
+	std::lock_guard<std::mutex> lk(g_asset_mutex);
+
+	std::error_code ec;
+	if (std::filesystem::is_directory(path, ec))
+	{
+		// Plain directory: a non-empty regular file <path>/<entry>.
+		std::filesystem::path const file = std::filesystem::path(path) / entry;
+		auto const status = std::filesystem::status(file, ec);
+		if (ec || !std::filesystem::is_regular_file(status))
+			return false;
+		std::uintmax_t const size = std::filesystem::file_size(file, ec);
+		return !ec && size > 0;
+	}
+
+	std::string const lower = path.size() >= 3 ? path.substr(path.size() - 3) : std::string();
+	bool const sevenZip = (lower == ".7z" || lower == ".7Z");
+
+	// Fast path: look the member up in the cached zip index (no extraction).
+	if (!sevenZip)
+	{
+		std::shared_ptr<zip_index> idx = get_zip_index(path);
+		if (idx->valid)
+		{
+			auto it = idx->entries.find(entry);
+			return it != idx->entries.end() && it->second.usize > 0;
+		}
+		// Not a standard zip (e.g. ZIP64) - fall through to util::archive_file.
+	}
+
+	// Fallback: util::archive_file member search (handles ZIP64 and 7z).
+	util::archive_file::ptr archive;
+	std::error_condition const err = sevenZip
+			? util::archive_file::open_7z(path, archive)
+			: util::archive_file::open_zip(path, archive);
+	if (err || !archive)
+		return false;
+	return archive->search(entry, false) >= 0;
 }
 
 

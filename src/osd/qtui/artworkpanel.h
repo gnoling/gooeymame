@@ -23,6 +23,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QPair>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtCore/QVector>
 
 #include <QtGui/QPixmap>
@@ -104,6 +105,8 @@ private:
 	void rescale(int index);
 	int indexOfView(QWidget *view) const;
 	void loadVisible(QTabWidget *group);
+	void updateTabVisibility(QTabWidget *group);     // hide empty tabs, re-home selection
+	QStringList soundtrackTracks() const;
 	void stopAllMedia();     // pause every media tab
 	void stopOtherMedia(int keepIndex);
 	void showImageScaleMenu(int index, const QPoint &globalPos);   // right-click on an art image
@@ -119,6 +122,13 @@ private:
 		bool loaded;
 		QPixmap original; // image tabs only
 	};
+
+	// Candidate / path resolution for a tab (shared by load + content probe).
+	QVector<QPair<QString, QString>> imageCandidates(const Tab &tab) const;
+	QVector<QPair<QString, QString>> manualCandidates(const Tab &tab) const;
+	QString videoPathFor(const Tab &tab) const;
+	QString musicPathFor(const Tab &tab) const;
+	bool tabHasContent(const Tab &tab) const;       // would this tab show anything?
 
 	QComboBox *m_layoutCombo = nullptr;
 	QSplitter *m_splitter = nullptr;
