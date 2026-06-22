@@ -37,6 +37,10 @@
 #include <QtGui/QActionGroup>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QPalette>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QtGui/QStyleHints>
+#endif
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
@@ -85,6 +89,78 @@ void applyPersistedStyle()
 		if (QStyle *const style = QStyleFactory::create(saved))
 			QApplication::setStyle(style);   // takes ownership
 	}
+}
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+// The application palette in effect before any dark-scheme override, used to
+// restore the "Light"/"System default" choice on Qt < 6.8 (which has no
+// QStyleHints::setColorScheme).
+static QPalette g_defaultPalette;
+static bool g_defaultPaletteCaptured = false;
+
+// A hand-tuned dark palette (Fusion-style).  Honoured by palette-aware styles
+// (Fusion, qt6ct); native styles that ignore QPalette won't darken, in which
+// case the user should pair this with the Fusion style.
+static QPalette darkPalette()
+{
+	QColor const window(53, 53, 53);
+	QColor const base(35, 35, 35);
+	QColor const text(220, 220, 220);
+	QColor const disabled(127, 127, 127);
+	QColor const highlight(42, 130, 218);
+
+	QPalette p;
+	p.setColor(QPalette::Window, window);
+	p.setColor(QPalette::WindowText, text);
+	p.setColor(QPalette::Base, base);
+	p.setColor(QPalette::AlternateBase, window);
+	p.setColor(QPalette::ToolTipBase, window);
+	p.setColor(QPalette::ToolTipText, text);
+	p.setColor(QPalette::Text, text);
+	p.setColor(QPalette::Button, window);
+	p.setColor(QPalette::ButtonText, text);
+	p.setColor(QPalette::BrightText, Qt::red);
+	p.setColor(QPalette::Link, highlight);
+	p.setColor(QPalette::Highlight, highlight);
+	p.setColor(QPalette::HighlightedText, Qt::black);
+	p.setColor(QPalette::PlaceholderText, disabled);
+	p.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+	p.setColor(QPalette::Disabled, QPalette::Text, disabled);
+	p.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
+	p.setColor(QPalette::Disabled, QPalette::HighlightedText, disabled);
+	return p;
+}
+#endif
+
+// Apply a colour scheme by key: "dark", "light", or "" (follow the system).
+// On Qt 6.8+ this drives the platform style-hint (Fusion and the Windows 11
+// style follow it); on older Qt it swaps in a dark QPalette for "dark" and
+// restores the captured baseline otherwise.
+static void applyColorSchemeName(const QString &scheme)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+	Qt::ColorScheme cs = Qt::ColorScheme::Unknown;   // Unknown == follow the OS
+	if (scheme.compare(QLatin1String("dark"), Qt::CaseInsensitive) == 0)
+		cs = Qt::ColorScheme::Dark;
+	else if (scheme.compare(QLatin1String("light"), Qt::CaseInsensitive) == 0)
+		cs = Qt::ColorScheme::Light;
+	QGuiApplication::styleHints()->setColorScheme(cs);
+#else
+	if (!g_defaultPaletteCaptured)
+	{
+		g_defaultPalette = QApplication::palette();
+		g_defaultPaletteCaptured = true;
+	}
+	if (scheme.compare(QLatin1String("dark"), Qt::CaseInsensitive) == 0)
+		QApplication::setPalette(darkPalette());
+	else
+		QApplication::setPalette(g_defaultPalette);   // light/system share the baseline
+#endif
+}
+
+void applyPersistedColorScheme()
+{
+	applyColorSchemeName(QSettings().value(QStringLiteral("appearance/colorScheme")).toString());
 }
 
 namespace {
@@ -667,6 +743,27 @@ void MainWindow::createMenus()
 				: key.compare(savedStyle, Qt::CaseInsensitive) == 0);
 		m_styleGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, key] { applyStyle(key); });
+	}
+
+	// Colour scheme: light / dark / follow-the-system.  On Qt 6.8+ this drives
+	// the platform style-hint; on older Qt it applies a dark QPalette (best
+	// paired with a palette-honouring style such as Fusion).
+	QMenu *schemeMenu = viewMenu->addMenu(tr("&Color Scheme"));
+	m_colorSchemeGroup = new QActionGroup(this);
+	QString const savedScheme = QSettings().value(QStringLiteral("appearance/colorScheme")).toString();
+	struct { const char *label; const char *key; } const schemes[] = {
+		{ "System default", "" },
+		{ "Light", "light" },
+		{ "Dark", "dark" },
+	};
+	for (const auto &s : schemes)
+	{
+		QAction *act = schemeMenu->addAction(tr(s.label));
+		act->setCheckable(true);
+		QString const key = QString::fromLatin1(s.key);
+		act->setChecked(savedScheme.compare(key, Qt::CaseInsensitive) == 0);
+		m_colorSchemeGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, key] { applyColorScheme(key); });
 	}
 
 	// Play mode: how a launched system runs (separate window vs embedded).
@@ -1460,6 +1557,25 @@ void MainWindow::applyStyle(const QString &name)
 		QSettings().remove(QStringLiteral("appearance/style"));
 	else
 		QSettings().setValue(QStringLiteral("appearance/style"), name);
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+	// Setting a style resets the palette to the new style's standard one, so
+	// re-capture the light baseline and re-assert the dark override if active.
+	// (On 6.8+ the style-hint persists across style changes automatically.)
+	QString const scheme = QSettings().value(QStringLiteral("appearance/colorScheme")).toString();
+	if (scheme.compare(QLatin1String("dark"), Qt::CaseInsensitive) != 0)
+		g_defaultPaletteCaptured = false;   // force re-capture against the new style
+	applyColorSchemeName(scheme);
+#endif
+}
+
+void MainWindow::applyColorScheme(const QString &scheme)
+{
+	applyColorSchemeName(scheme);
+	if (scheme.isEmpty())
+		QSettings().remove(QStringLiteral("appearance/colorScheme"));
+	else
+		QSettings().setValue(QStringLiteral("appearance/colorScheme"), scheme);
 }
 
 QWidget *MainWindow::buildGridBar(QSlider *&size, QComboBox *&source, CheckableComboBox *&caption)

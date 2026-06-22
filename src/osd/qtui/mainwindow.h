@@ -65,6 +65,10 @@ class TreeFilterProxy;
 void applyPersistedStyle();
 // The widget style in effect before any user override (the platform default).
 QString defaultStyleName();
+// Apply the persisted colour scheme (QSettings appearance/colorScheme) at
+// startup.  Call once after QApplication is constructed, the QSettings format
+// is chosen, and applyPersistedStyle() has run.
+void applyPersistedColorScheme();
 
 //============================================================
 //  The main MAMEUI browser window.
@@ -153,6 +157,7 @@ private:
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyIconSize(int size);   // icon size + matching row height
 	void applyStyle(const QString &name);   // set + persist the Qt widget style ("" = default)
+	void applyColorScheme(const QString &scheme);   // set + persist colour scheme ("dark"/"light"/"")
 
 	// List / Grouped / Grid view modes (per pane).
 	enum ViewMode { ViewList = 0, ViewGrouped = 1, ViewGrid = 2, ViewGridGrouped = 3 };
@@ -279,6 +284,7 @@ private:
 	QActionGroup *m_iconSizeGroup = nullptr;
 	QActionGroup *m_layoutGroup = nullptr;
 	QActionGroup *m_styleGroup = nullptr;
+	QActionGroup *m_colorSchemeGroup = nullptr;
 	AuditManager *m_audit = nullptr;
 	SoftwareAuditManager *m_softwareAudit = nullptr;
 	SoftwareLoader *m_softwareLoader = nullptr;
