@@ -139,6 +139,8 @@ private:
 	void populateMachineMenu(QMenu *menu);       // fill a Machine menu (main bar or detached window)
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
 	void rebuildSlotsMenu(QMenu *menu);          // (re)populate the Slots submenu from the live slot snapshot
+	void rebuildSettingsMenu(QMenu *menu, bool config); // DIP switches / machine-config submenu from the live snapshot
+	void setEmbedFullscreen(bool on);            // GUI-level fullscreen of the embedded game surface
 	void showReloadOverlay(const QString &message); // brief overlay over a media/slot reset gap
 	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
 	void setMachineControlsActive(bool active);
@@ -243,6 +245,8 @@ private:
 	QMenu *m_machineMenu = nullptr;                 // NEWUI-parity in-game controls (main bar)
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	QList<QAction *> m_pauseActions;                // Pause toggles to keep in sync
+	QList<QAction *> m_fullscreenActions;           // Fullscreen toggles to keep in sync
+	bool m_embedFullscreen = false;                 // GUI fullscreen active for the embedded game
 	bool m_machineControlsActive = false;           // current enable state (new actions inherit it)
 	// A launch requested while a game is still running: the running game is
 	// stopped, then this one starts once it finishes.

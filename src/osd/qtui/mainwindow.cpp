@@ -1019,6 +1019,20 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 	connect(track(menu->addAction(tr("Toggle &FPS display"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::ToggleFps, 0.0, 0, {} }); });
 
+	// Rotate the game view live (absolute orientation, mirroring NEWUI).
+	QMenu *rotate = menu->addMenu(tr("&Rotate"));
+	track(rotate->menuAction());
+	for (int deg : { 0, 90, 180, 270 })
+		connect(rotate->addAction(tr("%1°").arg(deg)), &QAction::triggered, this,
+				[this, deg] { postEmbed({ EmbedCommand::SetRotate, 0.0, deg, {} }); });
+
+	// Fullscreen is a GUI action (fills the host with the game); see toggleFullscreen.
+	QAction *fullscreen = track(menu->addAction(tr("F&ullscreen")));
+	fullscreen->setCheckable(true);
+	fullscreen->setChecked(m_embedFullscreen);
+	m_fullscreenActions.append(fullscreen);
+	connect(fullscreen, &QAction::triggered, this, [this] (bool on) { setEmbedFullscreen(on); });
+
 	menu->addSeparator();
 	QMenu *keyboard = menu->addMenu(tr("&Keyboard"));
 	track(keyboard->menuAction());
@@ -1047,6 +1061,16 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 	QMenu *slotMenu = menu->addMenu(tr("S&lots"));
 	track(slotMenu->menuAction());
 	connect(slotMenu, &QMenu::aboutToShow, this, [this, slotMenu] { rebuildSlotsMenu(slotMenu); });
+
+	// DIP switches and machine configuration: live, per-machine settings (these
+	// vary by game).  Rebuilt each open from the snapshot the OSD publishes.
+	QMenu *dipMenu = menu->addMenu(tr("&DIP Switches"));
+	track(dipMenu->menuAction());
+	connect(dipMenu, &QMenu::aboutToShow, this, [this, dipMenu] { rebuildSettingsMenu(dipMenu, false); });
+
+	QMenu *configMenu = menu->addMenu(tr("Machine &Configuration"));
+	track(configMenu->menuAction());
+	connect(configMenu, &QMenu::aboutToShow, this, [this, configMenu] { rebuildSettingsMenu(configMenu, true); });
 
 	menu->addSeparator();
 	connect(track(menu->addAction(tr("Stop &Game"))), &QAction::triggered, this,
@@ -1134,6 +1158,89 @@ void MainWindow::rebuildSlotsMenu(QMenu *menu)
 				label += tr("  (default)");
 			addOption(label, opt);
 		}
+	}
+}
+
+void MainWindow::rebuildSettingsMenu(QMenu *menu, bool config)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+
+	std::vector<EmbedSetting> const settings = m_embedSession->settingsSnapshot();
+	bool any = false;
+	for (const EmbedSetting &set : settings)
+	{
+		if (set.config != config)
+			continue;
+		any = true;
+		QMenu *fieldMenu = menu->addMenu(QString::fromStdString(set.name));
+		QActionGroup *group = new QActionGroup(fieldMenu);
+		std::string const tag = set.portTag;
+		quint32 const mask = set.mask;
+		for (const auto &opt : set.options)
+		{
+			quint32 const value = opt.first;
+			QAction *a = fieldMenu->addAction(QString::fromStdString(opt.second));
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(QString::fromStdString(opt.second) == QString::fromStdString(set.current));
+			connect(a, &QAction::triggered, this, [this, tag, mask, value] {
+				EmbedAction act;
+				act.cmd = EmbedCommand::SetField;
+				act.sval = tag;
+				act.mask = mask;
+				act.value = value;
+				postEmbed(act);
+			});
+		}
+	}
+	if (!any)
+		menu->addAction(config
+				? tr("(this machine has no configuration settings)")
+				: tr("(this machine has no DIP switches)"))->setEnabled(false);
+}
+
+void MainWindow::setEmbedFullscreen(bool on)
+{
+	m_embedFullscreen = on;
+
+	// Keep every copy of the Fullscreen action (main menu bar + detached play
+	// window) in sync without re-triggering this slot.
+	for (QAction *a : m_fullscreenActions)
+	{
+		QSignalBlocker block(a);
+		a->setChecked(on);
+	}
+
+	// A game hosted in its own window: just fullscreen that window.
+	if (m_embedWindow && m_embedWindow->isVisible())
+	{
+		if (on)
+			m_embedWindow->showFullScreen();
+		else
+			m_embedWindow->showNormal();
+		return;
+	}
+
+	// Game hosted in the browser (artwork pane): fill the main window with it by
+	// hiding the surrounding panes and going fullscreen.  The menu bar stays
+	// visible so the toggle remains reachable while the game holds keyboard focus.
+	if (on)
+	{
+		m_folders->setVisible(false);
+		m_systemPane->setVisible(false);
+		m_softwarePane->setVisible(false);
+		showFullScreen();
+	}
+	else
+	{
+		showNormal();
+		applyPaneVisibility();
+		setSoftwarePaneVisible(m_softwareModel->rowCount() > 0);
 	}
 }
 
@@ -2279,6 +2386,10 @@ void MainWindow::returnFromEmbed()
 {
 	// Robust regardless of where the host ended up: restore the browser, take
 	// the game back out of the artwork pane, and hide the detached window.
+	// Leave fullscreen first (restores window + panes) so the browser returns to
+	// its normal arrangement.
+	if (m_embedFullscreen)
+		setEmbedFullscreen(false);
 	if (isHidden())
 		show();
 	m_artwork->detachGame();

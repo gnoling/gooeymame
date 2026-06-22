@@ -17,9 +17,11 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 
@@ -47,16 +49,19 @@ enum class EmbedCommand
 	MountImage,       // sval = device brief name, sval2 = file path
 	UnloadImage,      // sval = device brief name
 	SetSlot,          // sval = slot name, sval2 = option value ("" = none); triggers hard reset
+	SetField,         // sval = port tag, mask = field mask, value = chosen setting value (DIP/config)
 	Exit
 };
 
 struct EmbedAction
 {
-	EmbedCommand cmd;
-	double       dval = 0.0;
-	int          ival = 0;
-	std::string  sval;
-	std::string  sval2;
+	EmbedCommand  cmd;
+	double        dval = 0.0;
+	int           ival = 0;
+	std::string   sval;
+	std::string   sval2;
+	std::uint32_t mask = 0;    // SetField: ioport_field mask (identifies the field within a port)
+	std::uint32_t value = 0;   // SetField: ioport_setting value to apply
 };
 
 // A mountable image device on the live machine, published by the emulation
@@ -78,6 +83,21 @@ struct EmbedSlot
 	std::string current;               // currently selected option value ("" = none)
 	std::string defaultOption;         // the slot's default option name
 	std::vector<std::string> options;  // selectable option values (excluding "(none)")
+};
+
+// A live, settable per-machine setting: a DIP-switch bank or a machine
+// configuration field (IPT_DIPSWITCH / IPT_CONFIG).  Published by the emulation
+// thread; the GUI builds dynamic submenus from it.  These vary by machine — the
+// "different games have different options" surface.
+struct EmbedSetting
+{
+	bool        config = false;   // false = DIP switch, true = machine configuration
+	std::string portTag;          // owning port tag — command key (with mask)
+	std::uint32_t mask = 0;        // field mask within the port — command key
+	std::string name;             // field display name
+	std::string current;          // current setting's display name
+	// Selectable settings: (value, display name), enabled ones only.
+	std::vector<std::pair<std::uint32_t, std::string>> options;
 };
 
 //============================================================
@@ -135,6 +155,23 @@ public:
 		return m_slots;
 	}
 
+	// Settings snapshot (DIP/config), republished as values change; the
+	// generation counter lets the UI tell when it changed.
+	void publishSettings(std::vector<EmbedSetting> list)
+	{
+		std::lock_guard<std::mutex> lk(m_settingMutex);
+		m_settings = std::move(list);
+		m_settingsGen.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	std::vector<EmbedSetting> settingsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_settingMutex);
+		return m_settings;
+	}
+
+	unsigned settingsGeneration() const { return m_settingsGen.load(std::memory_order_relaxed); }
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -149,6 +186,10 @@ private:
 
 	mutable std::mutex m_slotMutex;
 	std::vector<EmbedSlot> m_slots;
+
+	mutable std::mutex m_settingMutex;
+	std::vector<EmbedSetting> m_settings;
+	std::atomic<unsigned> m_settingsGen{0};
 };
 
 } // namespace osd::qtui

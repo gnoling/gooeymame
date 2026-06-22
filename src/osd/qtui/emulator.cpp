@@ -220,6 +220,7 @@ public:
 		m_session.running.store(true);
 		refresh_images();
 		refresh_slots();
+		refresh_settings();
 	}
 
 	virtual void update(bool skip_redraw) override
@@ -236,6 +237,8 @@ public:
 			{
 				m_imageRefreshTick = 0;
 				refresh_images();
+				// DIP/config can also change via MAME's own Tab UI; keep ours fresh.
+				refresh_settings();
 			}
 		}
 		sdl_osd_interface::update(skip_redraw);
@@ -267,7 +270,7 @@ private:
 			m.video().save_active_screen_snapshots();
 			break;
 		case EmbedCommand::ToggleFullscreen:
-			break;   // TODO: SDL window fullscreen toggle (deferred; needs OSD window hook)
+			break;   // Handled GUI-side (Qt): SDL fullscreen on an attached window is unsafe.
 		case EmbedCommand::ToggleFps:
 			{
 				auto &ui = mame_machine_manager::instance()->ui();
@@ -285,7 +288,26 @@ private:
 			m.video().set_frameskip(a.ival);   // -1 = auto
 			break;
 		case EmbedCommand::SetRotate:
-			break;   // TODO: render-target orientation (deferred)
+			{
+				int orient = ROT0;
+				switch (a.ival)
+				{
+				case 90:  orient = ROT90;  break;
+				case 180: orient = ROT180; break;
+				case 270: orient = ROT270; break;
+				default:  orient = ROT0;   break;
+				}
+				// Apply to the game target (skip the UI/menu overlay target).
+				for (render_target *t = m.render().first_target(); t; t = t->next())
+				{
+					if (!t->is_ui_target())
+					{
+						t->set_orientation(orient);
+						break;
+					}
+				}
+			}
+			break;
 		case EmbedCommand::KeyboardEmulated:
 			m.natkeyboard().set_in_use(false);
 			break;
@@ -319,6 +341,18 @@ private:
 				m.schedule_hard_reset();
 			}
 			break;
+		case EmbedCommand::SetField:
+			// Live DIP-switch / machine-configuration change: locate the field by
+			// (port tag, mask) and write the chosen setting value.  No reset needed.
+			if (ioport_field *const f = find_field(a.sval, a.mask))
+			{
+				ioport_field::user_settings us;
+				f->get_user_settings(us);
+				us.value = a.value;
+				f->set_user_settings(us);
+				refresh_settings();
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -332,6 +366,51 @@ private:
 		osd::qtui::EmbedAction a;
 		while (m_session.take(a))
 			apply(a);
+	}
+
+	// Locate a settings field (DIP/config) by its owning port tag and mask.
+	ioport_field *find_field(const std::string &tag, std::uint32_t mask)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (auto &port : m_machine->ioport().ports())
+		{
+			if (port.second->tag() != tag)
+				continue;
+			for (ioport_field &field : port.second->fields())
+				if (field.mask() == mask)
+					return &field;
+		}
+		return nullptr;
+	}
+
+	// Publish the live DIP switches and machine-configuration fields for the GUI.
+	void refresh_settings()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedSetting> out;
+		for (auto &port : m_machine->ioport().ports())
+		{
+			for (ioport_field &field : port.second->fields())
+			{
+				if (field.type() != IPT_DIPSWITCH && field.type() != IPT_CONFIG)
+					continue;
+				if (!field.enabled() || field.settings().empty())
+					continue;
+				osd::qtui::EmbedSetting s;
+				s.config = (field.type() == IPT_CONFIG);
+				s.portTag = port.second->tag();
+				s.mask = field.mask();
+				s.name = field.name();
+				s.current = field.setting_name() ? field.setting_name() : "";
+				for (const ioport_setting &setting : field.settings())
+					if (setting.enabled())
+						s.options.emplace_back(setting.value(), setting.name());
+				out.push_back(std::move(s));
+			}
+		}
+		m_session.publishSettings(std::move(out));
 	}
 
 	// Locate a user-loadable image device by its brief instance name ("flop1").
