@@ -39,6 +39,12 @@ public:
 	// X11 XID (window handle) MAME attaches its renderer to.
 	unsigned long long surfaceId() const;
 
+	// Force X11 keyboard input focus onto the embedded surface.  The attached
+	// SDL window doesn't reliably hold focus after a re-attach (a second
+	// in-process launch reuses this same window), so the launch path calls this
+	// a few times once the game window is mapped.  No-op off X11.
+	void nudgeFocus();
+
 	// Status overlay text (e.g. "Launching…", "Quit MAME to return").
 	void setStatus(const QString &text);
 	void showOverlay(bool visible);

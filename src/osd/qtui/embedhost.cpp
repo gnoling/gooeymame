@@ -11,8 +11,16 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QProcess>
 #include <QtCore/QProcessEnvironment>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QVBoxLayout>
+
+// X11 last: <X11/Xlib.h> defines macros (None/Bool/Status/…) that collide with
+// Qt identifiers, so it must follow every Qt header.  Nothing below uses Qt
+// enums that the macros would corrupt.
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+#include <X11/Xlib.h>
+#endif
 
 
 namespace osd::qtui {
@@ -90,6 +98,29 @@ EmbedHost::~EmbedHost()
 unsigned long long EmbedHost::surfaceId() const
 {
 	return static_cast<unsigned long long>(m_surface->winId());
+}
+
+void EmbedHost::nudgeFocus()
+{
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+	if (QGuiApplication::platformName() != QLatin1String("xcb"))
+		return;
+	auto *const x11 = qApp->nativeInterface<QNativeInterface::QX11Application>();
+	if (!x11)
+		return;
+	Display *const dpy = x11->display();
+	if (!dpy)
+		return;
+	Window const w = static_cast<Window>(m_surface->winId());
+	// Only focus a mapped/viewable window — XSetInputFocus on an unmapped window
+	// raises BadMatch (which Xlib treats as fatal).
+	XWindowAttributes attr;
+	if (XGetWindowAttributes(dpy, w, &attr) && attr.map_state == IsViewable)
+	{
+		XSetInputFocus(dpy, w, RevertToParent, CurrentTime);
+		XFlush(dpy);
+	}
+#endif
 }
 
 void EmbedHost::setStatus(const QString &text)
