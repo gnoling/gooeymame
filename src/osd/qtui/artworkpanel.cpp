@@ -428,6 +428,11 @@ void ArtworkPanel::detachGame()
 	applyLayout(m_savedLayout);
 }
 
+void ArtworkPanel::pauseMedia()
+{
+	stopAllMedia();
+}
+
 void ArtworkPanel::stopAllMedia()
 {
 	for (const Tab &tab : m_views)

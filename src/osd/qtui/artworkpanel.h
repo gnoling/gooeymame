@@ -79,6 +79,10 @@ public:
 	void attachGame(QWidget *game);
 	void detachGame();
 
+	// Pause any playing media (snap/advert video, soundtrack) — e.g. when a game
+	// is launched so it doesn't keep playing over the running machine's audio.
+	void pauseMedia();
+
 protected:
 	void resizeEvent(QResizeEvent *event) override;
 	void hideEvent(QHideEvent *event) override;
