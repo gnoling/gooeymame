@@ -30,8 +30,10 @@
 #include "dislot.h"
 #include "natkeyboard.h"
 #include "ui/ui.h"
+#include "ui/info.h"       // machine_info::game_info_string()/warnings_string()
 #include "ui/menuitem.h"   // ui::menu_item (slider list entries)
 #include "ui/slider.h"     // slider_state + SLIDER_NOCHANGE (live adjustments)
+#include "bookkeeping.h"   // bookkeeping_manager (coin counters, tickets)
 
 #include "drivenum.h"
 #include "rendlay.h"   // layout_view visibility toggles (bezel/artwork)
@@ -247,6 +249,7 @@ public:
 				m_capsInit = true;
 				refresh_caps();
 				refresh_sliders();
+				refresh_info();
 			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
@@ -266,6 +269,7 @@ public:
 				{
 					refresh_caps();
 					refresh_sliders();
+					refresh_info();
 				}
 			}
 		}
@@ -708,6 +712,47 @@ private:
 			out.push_back(std::move(e));
 		}
 		m_session.publishSliders(std::move(out));
+	}
+
+	// Publish read-only info text (system info / warnings / bookkeeping) for the
+	// Info menu's dialogs.  bookkeeping changes over time, hence re-published.
+	void refresh_info()
+	{
+		if (!m_machine)
+			return;
+		osd::qtui::EmbedInfo info;
+		auto &ui = mame_machine_manager::instance()->ui();
+		info.sysInfo = ui.machine_info().game_info_string();
+		info.warnings = ui.machine_info().warnings_string();
+
+		// Bookkeeping (mirrors ui/miscmenu.cpp menu_bookkeeping).
+		std::ostringstream out;
+		int const secs = m_machine->time().seconds();
+		char buf[64];
+		std::snprintf(buf, sizeof(buf), "Uptime: %d:%02d:%02d\n\n",
+				secs / 3600, (secs / 60) % 60, secs % 60);
+		out << buf;
+		bookkeeping_manager &bk = m_machine->bookkeeping();
+		int const tickets = bk.get_dispensed_tickets();
+		if (tickets)
+			out << "Tickets dispensed: " << tickets << "\n\n";
+		for (int i = 0; i < int(bookkeeping_manager::COIN_COUNTERS); ++i)
+		{
+			int const count = bk.coin_counter_get_count(i);
+			if (!count && !bk.coin_lockout_get_state(i))
+				continue;
+			out << "Coin " << char('A' + i) << ": " << count;
+			if (bk.coin_lockout_get_state(i))
+				out << "  (locked out)";
+			out << "\n";
+		}
+		std::string book = out.str();
+		// Trim a trailing newline for tidiness.
+		while (!book.empty() && book.back() == '\n')
+			book.pop_back();
+		info.bookkeeping = std::move(book);
+
+		m_session.publishInfo(std::move(info));
 	}
 
 	osd::qtui::EmbedSession &m_session;

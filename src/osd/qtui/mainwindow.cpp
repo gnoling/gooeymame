@@ -18,6 +18,7 @@
 #include "gamelistmodel.h"
 #include "gamelistproxy.h"
 #include "gridview.h"
+#include "infoloader.h"
 #include "optionsdialog.h"
 #include "softwareauditmanager.h"
 #include "softwareloader.h"
@@ -45,6 +46,8 @@
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QComboBox>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QFileDialog>
@@ -54,10 +57,12 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QSplitter>
+#include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QWidgetAction>
 #include <QtWidgets/QStackedWidget>
@@ -1071,6 +1076,26 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 			[this] { postEmbed({ EmbedCommand::KeyboardNatural, 0.0, 0, {} }); });
 	connect(track(input->addAction(tr("&Paste"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Paste, 0.0, 0, {} }); });
+
+	//---- Info: read-only screens (system info / warnings / bookkeeping / history)
+	QMenu *info = topMenu(tr("In&fo"));
+	connect(info->addAction(tr("&System Information…")), &QAction::triggered, this, [this] {
+		showInfoText(tr("System Information"), m_embedSession
+				? QString::fromStdString(m_embedSession->infoSnapshot().sysInfo) : QString());
+	});
+	connect(info->addAction(tr("&Warning Information…")), &QAction::triggered, this, [this] {
+		QString const w = m_embedSession
+				? QString::fromStdString(m_embedSession->infoSnapshot().warnings) : QString();
+		showInfoText(tr("Warning Information"),
+				w.isEmpty() ? tr("This machine reports no emulation warnings.") : w);
+	});
+	connect(info->addAction(tr("&Bookkeeping…")), &QAction::triggered, this, [this] {
+		showInfoText(tr("Bookkeeping"), m_embedSession
+				? QString::fromStdString(m_embedSession->infoSnapshot().bookkeeping) : QString());
+	});
+	info->addSeparator();
+	connect(info->addAction(tr("&History…")), &QAction::triggered, this,
+			[this] { showRunningHistory(); });
 }
 
 void MainWindow::rebuildMediaMenu(QMenu *menu)
@@ -1455,6 +1480,79 @@ void MainWindow::rebuildAudioMenu(QMenu *menu)
 	}
 	if (!any)
 		menu->addAction(tr("(this machine has no volume controls)"))->setEnabled(false);
+}
+
+void MainWindow::showInfoText(const QString &title, const QString &text)
+{
+	// Parent the dialog to the detached play window when the game runs in its own
+	// window, so the dialog stacks above the game instead of pulling the browser
+	// (the dialog's would-be parent) to the front and pushing the game behind it.
+	QWidget *const owner = (m_embedWindow && m_embedWindow->isVisible())
+			? static_cast<QWidget *>(m_embedWindow) : static_cast<QWidget *>(this);
+
+	// One reusable modeless read-only dialog for all the Info screens.
+	if (!m_infoDialog)
+	{
+		m_infoDialog = new QDialog(owner);
+		m_infoDialog->resize(560, 460);
+		QVBoxLayout *lay = new QVBoxLayout(m_infoDialog);
+		m_infoTextView = new QPlainTextEdit(m_infoDialog);
+		m_infoTextView->setReadOnly(true);
+		m_infoTextView->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+		lay->addWidget(m_infoTextView);
+		QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_infoDialog);
+		connect(buttons, &QDialogButtonBox::rejected, m_infoDialog, &QDialog::hide);
+		lay->addWidget(buttons);
+	}
+	else if (m_infoDialog->parentWidget() != owner)
+	{
+		// Re-home the dialog to the window that owns the current run.
+		m_infoDialog->setParent(owner, Qt::Dialog);
+	}
+	m_infoDialog->setWindowTitle(title);
+	m_infoTextView->setPlainText(text.isEmpty() ? tr("No information available.") : text);
+	m_infoDialog->show();
+	m_infoDialog->raise();
+	m_infoDialog->activateWindow();
+}
+
+void MainWindow::showRunningHistory()
+{
+	if (!m_embedSession)
+		return;
+
+	// History is keyed by the running software item (list/short) when one is
+	// loaded, else by the host machine — reusing the browser's history loader.
+	EmbedCaps const caps = m_embedSession->capsSnapshot();
+	QString key;
+	if (!caps.swShort.empty())
+		key = QString::fromStdString(caps.swList) + QLatin1Char('/') + QString::fromStdString(caps.swShort);
+	else
+		key = m_runningSystem;
+
+	if (frontendFolderPath(QStringLiteral("history")).isEmpty())
+	{
+		showInfoText(tr("History"), tr("History is not configured (set its path in Options)."));
+		return;
+	}
+	if (key.isEmpty())
+	{
+		showInfoText(tr("History"), tr("No history available."));
+		return;
+	}
+
+	if (!m_embedInfoLoader)
+	{
+		m_embedInfoLoader = new InfoLoader(this);
+		connect(m_embedInfoLoader, &InfoLoader::loaded, this,
+				[this] (quint64 epoch, int source, const QString &text) {
+			if (epoch != m_embedInfoEpoch || source != InfoLoader::History)
+				return;
+			showInfoText(tr("History"), text.isEmpty() ? tr("No history available.") : text);
+		});
+	}
+	showInfoText(tr("History"), tr("Loading…"));
+	m_embedInfoLoader->request(++m_embedInfoEpoch, InfoLoader::History, key);
 }
 
 void MainWindow::setEmbedFullscreen(bool on)
@@ -2728,6 +2826,8 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 	// Pause any artwork-panel media (snap/advert video, soundtrack) so it doesn't
 	// keep playing — and competing for audio — once the game starts.
 	m_artwork->pauseMedia();
+
+	m_runningSystem = system;   // for the Info ▸ History lookup during the run
 
 	QString const label = software.isEmpty()
 			? system

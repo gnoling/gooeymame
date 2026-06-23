@@ -138,6 +138,16 @@ struct EmbedSlider
 	int current = 0;
 };
 
+// Read-only informational text about the running machine, for the Info menu's
+// dialogs.  Published from the emulation thread; bookkeeping changes over time
+// so it is re-published periodically.
+struct EmbedInfo
+{
+	std::string sysInfo;       // description, CPUs, sound, screens (game_info_string)
+	std::string warnings;      // emulation warnings ("" = none)
+	std::string bookkeeping;   // uptime, tickets dispensed, coin counters
+};
+
 // Capability flags describing what the running machine actually supports, so the
 // GUI can show ONLY the menus relevant to it (hidden, not disabled).  Recomputed
 // on the emulation thread; the generation counter lets the GUI detect change
@@ -293,6 +303,19 @@ public:
 		return m_sliders;
 	}
 
+	// Read-only Info text (system info / warnings / bookkeeping).
+	void publishInfo(EmbedInfo info)
+	{
+		std::lock_guard<std::mutex> lk(m_infoMutex);
+		m_info = std::move(info);
+	}
+
+	EmbedInfo infoSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_infoMutex);
+		return m_info;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -321,6 +344,9 @@ private:
 
 	mutable std::mutex m_sliderMutex;
 	std::vector<EmbedSlider> m_sliders;
+
+	mutable std::mutex m_infoMutex;
+	EmbedInfo m_info;
 };
 
 } // namespace osd::qtui
