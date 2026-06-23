@@ -30,6 +30,7 @@ class QEvent;
 class QObject;
 class QLineEdit;
 class QMenu;
+class QMenuBar;
 class QProgressBar;
 class QPushButton;
 class QSlider;
@@ -141,17 +142,24 @@ private:
 	void returnFromEmbed();
 
 	// NEWUI-parity in-game controls (active only during an in-process embed).
+	// Capability keys for show/hide relevance gating (see applyMenuRelevance).
+	enum CapKey { CapDips, CapConfigs, CapBios, CapSlots, CapImages, CapTape,
+			CapNetwork, CapBarcode, CapCrosshair, CapSound, CapNaturalKeyboard,
+			CapCheat };
 	void buildMachineMenu();
-	void populateMachineMenu(QMenu *menu);       // fill a Machine menu (main bar or detached window)
+	void addInGameMenus(QMenuBar *bar);          // add the in-game top-level menus to a bar (main + detached window)
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
 	void rebuildSlotsMenu(QMenu *menu);          // (re)populate the Slots submenu from the live slot snapshot
 	void rebuildSettingsMenu(QMenu *menu, bool config); // DIP switches / machine-config submenu from the live snapshot
-	void rebuildVideoMenu(QMenu *menu);          // render view + artwork-visibility (bezel) toggles
+	void rebuildVideoMenu(QMenu *menu);          // whole Video menu: pixels/view/artwork + geometry + image + performance
+	void rebuildAudioMenu(QMenu *menu);          // volume sliders from the live slider snapshot
+	void addSliderControl(QMenu *menu, const EmbedSlider &s, int index); // submenu with a live QSlider widget
+	void applyMenuRelevance(const EmbedCaps &caps); // hide menus/submenus the running machine lacks
 	void setEmbedFullscreen(bool on);            // GUI-level fullscreen of the embedded game surface
 	void showReloadOverlay(const QString &message); // brief overlay over a media/slot reset gap
 	void postEmbed(const EmbedAction &action);   // no-op if no in-process session
 	void setMachineControlsActive(bool active);
-	void updateEmbedStatus();                    // sync the Pause check from the live machine
+	void updateEmbedStatus();                    // sync the Pause check + menu relevance from the live machine
 
 	void createMenus();
 	void createWidgets();
@@ -249,8 +257,10 @@ private:
 	QMainWindow *m_embedWindow = nullptr;   // host when LocWindow (own menu bar)
 	std::unique_ptr<EmbedSession> m_embedSession;   // in-process embed command bridge
 	std::thread m_embedThread;                      // runs the in-process emulation
-	QMenu *m_machineMenu = nullptr;                 // NEWUI-parity in-game controls (main bar)
+	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
+	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it
+	unsigned m_lastCapsGen = 0;                     // last applied capability generation (relevance refresh)
 	QList<QAction *> m_pauseActions;                // Pause toggles to keep in sync
 	QList<QAction *> m_fullscreenActions;           // Fullscreen toggles to keep in sync
 	bool m_embedFullscreen = false;                 // GUI fullscreen active for the embedded game

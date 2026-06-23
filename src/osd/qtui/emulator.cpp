@@ -20,6 +20,7 @@
 
 // MAME headers
 #include "emu.h"
+#include "crsshair.h"   // crosshair_manager::get_usage() for menu relevance
 #include "emuopts.h"
 #include "main.h"
 #include "mame.h"
@@ -29,6 +30,8 @@
 #include "dislot.h"
 #include "natkeyboard.h"
 #include "ui/ui.h"
+#include "ui/menuitem.h"   // ui::menu_item (slider list entries)
+#include "ui/slider.h"     // slider_state + SLIDER_NOCHANGE (live adjustments)
 
 #include "drivenum.h"
 #include "rendlay.h"   // layout_view visibility toggles (bezel/artwork)
@@ -224,6 +227,9 @@ public:
 		refresh_slots();
 		refresh_settings();
 		refresh_video();
+		// NOTE: refresh_caps() is deferred to update() — at osd init() time (early
+		// in running_machine::start()) the sound/natkeyboard/crosshair managers it
+		// queries don't exist yet, so calling it here crashes.
 	}
 
 	virtual void update(bool skip_redraw) override
@@ -232,6 +238,16 @@ public:
 		if (m_machine)
 		{
 			m_session.paused.store(m_machine->paused());
+			// Publish capabilities once the machine has actually started.  The
+			// first update()s fire during the "Initializing" phase (forced video
+			// pumps from set_startup_text), before the sound/natkeyboard/crosshair
+			// managers refresh_caps() queries are constructed — so wait for RESET.
+			if (!m_capsInit && m_machine->phase() >= machine_phase::RESET)
+			{
+				m_capsInit = true;
+				refresh_caps();
+				refresh_sliders();
+			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
 			// a cart load can trigger a reset, and MAME's own Tab UI can change
@@ -243,6 +259,14 @@ public:
 				// DIP/config + render view can also change via MAME's own Tab UI.
 				refresh_settings();
 				refresh_video();
+				// A cart/disk load (or a slot hard-reset) can change which device
+				// menus are relevant, so re-publish capability flags too — but only
+				// once the managers it queries exist (see the one-shot above).
+				if (m_machine->phase() >= machine_phase::RESET)
+				{
+					refresh_caps();
+					refresh_sliders();
+				}
 			}
 		}
 		sdl_osd_interface::update(skip_redraw);
@@ -403,6 +427,39 @@ private:
 					static_cast<sdl_window_info *>(w)->notify_changed();
 			refresh_video();
 			break;
+		case EmbedCommand::SetKeepAspect:
+			if (render_target *const t = m.render().first_target())
+			{
+				t->set_keepaspect(a.ival != 0);
+				refresh_video();
+			}
+			break;
+		case EmbedCommand::SetScaleMode:
+			if (render_target *const t = m.render().first_target())
+			{
+				t->set_scale_mode(a.ival);
+				refresh_video();
+			}
+			break;
+		case EmbedCommand::SetZoomToScreen:
+			if (render_target *const t = m.render().first_target())
+			{
+				t->set_zoom_to_screen(a.ival != 0);
+				refresh_video();
+			}
+			break;
+		case EmbedCommand::SetSlider:
+			{
+				// Re-fetch the combined slider list (same order as the snapshot)
+				// and drive the addressed slider's update callback live.
+				std::vector<slider_state *> const sl = collect_sliders();
+				if (a.ival >= 0 && a.ival < int(sl.size()) && sl[a.ival])
+				{
+					sl[a.ival]->update(nullptr, std::int32_t(a.dval));
+					refresh_sliders();
+				}
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -484,6 +541,10 @@ private:
 				v.toggles.push_back({ toggle.name(), BIT(mask, idx) != 0 });
 				++idx;
 			}
+			v.keepaspect = t->keepaspect();
+			v.scaleMode = t->scale_mode();
+			v.zoomToScreen = t->zoom_to_screen();
+			v.zoomAvailable = view.has_art();   // zoom-to-screen only matters with artwork
 		}
 		v.smooth = (video_config.filter != 0);
 		m_session.publishVideo(std::move(v));
@@ -544,9 +605,115 @@ private:
 		m_session.publishSlots(std::move(out));
 	}
 
+	// Publish capability flags so the GUI shows only the menus relevant to the
+	// running machine (mirrors the predicates MAME's menu_main::populate() uses).
+	void refresh_caps()
+	{
+		if (!m_machine)
+			return;
+		osd::qtui::EmbedCaps c;
+
+		// DIP switches / machine configuration (same predicate as refresh_settings).
+		for (auto &port : m_machine->ioport().ports())
+		{
+			for (ioport_field &field : port.second->fields())
+			{
+				if (!field.enabled() || field.settings().empty())
+					continue;
+				if (field.type() == IPT_DIPSWITCH)
+					c.hasDips = true;
+				else if (field.type() == IPT_CONFIG)
+					c.hasConfigs = true;
+			}
+		}
+
+		// User-loadable image devices + the running software item (if any).
+		for (device_image_interface &img : image_interface_enumerator(m_machine->root_device()))
+		{
+			if (img.user_loadable())
+				c.hasImages = true;
+			if (c.swShort.empty())
+			{
+				if (const software_info *const sw = img.software_entry())
+				{
+					c.swShort = sw->shortname();
+					c.swList = img.software_list_name();
+				}
+			}
+		}
+
+		// Configurable device slots.
+		for (device_slot_interface &slot : slot_interface_enumerator(m_machine->root_device()))
+		{
+			if (slot.has_selectable_options())
+			{
+				c.hasSlots = true;
+				break;
+			}
+		}
+
+		c.hasSound = !m_machine->sound().no_sound();
+		c.hasNaturalKeyboard = (m_machine->natkeyboard().keyboard_count() != 0);
+		c.hasCrosshair = m_machine->crosshair().get_usage();
+		c.cheatEnabled = m_machine->options().cheat();
+
+		if (render_target *const t = m_machine->render().first_target())
+		{
+			unsigned n = 0;
+			while (t->view_name(n))
+				++n;
+			c.multiView = (n > 1);
+		}
+
+		m_session.publishCaps(std::move(c));
+	}
+
+	// The combined UI + OSD slider list, in a stable order — the index into this
+	// vector is the command key the GUI uses to address a slider.
+	std::vector<slider_state *> collect_sliders()
+	{
+		std::vector<slider_state *> out;
+		if (!m_machine)
+			return out;
+		auto &ui = mame_machine_manager::instance()->ui();
+		for (ui::menu_item &mi : ui.get_slider_list())
+			if (mi.type() == ui::menu_item_type::SLIDER)
+				out.push_back(reinterpret_cast<slider_state *>(mi.ref()));
+		for (ui::menu_item &mi : m_machine->osd().get_slider_list())
+			if (mi.type() == ui::menu_item_type::SLIDER)
+				out.push_back(reinterpret_cast<slider_state *>(mi.ref()));
+		return out;
+	}
+
+	// Publish the live sliders (brightness/volume/speed/…) for the Video/Audio
+	// menus, reading each current value via the slider's own update callback.
+	void refresh_sliders()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedSlider> out;
+		for (slider_state *const s : collect_sliders())
+		{
+			if (!s)
+				continue;
+			osd::qtui::EmbedSlider e;
+			e.description = s->description;
+			e.minval = s->minval;
+			e.defval = s->defval;
+			e.maxval = s->maxval;
+			e.incval = s->incval ? s->incval : 1;
+			std::string buf;
+			e.current = s->update(&buf, SLIDER_NOCHANGE);
+			e.text = buf;
+			out.push_back(std::move(e));
+		}
+		m_session.publishSliders(std::move(out));
+	}
+
 	osd::qtui::EmbedSession &m_session;
 	running_machine *m_machine = nullptr;
 	unsigned m_imageRefreshTick = 0;
+	bool m_capsInit = false;   // capabilities published on the first update() frame
 };
 
 } // anonymous namespace

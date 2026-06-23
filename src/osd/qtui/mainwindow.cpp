@@ -58,6 +58,8 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QSplitter>
+#include <QtWidgets/QWidget>
+#include <QtWidgets/QWidgetAction>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
@@ -945,8 +947,9 @@ void MainWindow::createMenus()
 
 void MainWindow::buildMachineMenu()
 {
-	m_machineMenu = menuBar()->addMenu(tr("&Machine"));
-	populateMachineMenu(m_machineMenu);
+	// The in-game menus (Machine / Video / Input, plus Audio/Info/Cheat in later
+	// steps) live on the main menu bar between Tools and Help.
+	addInGameMenus(menuBar());
 
 	// Poll the live machine's paused state to keep the Pause check in sync.
 	m_embedStatusTimer = new QTimer(this);
@@ -956,93 +959,106 @@ void MainWindow::buildMachineMenu()
 	setMachineControlsActive(false);
 }
 
-void MainWindow::populateMachineMenu(QMenu *menu)
+void MainWindow::addInGameMenus(QMenuBar *bar)
 {
-	// In-game controls mirroring winui's NEWUI menu (src/osd/winui/newui.cpp).
+	// In-game controls mirroring MAME's in-game Tab menu, split into dedicated
+	// top-level menus (Machine / Video / Input; Audio/Info/Cheat added later).
 	// Active only while a game runs embedded in-process, where each action is
 	// applied directly to the live running_machine on the emulation thread.
-	// Called once for the main menu bar and again for the detached play window;
-	// every control action is tracked for enable/disable.
+	// Called once for the main menu bar and again for the detached play window.
 	auto track = [this] (QAction *a) {
 		a->setEnabled(m_machineControlsActive);
 		m_machineActions.append(a);
 		return a;
 	};
+	// Add a top-level in-game menu, recorded so it is shown only while embedded.
+	auto topMenu = [this, bar] (const QString &title) {
+		QMenu *m = bar->addMenu(title);
+		m_machineMenus.append(m);
+		return m;
+	};
+	// Mark a menu/submenu action as relevant only when the machine has CapKey.
+	auto relevant = [this] (QAction *a, int cap) {
+		m_relevanceActions.emplace_back(a, cap);
+		return a;
+	};
 
-	QAction *pause = track(menu->addAction(tr("&Pause")));
+	//---- Machine: system/hardware actions ----------------------------------
+	QMenu *machine = topMenu(tr("&Machine"));
+
+	QAction *pause = track(machine->addAction(tr("&Pause")));
 	pause->setCheckable(true);
 	m_pauseActions.append(pause);
 	connect(pause, &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::TogglePause, 0.0, 0, {} }); });
 
-	menu->addSeparator();
-	connect(track(menu->addAction(tr("&Soft Reset"))), &QAction::triggered, this,
+	machine->addSeparator();
+	connect(track(machine->addAction(tr("&Soft Reset"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::SoftReset, 0.0, 0, {} }); });
-	connect(track(menu->addAction(tr("&Hard Reset"))), &QAction::triggered, this,
+	connect(track(machine->addAction(tr("&Hard Reset"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::HardReset, 0.0, 0, {} }); });
 
-	menu->addSeparator();
-	connect(track(menu->addAction(tr("Save &State"))), &QAction::triggered, this,
+	machine->addSeparator();
+	connect(track(machine->addAction(tr("Save &State"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::SaveState, 0.0, 0, {} }); });
-	connect(track(menu->addAction(tr("&Load State"))), &QAction::triggered, this,
+	connect(track(machine->addAction(tr("&Load State"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::LoadState, 0.0, 0, {} }); });
-	connect(track(menu->addAction(tr("Save State &As…"))), &QAction::triggered, this, [this] {
+	connect(track(machine->addAction(tr("Save State &As…"))), &QAction::triggered, this, [this] {
 		bool ok = false;
 		QString const name = QInputDialog::getText(this, tr("Save State As"),
 				tr("State slot/file name:"), QLineEdit::Normal, QStringLiteral("1"), &ok);
 		if (ok && !name.isEmpty())
 			postEmbed({ EmbedCommand::SaveState, 0.0, 0, name.toStdString() });
 	});
-	connect(track(menu->addAction(tr("Save Scree&nshot"))), &QAction::triggered, this,
+	connect(track(machine->addAction(tr("Save Scree&nshot"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::SaveSnapshot, 0.0, 0, {} }); });
 
-	menu->addSeparator();
-	QMenu *throttle = menu->addMenu(tr("&Throttle"));
-	track(throttle->menuAction());
-	struct { const char *label; double rate; } const rates[] = {
-		{ "50%", 0.5 }, { "100%", 1.0 }, { "200%", 2.0 }, { "500%", 5.0 }, { "1000%", 10.0 },
-	};
-	for (const auto &r : rates)
-		connect(throttle->addAction(tr(r.label)), &QAction::triggered, this,
-				[this, rate = r.rate] { postEmbed({ EmbedCommand::SetThrottleRate, rate, 0, {} }); });
-	throttle->addSeparator();
-	connect(throttle->addAction(tr("Toggle throttling")), &QAction::triggered, this,
-			[this] { postEmbed({ EmbedCommand::ToggleThrottle, 0.0, 0, {} }); });
+	// Devices: media images, configurable slots.  (BIOS / Tape / Network /
+	// Barcode are added in a later step.)  Each submenu is rebuilt from the live
+	// snapshot when it opens, and hidden entirely when the machine lacks it.
+	machine->addSeparator();
+	QMenu *media = machine->addMenu(tr("&Media"));
+	track(media->menuAction());
+	relevant(media->menuAction(), CapImages);
+	connect(media, &QMenu::aboutToShow, this, [this, media] { rebuildMediaMenu(media); });
 
-	QMenu *frameskip = menu->addMenu(tr("&Frameskip"));
-	track(frameskip->menuAction());
-	connect(frameskip->addAction(tr("Auto")), &QAction::triggered, this,
-			[this] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, -1, {} }); });
-	frameskip->addSeparator();
-	for (int i = 0; i <= 10; ++i)
-		connect(frameskip->addAction(QString::number(i)), &QAction::triggered, this,
-				[this, i] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, i, {} }); });
+	QMenu *slotMenu = machine->addMenu(tr("S&lots"));
+	track(slotMenu->menuAction());
+	relevant(slotMenu->menuAction(), CapSlots);
+	connect(slotMenu, &QMenu::aboutToShow, this, [this, slotMenu] { rebuildSlotsMenu(slotMenu); });
 
-	connect(track(menu->addAction(tr("Toggle &FPS display"))), &QAction::triggered, this,
-			[this] { postEmbed({ EmbedCommand::ToggleFps, 0.0, 0, {} }); });
+	// DIP switches and machine configuration: live, per-machine settings.
+	machine->addSeparator();
+	QMenu *dipMenu = machine->addMenu(tr("&DIP Switches"));
+	track(dipMenu->menuAction());
+	relevant(dipMenu->menuAction(), CapDips);
+	connect(dipMenu, &QMenu::aboutToShow, this, [this, dipMenu] { rebuildSettingsMenu(dipMenu, false); });
 
-	// Rotate the game view live (absolute orientation, mirroring NEWUI).
-	QMenu *rotate = menu->addMenu(tr("&Rotate"));
-	track(rotate->menuAction());
-	for (int deg : { 0, 90, 180, 270 })
-		connect(rotate->addAction(tr("%1°").arg(deg)), &QAction::triggered, this,
-				[this, deg] { postEmbed({ EmbedCommand::SetRotate, 0.0, deg, {} }); });
+	QMenu *configMenu = machine->addMenu(tr("Machine &Configuration"));
+	track(configMenu->menuAction());
+	relevant(configMenu->menuAction(), CapConfigs);
+	connect(configMenu, &QMenu::aboutToShow, this, [this, configMenu] { rebuildSettingsMenu(configMenu, true); });
 
-	// Fullscreen is a GUI action (fills the host with the game); see toggleFullscreen.
-	QAction *fullscreen = track(menu->addAction(tr("F&ullscreen")));
-	fullscreen->setCheckable(true);
-	fullscreen->setChecked(m_embedFullscreen);
-	m_fullscreenActions.append(fullscreen);
-	connect(fullscreen, &QAction::triggered, this, [this] (bool on) { setEmbedFullscreen(on); });
+	machine->addSeparator();
+	connect(track(machine->addAction(tr("Stop &Game"))), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::Exit, 0.0, 0, {} }); });
 
-	// Video: switch render view + toggle artwork layers (bezel/overlay/...).
-	// Rebuilt each open from the snapshot the OSD publishes.
-	QMenu *videoMenu = menu->addMenu(tr("&Video"));
-	track(videoMenu->menuAction());
-	connect(videoMenu, &QMenu::aboutToShow, this, [this, videoMenu] { rebuildVideoMenu(videoMenu); });
+	//---- Video: scaling, view, artwork, geometry, performance --------------
+	// The whole menu is rebuilt from the live snapshot each time it opens, so
+	// its children are never tracked individually (they vanish on the next
+	// open); the top-level menu's visibility gates them instead.
+	QMenu *video = topMenu(tr("&Video"));
+	connect(video, &QMenu::aboutToShow, this, [this, video] { rebuildVideoMenu(video); });
 
-	menu->addSeparator();
-	QMenu *keyboard = menu->addMenu(tr("&Keyboard"));
+	//---- Audio: volume sliders (machines with sound) -----------------------
+	QMenu *audio = topMenu(tr("&Audio"));
+	relevant(audio->menuAction(), CapSound);
+	connect(audio, &QMenu::aboutToShow, this, [this, audio] { rebuildAudioMenu(audio); });
+
+	//---- Input: keyboard mode + paste (natural-keyboard machines) ----------
+	QMenu *input = topMenu(tr("&Input"));
+	relevant(input->menuAction(), CapNaturalKeyboard);
+	QMenu *keyboard = input->addMenu(tr("&Keyboard"));
 	track(keyboard->menuAction());
 	QActionGroup *kbGroup = new QActionGroup(this);
 	QAction *kbEmu = keyboard->addAction(tr("Emulated"));
@@ -1053,36 +1069,8 @@ void MainWindow::populateMachineMenu(QMenu *menu)
 			[this] { postEmbed({ EmbedCommand::KeyboardEmulated, 0.0, 0, {} }); });
 	connect(kbNat, &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::KeyboardNatural, 0.0, 0, {} }); });
-	connect(track(menu->addAction(tr("&Paste"))), &QAction::triggered, this,
+	connect(track(input->addAction(tr("&Paste"))), &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Paste, 0.0, 0, {} }); });
-
-	// Media: mount/unload disk/cart/tape images on the live machine.  Rebuilt
-	// each time it opens from the image snapshot the OSD publishes.
-	menu->addSeparator();
-	QMenu *media = menu->addMenu(tr("&Media"));
-	track(media->menuAction());
-	connect(media, &QMenu::aboutToShow, this, [this, media] { rebuildMediaMenu(media); });
-
-	// Slots: change which device occupies a configurable slot.  This can't be
-	// done live (slots are fixed at machine creation), so it sets the option and
-	// hard-resets.  Rebuilt each time it opens from the slot snapshot.
-	QMenu *slotMenu = menu->addMenu(tr("S&lots"));
-	track(slotMenu->menuAction());
-	connect(slotMenu, &QMenu::aboutToShow, this, [this, slotMenu] { rebuildSlotsMenu(slotMenu); });
-
-	// DIP switches and machine configuration: live, per-machine settings (these
-	// vary by game).  Rebuilt each open from the snapshot the OSD publishes.
-	QMenu *dipMenu = menu->addMenu(tr("&DIP Switches"));
-	track(dipMenu->menuAction());
-	connect(dipMenu, &QMenu::aboutToShow, this, [this, dipMenu] { rebuildSettingsMenu(dipMenu, false); });
-
-	QMenu *configMenu = menu->addMenu(tr("Machine &Configuration"));
-	track(configMenu->menuAction());
-	connect(configMenu, &QMenu::aboutToShow, this, [this, configMenu] { rebuildSettingsMenu(configMenu, true); });
-
-	menu->addSeparator();
-	connect(track(menu->addAction(tr("Stop &Game"))), &QAction::triggered, this,
-			[this] { postEmbed({ EmbedCommand::Exit, 0.0, 0, {} }); });
 }
 
 void MainWindow::rebuildMediaMenu(QMenu *menu)
@@ -1212,6 +1200,69 @@ void MainWindow::rebuildSettingsMenu(QMenu *menu, bool config)
 				: tr("(this machine has no DIP switches)"))->setEnabled(false);
 }
 
+// Classify a slider by its (English, C-locale) description so the user-friendly
+// ones land in the right menu: Image → Video, Volume → Audio, Speed → Video
+// Performance, everything else → the Video "Other Adjustments" catch-all.
+namespace {
+enum SliderCategory { SliderImage, SliderVolume, SliderSpeed, SliderOther };
+SliderCategory sliderCategory(const std::string &description)
+{
+	QString const d = QString::fromStdString(description).toLower();
+	if (d.contains(QStringLiteral("volume")))
+		return SliderVolume;
+	if (d.contains(QStringLiteral("brightness")) || d.contains(QStringLiteral("contrast"))
+			|| d.contains(QStringLiteral("gamma")))
+		return SliderImage;
+	if (d.contains(QStringLiteral("speed")))
+		return SliderSpeed;
+	return SliderOther;
+}
+} // namespace
+
+void MainWindow::addSliderControl(QMenu *menu, const EmbedSlider &s, int index)
+{
+	// A submenu titled "<Name>: <value>" holding a live horizontal slider.  The
+	// snapshot value seeds it; dragging posts SetSlider live; the title's
+	// MAME-formatted value refreshes when the menu is next opened.
+	QString const name = QString::fromStdString(s.description);
+	QString const value = QString::fromStdString(s.text);
+	QMenu *sm = menu->addMenu(value.isEmpty() ? name : tr("%1: %2").arg(name, value));
+
+	QWidget *box = new QWidget(sm);
+	QHBoxLayout *lay = new QHBoxLayout(box);
+	lay->setContentsMargins(6, 2, 6, 2);
+	QSlider *sl = new QSlider(Qt::Horizontal, box);
+	sl->setMinimum(s.minval);
+	sl->setMaximum(s.maxval);
+	sl->setSingleStep(s.incval);
+	sl->setPageStep(s.incval * 10);
+	sl->setValue(s.current);
+	sl->setMinimumWidth(180);
+	QLabel *lbl = new QLabel(value.isEmpty() ? QString::number(s.current) : value, box);
+	lbl->setMinimumWidth(52);
+	lay->addWidget(sl);
+	lay->addWidget(lbl);
+
+	QWidgetAction *wa = new QWidgetAction(sm);
+	wa->setDefaultWidget(box);
+	sm->addAction(wa);
+
+	connect(sl, &QSlider::valueChanged, this, [this, index, lbl, sm, name] (int v) {
+		QString const text = QString::number(v);
+		lbl->setText(text);
+		sm->setTitle(tr("%1: %2").arg(name, text));   // live title feedback while dragging
+		EmbedAction a;
+		a.cmd = EmbedCommand::SetSlider;
+		a.ival = index;
+		a.dval = double(v);
+		postEmbed(a);
+	});
+
+	sm->addSeparator();
+	connect(sm->addAction(tr("Reset to default")), &QAction::triggered, this,
+			[sl, def = s.defval] { sl->setValue(def); });   // valueChanged posts SetSlider
+}
+
 void MainWindow::rebuildVideoMenu(QMenu *menu)
 {
 	menu->clear();
@@ -1222,6 +1273,7 @@ void MainWindow::rebuildVideoMenu(QMenu *menu)
 	}
 
 	EmbedVideo const video = m_embedSession->videoSnapshot();
+	std::vector<EmbedSlider> const sliders = m_embedSession->slidersSnapshot();
 
 	// Screen scaling: sharp (nearest) vs smooth (bilinear).  The most-wanted
 	// control — the default bilinear filter looks blurry on pixel art.
@@ -1267,21 +1319,142 @@ void MainWindow::rebuildVideoMenu(QMenu *menu)
 	if (video.toggles.empty())
 	{
 		menu->addAction(tr("(this view has no artwork layers)"))->setEnabled(false);
-		return;
 	}
-	for (int i = 0; i < int(video.toggles.size()); ++i)
+	else
 	{
-		QAction *a = menu->addAction(QString::fromStdString(video.toggles[i].name));
+		for (int i = 0; i < int(video.toggles.size()); ++i)
+		{
+			QAction *a = menu->addAction(QString::fromStdString(video.toggles[i].name));
+			a->setCheckable(true);
+			a->setChecked(video.toggles[i].enabled);
+			connect(a, &QAction::toggled, this, [this, i] (bool on) {
+				EmbedAction act;
+				act.cmd = EmbedCommand::SetVisibility;
+				act.ival = i;
+				act.value = on ? 1u : 0u;
+				postEmbed(act);
+			});
+		}
+	}
+
+	// Geometry: rotate the view, scaling, aspect + fill the host with the game.
+	menu->addSection(tr("Geometry"));
+	QMenu *rotate = menu->addMenu(tr("&Rotate"));
+	for (int deg : { 0, 90, 180, 270 })
+		connect(rotate->addAction(tr("%1°").arg(deg)), &QAction::triggered, this,
+				[this, deg] { postEmbed({ EmbedCommand::SetRotate, 0.0, deg, {} }); });
+
+	QAction *aspect = menu->addAction(tr("Maintain &Aspect Ratio"));
+	aspect->setCheckable(true);
+	aspect->setChecked(video.keepaspect);
+	connect(aspect, &QAction::toggled, this, [this] (bool on) {
+		postEmbed({ EmbedCommand::SetKeepAspect, 0.0, on ? 1 : 0, {} });
+	});
+
+	// Scaling mode: integer pixels (crisp, no shimmer) vs fractional (fills more).
+	QMenu *scaling = menu->addMenu(tr("&Scaling"));
+	QActionGroup *scaleGroup = new QActionGroup(scaling);
+	struct { const char *label; int mode; } const scaleModes[] = {
+		{ "Fractional", 0 },          // SCALE_FRACTIONAL
+		{ "Fractional (X only)", 1 }, // SCALE_FRACTIONAL_X
+		{ "Fractional (Y only)", 2 }, // SCALE_FRACTIONAL_Y
+		{ "Fractional (auto)", 3 },   // SCALE_FRACTIONAL_AUTO
+		{ "Integer (sharp)", 4 },     // SCALE_INTEGER
+	};
+	for (const auto &sm : scaleModes)
+	{
+		QAction *a = scaling->addAction(tr(sm.label));
 		a->setCheckable(true);
-		a->setChecked(video.toggles[i].enabled);
-		connect(a, &QAction::toggled, this, [this, i] (bool on) {
-			EmbedAction act;
-			act.cmd = EmbedCommand::SetVisibility;
-			act.ival = i;
-			act.value = on ? 1u : 0u;
-			postEmbed(act);
+		scaleGroup->addAction(a);
+		a->setChecked(video.scaleMode == sm.mode);
+		connect(a, &QAction::triggered, this, [this, mode = sm.mode] {
+			postEmbed({ EmbedCommand::SetScaleMode, 0.0, mode, {} });
 		});
 	}
+
+	QAction *zoom = menu->addAction(tr("&Zoom to Screen Area"));
+	zoom->setCheckable(true);
+	zoom->setChecked(video.zoomToScreen);
+	zoom->setEnabled(video.zoomAvailable);
+	connect(zoom, &QAction::toggled, this, [this] (bool on) {
+		postEmbed({ EmbedCommand::SetZoomToScreen, 0.0, on ? 1 : 0, {} });
+	});
+
+	QAction *fullscreen = menu->addAction(tr("F&ullscreen"));
+	fullscreen->setCheckable(true);
+	fullscreen->setChecked(m_embedFullscreen);
+	connect(fullscreen, &QAction::triggered, this, [this] (bool on) { setEmbedFullscreen(on); });
+
+	// Image: brightness / contrast / gamma live sliders.
+	bool imageHeader = false;
+	for (int i = 0; i < int(sliders.size()); ++i)
+	{
+		if (sliderCategory(sliders[i].description) != SliderImage)
+			continue;
+		if (!imageHeader) { menu->addSection(tr("Image")); imageHeader = true; }
+		addSliderControl(menu, sliders[i], i);
+	}
+
+	// Performance: throttle rate, frameskip, FPS overlay, global speed.
+	menu->addSection(tr("Performance"));
+	QMenu *throttle = menu->addMenu(tr("&Throttle"));
+	struct { const char *label; double rate; } const rates[] = {
+		{ "50%", 0.5 }, { "100%", 1.0 }, { "200%", 2.0 }, { "500%", 5.0 }, { "1000%", 10.0 },
+	};
+	for (const auto &r : rates)
+		connect(throttle->addAction(tr(r.label)), &QAction::triggered, this,
+				[this, rate = r.rate] { postEmbed({ EmbedCommand::SetThrottleRate, rate, 0, {} }); });
+	throttle->addSeparator();
+	connect(throttle->addAction(tr("Toggle throttling")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::ToggleThrottle, 0.0, 0, {} }); });
+
+	QMenu *frameskip = menu->addMenu(tr("&Frameskip"));
+	connect(frameskip->addAction(tr("Auto")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, -1, {} }); });
+	frameskip->addSeparator();
+	for (int i = 0; i <= 10; ++i)
+		connect(frameskip->addAction(QString::number(i)), &QAction::triggered, this,
+				[this, i] { postEmbed({ EmbedCommand::SetFrameskip, 0.0, i, {} }); });
+
+	connect(menu->addAction(tr("Toggle &FPS display")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::ToggleFps, 0.0, 0, {} }); });
+
+	for (int i = 0; i < int(sliders.size()); ++i)
+		if (sliderCategory(sliders[i].description) == SliderSpeed)
+			addSliderControl(menu, sliders[i], i);
+
+	// Other adjustments: every remaining slider (refresh, beam, mixer, overclock,
+	// …) — kept reachable but out of the way of the user-friendly controls above.
+	QMenu *other = nullptr;
+	for (int i = 0; i < int(sliders.size()); ++i)
+	{
+		if (sliderCategory(sliders[i].description) != SliderOther)
+			continue;
+		if (!other) { menu->addSection(tr("More")); other = menu->addMenu(tr("Other Adjustments")); }
+		addSliderControl(other, sliders[i], i);
+	}
+}
+
+void MainWindow::rebuildAudioMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+
+	std::vector<EmbedSlider> const sliders = m_embedSession->slidersSnapshot();
+	bool any = false;
+	for (int i = 0; i < int(sliders.size()); ++i)
+	{
+		if (sliderCategory(sliders[i].description) != SliderVolume)
+			continue;
+		addSliderControl(menu, sliders[i], i);
+		any = true;
+	}
+	if (!any)
+		menu->addAction(tr("(this machine has no volume controls)"))->setEnabled(false);
 }
 
 void MainWindow::setEmbedFullscreen(bool on)
@@ -1356,11 +1529,17 @@ void MainWindow::setMachineControlsActive(bool active)
 	// mode with live access to running_machine).  Toggling the actions (rather
 	// than the menus) covers both the main bar and the detached window's bar.
 	m_machineControlsActive = active;
-	// The main menu-bar Machine menu only appears while an in-process game runs.
-	if (m_machineMenu)
-		m_machineMenu->menuAction()->setVisible(active);
+	// The in-game top-level menus only appear while an in-process game runs.
+	for (QMenu *m : m_machineMenus)
+		m->menuAction()->setVisible(active);
 	for (QAction *a : m_machineActions)
 		a->setEnabled(active);
+	if (active && m_embedSession)
+	{
+		// Hide menus the machine lacks straight away (don't wait for the timer).
+		m_lastCapsGen = m_embedSession->capsGeneration();
+		applyMenuRelevance(m_embedSession->capsSnapshot());
+	}
 	if (!active)
 		for (QAction *p : m_pauseActions)
 			p->setChecked(false);
@@ -1373,6 +1552,32 @@ void MainWindow::setMachineControlsActive(bool active)
 	}
 }
 
+void MainWindow::applyMenuRelevance(const EmbedCaps &caps)
+{
+	// Show only the menus/submenus relevant to the running machine — a menu the
+	// machine has no use for is hidden, not shown as a disabled placeholder.
+	auto has = [&caps] (int cap) -> bool {
+		switch (cap)
+		{
+		case CapDips:            return caps.hasDips;
+		case CapConfigs:         return caps.hasConfigs;
+		case CapBios:            return caps.hasBios;
+		case CapSlots:           return caps.hasSlots;
+		case CapImages:          return caps.hasImages;
+		case CapTape:            return caps.hasTape;
+		case CapNetwork:         return caps.hasNetwork;
+		case CapBarcode:         return caps.hasBarcode;
+		case CapCrosshair:       return caps.hasCrosshair;
+		case CapSound:           return caps.hasSound;
+		case CapNaturalKeyboard: return caps.hasNaturalKeyboard;
+		case CapCheat:           return caps.cheatEnabled;
+		}
+		return true;
+	};
+	for (const auto &pr : m_relevanceActions)
+		pr.first->setVisible(has(pr.second));
+}
+
 void MainWindow::updateEmbedStatus()
 {
 	if (m_embedSession && m_embedSession->running.load())
@@ -1380,6 +1585,15 @@ void MainWindow::updateEmbedStatus()
 		bool const paused = m_embedSession->paused.load();
 		for (QAction *p : m_pauseActions)
 			p->setChecked(paused);
+
+		// Capabilities can change mid-run (a cart load adds image/slot devices),
+		// so re-apply relevance whenever the published generation advances.
+		unsigned const gen = m_embedSession->capsGeneration();
+		if (gen != m_lastCapsGen)
+		{
+			m_lastCapsGen = gen;
+			applyMenuRelevance(m_embedSession->capsSnapshot());
+		}
 	}
 }
 
@@ -2456,8 +2670,13 @@ void MainWindow::placeEmbedSurface()
 			QMenu *fileMenu = m_embedWindow->menuBar()->addMenu(tr("&File"));
 			connect(fileMenu->addAction(tr("Stop &Game")), &QAction::triggered,
 					this, [this] { stopEmbedded(); });
-			QMenu *machine = m_embedWindow->menuBar()->addMenu(tr("&Machine"));
-			populateMachineMenu(machine);
+			// The same in-game top-level menus (Machine / Video / Input …) in the
+			// detached window's own bar, in their proper context.  This bar is
+			// built lazily (after setMachineControlsActive ran), so gate its new
+			// submenus for the current machine right away.
+			addInGameMenus(m_embedWindow->menuBar());
+			if (m_machineControlsActive && m_embedSession)
+				applyMenuRelevance(m_embedSession->capsSnapshot());
 		}
 		m_embedWindow->setCentralWidget(m_embedHost);
 		m_embedWindow->show();
@@ -2505,6 +2724,10 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 		stopEmbedded();
 		return;
 	}
+
+	// Pause any artwork-panel media (snap/advert video, soundtrack) so it doesn't
+	// keep playing — and competing for audio — once the game starts.
+	m_artwork->pauseMedia();
 
 	QString const label = software.isEmpty()
 			? system
@@ -2596,6 +2819,15 @@ void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &sy
 		});
 		// Hide the overlay once MAME has had a moment to put up its first frames.
 		QTimer::singleShot(1500, m_embedHost, [this] { m_embedHost->showOverlay(false); });
+
+		// Nudge X keyboard focus onto the attached surface once it has mapped.  A
+		// second in-process launch reuses this window and the attached SDL window
+		// doesn't re-grab focus on its own, so prod it a few times as it comes up.
+		for (int delay : { 700, 1400, 2200 })
+			QTimer::singleShot(delay, m_embedHost, [this] {
+				if (m_embedSession)
+					m_embedHost->nudgeFocus();
+			});
 	});
 }
 

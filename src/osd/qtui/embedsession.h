@@ -53,6 +53,10 @@ enum class EmbedCommand
 	SetView,          // ival = render view index
 	SetVisibility,    // ival = visibility-toggle index, value = 1 enable / 0 disable (bezel/artwork)
 	SetFilter,        // ival = 1 smooth (bilinear) / 0 sharp (nearest-neighbour) screen scaling
+	SetKeepAspect,    // ival = 1 maintain aspect ratio / 0 stretch
+	SetScaleMode,     // ival = SCALE_FRACTIONAL/_X/_Y/_AUTO/INTEGER (render.h)
+	SetZoomToScreen,  // ival = 1 zoom screen area to fill view / 0 off
+	SetSlider,        // ival = slider index (publish order), dval = new value
 	Exit
 };
 
@@ -113,6 +117,60 @@ struct EmbedVideo
 	struct Toggle { std::string name; bool enabled = false; };
 	std::vector<Toggle> toggles;        // current view's visibility toggles (index = command key)
 	bool smooth = true;                 // screen scaling: true = bilinear (blurry), false = nearest (sharp)
+	bool keepaspect = true;             // maintain the source aspect ratio
+	int  scaleMode = 0;                 // SCALE_FRACTIONAL/_X/_Y/_AUTO/INTEGER (render.h)
+	bool zoomToScreen = false;          // zoom so the screen area fills the view (artwork views)
+	bool zoomAvailable = false;         // whether zoom-to-screen is meaningful (view has artwork)
+};
+
+// A live adjustment slider (brightness / contrast / gamma / volume / speed /
+// refresh / beam / …), enumerated from the UI + OSD slider lists.  The index in
+// the published vector is the command key: the emulation thread re-fetches the
+// same combined list in the same order to apply a change.
+struct EmbedSlider
+{
+	std::string description;   // e.g. "Brightness", "Master Volume"
+	std::string text;          // MAME-formatted current value (e.g. "1.00", "0%")
+	int minval = 0;
+	int defval = 0;
+	int maxval = 0;
+	int incval = 1;
+	int current = 0;
+};
+
+// Capability flags describing what the running machine actually supports, so the
+// GUI can show ONLY the menus relevant to it (hidden, not disabled).  Recomputed
+// on the emulation thread; the generation counter lets the GUI detect change
+// cheaply (a cart load can add image/slot capability mid-run).  Mirrors the
+// predicates MAME's own menu_main::populate() uses to show/hide Tab-menu entries.
+struct EmbedCaps
+{
+	bool hasDips = false;            // any enabled IPT_DIPSWITCH field with settings
+	bool hasConfigs = false;         // any enabled IPT_CONFIG field with settings
+	bool hasBios = false;            // a selectable system/device BIOS
+	bool hasSlots = false;           // any device slot with selectable options
+	bool hasImages = false;          // any user-loadable image device
+	bool hasTape = false;            // a cassette device
+	bool hasNetwork = false;         // a network interface
+	bool hasBarcode = false;         // a barcode reader
+	bool hasCrosshair = false;       // crosshair in use
+	bool hasSound = false;           // sound enabled
+	bool hasNaturalKeyboard = false; // natural-keyboard capable (Paste / Emulated-Natural)
+	bool cheatEnabled = false;       // -cheat active
+	bool multiView = false;          // more than one render view
+	std::string swList;              // running software-list short name ("" if none)
+	std::string swShort;             // running software item short name ("" if none)
+
+	bool operator==(const EmbedCaps &o) const
+	{
+		return hasDips == o.hasDips && hasConfigs == o.hasConfigs && hasBios == o.hasBios
+			&& hasSlots == o.hasSlots && hasImages == o.hasImages && hasTape == o.hasTape
+			&& hasNetwork == o.hasNetwork && hasBarcode == o.hasBarcode
+			&& hasCrosshair == o.hasCrosshair && hasSound == o.hasSound
+			&& hasNaturalKeyboard == o.hasNaturalKeyboard && cheatEnabled == o.cheatEnabled
+			&& multiView == o.multiView && swList == o.swList && swShort == o.swShort;
+	}
+	bool operator!=(const EmbedCaps &o) const { return !(*this == o); }
 };
 
 //============================================================
@@ -200,6 +258,41 @@ public:
 		return m_video;
 	}
 
+	// Capability snapshot for menu relevance (which menus to show at all).
+	void publishCaps(EmbedCaps c)
+	{
+		std::lock_guard<std::mutex> lk(m_capsMutex);
+		// Only advance the generation when capabilities actually change, so the
+		// GUI re-applies menu relevance (which toggles menu visibility and can
+		// disturb the embedded window's keyboard focus) rarely, not every frame.
+		if (c != m_caps)
+		{
+			m_caps = std::move(c);
+			m_capsGen.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+
+	EmbedCaps capsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_capsMutex);
+		return m_caps;
+	}
+
+	unsigned capsGeneration() const { return m_capsGen.load(std::memory_order_relaxed); }
+
+	// Slider snapshot (brightness/volume/…), re-published as values change.
+	void publishSliders(std::vector<EmbedSlider> list)
+	{
+		std::lock_guard<std::mutex> lk(m_sliderMutex);
+		m_sliders = std::move(list);
+	}
+
+	std::vector<EmbedSlider> slidersSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_sliderMutex);
+		return m_sliders;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -221,6 +314,13 @@ private:
 
 	mutable std::mutex m_videoMutex;
 	EmbedVideo m_video;
+
+	mutable std::mutex m_capsMutex;
+	EmbedCaps m_caps;
+	std::atomic<unsigned> m_capsGen{0};
+
+	mutable std::mutex m_sliderMutex;
+	std::vector<EmbedSlider> m_sliders;
 };
 
 } // namespace osd::qtui
