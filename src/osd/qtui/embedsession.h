@@ -57,6 +57,14 @@ enum class EmbedCommand
 	SetScaleMode,     // ival = SCALE_FRACTIONAL/_X/_Y/_AUTO/INTEGER (render.h)
 	SetZoomToScreen,  // ival = 1 zoom screen area to fill view / 0 off
 	SetSlider,        // ival = slider index (publish order), dval = new value
+	SetBios,          // sval = device tag (":" = system), ival = system_bios value; hard reset
+	TapeControl,      // sval = cassette tag, ival = 0 stop/1 play/2 record/3 rewind/4 ff/5 restart
+	SetNetwork,       // sval = network device tag, ival = host interface id (-1 = none)
+	BarcodeDecode,    // sval = barcode device tag, sval2 = code digits
+	SetCrosshairMode, // ival = player, value = 0 off / 1 on / 2 auto
+	CheatToggleGlobal,// toggle the global cheat enable
+	CheatSelect,      // ival = cheat index, value = 0 default / 1 next / 2 previous state
+	CheatReload,      // reload all cheats from disk
 	Exit
 };
 
@@ -146,6 +154,51 @@ struct EmbedInfo
 	std::string sysInfo;       // description, CPUs, sound, screens (game_info_string)
 	std::string warnings;      // emulation warnings ("" = none)
 	std::string bookkeeping;   // uptime, tickets dispensed, coin counters
+};
+
+// A BIOS-selectable device.  Changing the BIOS requires a reconfigure (hard
+// reset), so this is published at machine init.
+struct EmbedBios
+{
+	std::string tag;       // device tag (command key); ":" = the system itself
+	std::string label;     // "System" or the device tag
+	int current = 0;       // current system_bios value (1-based)
+	std::vector<std::pair<int, std::string>> options;  // (bios value, "name — description")
+};
+
+// A cassette device for the Tape Control menu (transport + position).
+struct EmbedTape
+{
+	std::string tag;       // device tag (command key)
+	std::string label;     // instance label
+	std::string status;    // "stopped" / "playing" / "recording" / "no tape"
+	int position = 0;      // current position (seconds)
+	int length = 0;        // tape length (seconds)
+	bool loaded = false;
+};
+
+// A network device + the host interfaces it can be bound to.
+struct EmbedNetwork
+{
+	std::string tag;       // device tag (command key)
+	std::string label;     // device tag/name
+	int current = -1;      // current host interface id (-1 = none)
+	std::vector<std::pair<int, std::string>> interfaces;  // (id, description)
+};
+
+// A per-player crosshair (lightgun aim) and its visibility mode.
+struct EmbedCrosshair
+{
+	int player = 0;        // command key
+	int mode = 2;          // 0 off / 1 on / 2 auto (CROSSHAIR_VISIBILITY_*)
+};
+
+// The cheat list (global enable + per-entry description/state).
+struct EmbedCheat
+{
+	bool enabled = false;  // global cheat enable
+	struct Entry { std::string description; std::string state; bool textOnly = false; };
+	std::vector<Entry> entries;   // index = command key
 };
 
 // Capability flags describing what the running machine actually supports, so the
@@ -316,6 +369,78 @@ public:
 		return m_info;
 	}
 
+	// BIOS-selectable devices (published at init).
+	void publishBios(std::vector<EmbedBios> list)
+	{
+		std::lock_guard<std::mutex> lk(m_biosMutex);
+		m_bios = std::move(list);
+	}
+	std::vector<EmbedBios> biosSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_biosMutex);
+		return m_bios;
+	}
+
+	// Cassette devices (re-published periodically; position changes).
+	void publishTapes(std::vector<EmbedTape> list)
+	{
+		std::lock_guard<std::mutex> lk(m_tapeMutex);
+		m_tapes = std::move(list);
+	}
+	std::vector<EmbedTape> tapesSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_tapeMutex);
+		return m_tapes;
+	}
+
+	// Network devices + selectable host interfaces.
+	void publishNetwork(std::vector<EmbedNetwork> list)
+	{
+		std::lock_guard<std::mutex> lk(m_netMutex);
+		m_network = std::move(list);
+	}
+	std::vector<EmbedNetwork> networkSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_netMutex);
+		return m_network;
+	}
+
+	// Barcode reader devices (tag, label).
+	void publishBarcodes(std::vector<std::pair<std::string, std::string>> list)
+	{
+		std::lock_guard<std::mutex> lk(m_barcodeMutex);
+		m_barcodes = std::move(list);
+	}
+	std::vector<std::pair<std::string, std::string>> barcodesSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_barcodeMutex);
+		return m_barcodes;
+	}
+
+	// Per-player crosshairs (in use only).
+	void publishCrosshairs(std::vector<EmbedCrosshair> list)
+	{
+		std::lock_guard<std::mutex> lk(m_crossMutex);
+		m_crosshairs = std::move(list);
+	}
+	std::vector<EmbedCrosshair> crosshairsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_crossMutex);
+		return m_crosshairs;
+	}
+
+	// Cheat list (re-published as state changes).
+	void publishCheats(EmbedCheat c)
+	{
+		std::lock_guard<std::mutex> lk(m_cheatMutex);
+		m_cheats = std::move(c);
+	}
+	EmbedCheat cheatsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_cheatMutex);
+		return m_cheats;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -347,6 +472,24 @@ private:
 
 	mutable std::mutex m_infoMutex;
 	EmbedInfo m_info;
+
+	mutable std::mutex m_biosMutex;
+	std::vector<EmbedBios> m_bios;
+
+	mutable std::mutex m_tapeMutex;
+	std::vector<EmbedTape> m_tapes;
+
+	mutable std::mutex m_netMutex;
+	std::vector<EmbedNetwork> m_network;
+
+	mutable std::mutex m_barcodeMutex;
+	std::vector<std::pair<std::string, std::string>> m_barcodes;
+
+	mutable std::mutex m_crossMutex;
+	std::vector<EmbedCrosshair> m_crosshairs;
+
+	mutable std::mutex m_cheatMutex;
+	EmbedCheat m_cheats;
 };
 
 } // namespace osd::qtui

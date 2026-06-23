@@ -1032,6 +1032,26 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 	relevant(slotMenu->menuAction(), CapSlots);
 	connect(slotMenu, &QMenu::aboutToShow, this, [this, slotMenu] { rebuildSlotsMenu(slotMenu); });
 
+	QMenu *biosMenu = machine->addMenu(tr("&BIOS Selection"));
+	track(biosMenu->menuAction());
+	relevant(biosMenu->menuAction(), CapBios);
+	connect(biosMenu, &QMenu::aboutToShow, this, [this, biosMenu] { rebuildBiosMenu(biosMenu); });
+
+	QMenu *tapeMenu = machine->addMenu(tr("&Tape Control"));
+	track(tapeMenu->menuAction());
+	relevant(tapeMenu->menuAction(), CapTape);
+	connect(tapeMenu, &QMenu::aboutToShow, this, [this, tapeMenu] { rebuildTapeMenu(tapeMenu); });
+
+	QMenu *netMenu = machine->addMenu(tr("&Network Devices"));
+	track(netMenu->menuAction());
+	relevant(netMenu->menuAction(), CapNetwork);
+	connect(netMenu, &QMenu::aboutToShow, this, [this, netMenu] { rebuildNetworkMenu(netMenu); });
+
+	QMenu *barcodeMenu = machine->addMenu(tr("Bar&code Reader"));
+	track(barcodeMenu->menuAction());
+	relevant(barcodeMenu->menuAction(), CapBarcode);
+	connect(barcodeMenu, &QMenu::aboutToShow, this, [this, barcodeMenu] { rebuildBarcodeMenu(barcodeMenu); });
+
 	// DIP switches and machine configuration: live, per-machine settings.
 	machine->addSeparator();
 	QMenu *dipMenu = machine->addMenu(tr("&DIP Switches"));
@@ -1060,11 +1080,12 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 	relevant(audio->menuAction(), CapSound);
 	connect(audio, &QMenu::aboutToShow, this, [this, audio] { rebuildAudioMenu(audio); });
 
-	//---- Input: keyboard mode + paste (natural-keyboard machines) ----------
+	//---- Input: keyboard mode + paste (natural-keyboard machines), crosshair --
 	QMenu *input = topMenu(tr("&Input"));
-	relevant(input->menuAction(), CapNaturalKeyboard);
+	relevant(input->menuAction(), CapInput);
 	QMenu *keyboard = input->addMenu(tr("&Keyboard"));
 	track(keyboard->menuAction());
+	relevant(keyboard->menuAction(), CapNaturalKeyboard);
 	QActionGroup *kbGroup = new QActionGroup(this);
 	QAction *kbEmu = keyboard->addAction(tr("Emulated"));
 	QAction *kbNat = keyboard->addAction(tr("Natural"));
@@ -1074,8 +1095,19 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 			[this] { postEmbed({ EmbedCommand::KeyboardEmulated, 0.0, 0, {} }); });
 	connect(kbNat, &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::KeyboardNatural, 0.0, 0, {} }); });
-	connect(track(input->addAction(tr("&Paste"))), &QAction::triggered, this,
+	QAction *paste = relevant(track(input->addAction(tr("&Paste"))), CapNaturalKeyboard);
+	connect(paste, &QAction::triggered, this,
 			[this] { postEmbed({ EmbedCommand::Paste, 0.0, 0, {} }); });
+
+	QMenu *crosshair = input->addMenu(tr("&Crosshair"));
+	track(crosshair->menuAction());
+	relevant(crosshair->menuAction(), CapCrosshair);
+	connect(crosshair, &QMenu::aboutToShow, this, [this, crosshair] { rebuildCrosshairMenu(crosshair); });
+
+	//---- Cheat: global enable + per-entry state (only with -cheat) ----------
+	QMenu *cheat = topMenu(tr("&Cheat"));
+	relevant(cheat->menuAction(), CapCheat);
+	connect(cheat, &QMenu::aboutToShow, this, [this, cheat] { rebuildCheatMenu(cheat); });
 
 	//---- Info: read-only screens (system info / warnings / bookkeeping / history)
 	QMenu *info = topMenu(tr("In&fo"));
@@ -1223,6 +1255,252 @@ void MainWindow::rebuildSettingsMenu(QMenu *menu, bool config)
 		menu->addAction(config
 				? tr("(this machine has no configuration settings)")
 				: tr("(this machine has no DIP switches)"))->setEnabled(false);
+}
+
+void MainWindow::rebuildBiosMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	std::vector<EmbedBios> const list = m_embedSession->biosSnapshot();
+	if (list.empty())
+	{
+		menu->addAction(tr("(this machine has no BIOS options)"))->setEnabled(false);
+		return;
+	}
+	for (const EmbedBios &b : list)
+	{
+		// One device → list its BIOSes directly; several → a submenu each.
+		QMenu *dev = (list.size() > 1) ? menu->addMenu(QString::fromStdString(b.label)) : menu;
+		QActionGroup *group = new QActionGroup(dev);
+		std::string const tag = b.tag;
+		for (const auto &opt : b.options)
+		{
+			int const value = opt.first;
+			QAction *a = dev->addAction(QString::fromStdString(opt.second));
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(value == b.current);
+			connect(a, &QAction::triggered, this, [this, tag, value] {
+				EmbedAction act;
+				act.cmd = EmbedCommand::SetBios;
+				act.sval = tag;
+				act.ival = value;
+				postEmbed(act);
+				showReloadOverlay(tr("Changing BIOS (resetting)…"));
+			});
+		}
+	}
+}
+
+void MainWindow::rebuildTapeMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	std::vector<EmbedTape> const tapes = m_embedSession->tapesSnapshot();
+	if (tapes.empty())
+	{
+		menu->addAction(tr("(this machine has no cassette)"))->setEnabled(false);
+		return;
+	}
+	auto mmss = [] (int s) { return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0')); };
+	for (const EmbedTape &t : tapes)
+	{
+		QMenu *dev = (tapes.size() > 1) ? menu->addMenu(QString::fromStdString(t.label)) : menu;
+		std::string const tag = t.tag;
+		QString head = QString::fromStdString(t.status);
+		if (t.loaded)
+			head += QStringLiteral("  %1 / %2").arg(mmss(t.position), mmss(t.length));
+		dev->addAction(head)->setEnabled(false);
+		dev->addSeparator();
+		struct { const char *label; int verb; } const verbs[] = {
+			{ "Play", 1 }, { "Record", 2 }, { "Pause / Stop", 0 },
+			{ "Rewind 30s", 3 }, { "Fast Forward 30s", 4 }, { "Rewind to Start", 5 },
+		};
+		for (const auto &v : verbs)
+		{
+			QAction *a = dev->addAction(tr(v.label));
+			a->setEnabled(t.loaded);
+			connect(a, &QAction::triggered, this, [this, tag, verb = v.verb] {
+				EmbedAction act;
+				act.cmd = EmbedCommand::TapeControl;
+				act.sval = tag;
+				act.ival = verb;
+				postEmbed(act);
+			});
+		}
+	}
+}
+
+void MainWindow::rebuildNetworkMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	std::vector<EmbedNetwork> const nets = m_embedSession->networkSnapshot();
+	if (nets.empty())
+	{
+		menu->addAction(tr("(this machine has no network devices)"))->setEnabled(false);
+		return;
+	}
+	for (const EmbedNetwork &n : nets)
+	{
+		QMenu *dev = (nets.size() > 1) ? menu->addMenu(QString::fromStdString(n.label)) : menu;
+		QActionGroup *group = new QActionGroup(dev);
+		std::string const tag = n.tag;
+		auto addIface = [&] (const QString &label, int id) {
+			QAction *a = dev->addAction(label);
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(id == n.current);
+			connect(a, &QAction::triggered, this, [this, tag, id] {
+				EmbedAction act;
+				act.cmd = EmbedCommand::SetNetwork;
+				act.sval = tag;
+				act.ival = id;
+				postEmbed(act);
+			});
+		};
+		addIface(tr("(none)"), -1);
+		for (const auto &iface : n.interfaces)
+			addIface(QString::fromStdString(iface.second), iface.first);
+	}
+}
+
+void MainWindow::rebuildBarcodeMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	std::vector<std::pair<std::string, std::string>> const readers = m_embedSession->barcodesSnapshot();
+	if (readers.empty())
+	{
+		menu->addAction(tr("(this machine has no barcode reader)"))->setEnabled(false);
+		return;
+	}
+	for (const auto &r : readers)
+	{
+		std::string const tag = r.first;
+		QString const label = readers.size() > 1
+				? tr("Enter barcode for %1…").arg(QString::fromStdString(r.second))
+				: tr("Enter barcode…");
+		connect(menu->addAction(label), &QAction::triggered, this, [this, tag] {
+			bool ok = false;
+			QString const code = QInputDialog::getText(this, tr("Barcode Reader"),
+					tr("Barcode digits:"), QLineEdit::Normal, QString(), &ok);
+			if (ok && !code.isEmpty())
+			{
+				EmbedAction act;
+				act.cmd = EmbedCommand::BarcodeDecode;
+				act.sval = tag;
+				act.sval2 = code.toStdString();
+				postEmbed(act);
+			}
+		});
+	}
+}
+
+void MainWindow::rebuildCrosshairMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	std::vector<EmbedCrosshair> const list = m_embedSession->crosshairsSnapshot();
+	if (list.empty())
+	{
+		menu->addAction(tr("(no crosshairs in use)"))->setEnabled(false);
+		return;
+	}
+	for (const EmbedCrosshair &c : list)
+	{
+		QMenu *dev = (list.size() > 1) ? menu->addMenu(tr("Player %1").arg(c.player + 1)) : menu;
+		QActionGroup *group = new QActionGroup(dev);
+		int const player = c.player;
+		struct { const char *label; int mode; } const modes[] = {
+			{ "Off", 0 }, { "On", 1 }, { "Automatic", 2 },
+		};
+		for (const auto &m : modes)
+		{
+			QAction *a = dev->addAction(tr(m.label));
+			a->setCheckable(true);
+			group->addAction(a);
+			a->setChecked(c.mode == m.mode);
+			connect(a, &QAction::triggered, this, [this, player, mode = m.mode] {
+				EmbedAction act;
+				act.cmd = EmbedCommand::SetCrosshairMode;
+				act.ival = player;
+				act.value = unsigned(mode);
+				postEmbed(act);
+			});
+		}
+	}
+}
+
+void MainWindow::rebuildCheatMenu(QMenu *menu)
+{
+	menu->clear();
+	if (!m_embedSession)
+	{
+		menu->addAction(tr("(no machine running)"))->setEnabled(false);
+		return;
+	}
+	EmbedCheat const cheat = m_embedSession->cheatsSnapshot();
+
+	QAction *enable = menu->addAction(tr("&Enable Cheats"));
+	enable->setCheckable(true);
+	enable->setChecked(cheat.enabled);
+	connect(enable, &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::CheatToggleGlobal, 0.0, 0, {} }); });
+	connect(menu->addAction(tr("&Reload All")), &QAction::triggered, this,
+			[this] { postEmbed({ EmbedCommand::CheatReload, 0.0, 0, {} }); });
+
+	menu->addSeparator();
+	if (cheat.entries.empty())
+	{
+		menu->addAction(tr("(no cheats loaded)"))->setEnabled(false);
+		return;
+	}
+	for (int i = 0; i < int(cheat.entries.size()); ++i)
+	{
+		const EmbedCheat::Entry &e = cheat.entries[i];
+		QString title = QString::fromStdString(e.description);
+		if (!e.state.empty())
+			title += QStringLiteral(": ") + QString::fromStdString(e.state);
+		if (e.textOnly)
+		{
+			// A comment/header line — not selectable.
+			menu->addAction(title)->setEnabled(false);
+			continue;
+		}
+		QMenu *sm = menu->addMenu(title);
+		struct { const char *label; int dir; } const acts[] = {
+			{ "Next state", 1 }, { "Previous state", 2 }, { "Reset to default", 0 },
+		};
+		for (const auto &act : acts)
+			connect(sm->addAction(tr(act.label)), &QAction::triggered, this, [this, i, dir = act.dir] {
+				EmbedAction a;
+				a.cmd = EmbedCommand::CheatSelect;
+				a.ival = i;
+				a.value = unsigned(dir);
+				postEmbed(a);
+			});
+	}
 }
 
 // Classify a slider by its (English, C-locale) description so the user-friendly
@@ -1669,6 +1947,7 @@ void MainWindow::applyMenuRelevance(const EmbedCaps &caps)
 		case CapSound:           return caps.hasSound;
 		case CapNaturalKeyboard: return caps.hasNaturalKeyboard;
 		case CapCheat:           return caps.cheatEnabled;
+		case CapInput:           return caps.hasNaturalKeyboard || caps.hasCrosshair;
 		}
 		return true;
 	};

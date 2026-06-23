@@ -27,8 +27,13 @@
 #include "mameopts.h"
 #include "audit.h"
 #include "diimage.h"
+#include "dinetwork.h"     // device_network_interface (Network Devices menu)
 #include "dislot.h"
 #include "natkeyboard.h"
+#include "romload.h"       // system-BIOS rom entries (BIOS Selection menu)
+#include "imagedev/cassette.h"   // cassette_image_device (Tape Control menu)
+#include "machine/bcreader.h"    // barcode_reader_device (Barcode Reader menu)
+#include "cheat.h"         // cheat_manager / cheat_entry (Cheat menu)
 #include "ui/ui.h"
 #include "ui/info.h"       // machine_info::game_info_string()/warnings_string()
 #include "ui/menuitem.h"   // ui::menu_item (slider list entries)
@@ -46,6 +51,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <cstdio>     // SEEK_SET / SEEK_CUR (cassette seek)
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -225,6 +231,11 @@ public:
 		sdl_osd_interface::init(machine);
 		m_machine = &machine;
 		m_session.running.store(true);
+		// A hard reset rebuilds the machine and re-runs init() on this same OSD
+		// object, so re-arm the one-shot publish — otherwise caps/sliders/info/
+		// BIOS/etc. stay stale after a reset (e.g. the BIOS menu would keep
+		// showing the pre-reset selection).
+		m_capsInit = false;
 		refresh_images();
 		refresh_slots();
 		refresh_settings();
@@ -250,6 +261,12 @@ public:
 				refresh_caps();
 				refresh_sliders();
 				refresh_info();
+				refresh_bios();
+				refresh_tape();
+				refresh_network();
+				refresh_barcode();
+				refresh_crosshairs();
+				refresh_cheats();
 			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
@@ -270,6 +287,8 @@ public:
 					refresh_caps();
 					refresh_sliders();
 					refresh_info();
+					refresh_tape();   // position advances while playing
+					refresh_cheats(); // reflects changes via MAME's own cheat menu
 				}
 			}
 		}
@@ -462,6 +481,85 @@ private:
 					sl[a.ival]->update(nullptr, std::int32_t(a.dval));
 					refresh_sliders();
 				}
+			}
+			break;
+		case EmbedCommand::SetBios:
+			// Mirror menu_bios_selection: set the device's system BIOS + the
+			// matching option, then hard reset to reconfigure.
+			if (device_t *const dev = find_device(a.sval))
+			{
+				dev->set_system_bios(u8(a.ival));
+				if (!std::strcmp(dev->tag(), ":"))
+					m.options().set_value(OPTION_BIOS, a.ival - 1, OPTION_PRIORITY_CMDLINE);
+				else if (dev->owner())
+					m.options().slot_option(dev->owner()->tag() + 1).set_bios(string_format("%d", a.ival - 1));
+				m.schedule_hard_reset();
+			}
+			break;
+		case EmbedCommand::TapeControl:
+			if (cassette_image_device *const c = find_cassette(a.sval))
+			{
+				switch (a.ival)
+				{
+				case 0: c->change_state(CASSETTE_STOPPED, CASSETTE_MASK_UISTATE); break;
+				case 1: c->change_state(CASSETTE_PLAY, CASSETTE_MASK_UISTATE); break;
+				case 2: c->change_state(CASSETTE_RECORD, CASSETTE_MASK_UISTATE); break;
+				case 3: c->seek(-30, SEEK_CUR); break;
+				case 4: c->seek(+30, SEEK_CUR); break;
+				case 5: c->seek(0, SEEK_SET); break;
+				default: break;
+				}
+				refresh_tape();
+			}
+			break;
+		case EmbedCommand::SetNetwork:
+			if (device_network_interface *const net = find_network(a.sval))
+			{
+				net->set_interface(a.ival);
+				refresh_network();
+			}
+			break;
+		case EmbedCommand::BarcodeDecode:
+			if (barcode_reader_device *const bc = find_barcode(a.sval))
+				bc->write_code(a.sval2.c_str(), int(a.sval2.size()));
+			break;
+		case EmbedCommand::SetCrosshairMode:
+			if (a.ival >= 0 && a.ival < MAX_PLAYERS && m.crosshair().get_usage())
+			{
+				render_crosshair &cross = m.crosshair().get_crosshair(a.ival);
+				cross.set_mode(u8(a.value));
+				cross.set_visible(a.value != 0 /* CROSSHAIR_VISIBILITY_OFF */);
+				refresh_crosshairs();
+			}
+			break;
+		case EmbedCommand::CheatToggleGlobal:
+			if (m.options().cheat())
+			{
+				cheat_manager &cheat = mame_machine_manager::instance()->cheat();
+				cheat.set_enable(!cheat.enabled(), true);
+				refresh_cheats();
+			}
+			break;
+		case EmbedCommand::CheatSelect:
+			if (m.options().cheat())
+			{
+				cheat_manager &cheat = mame_machine_manager::instance()->cheat();
+				auto const &list = cheat.entries();
+				if (a.ival >= 0 && a.ival < int(list.size()))
+				{
+					cheat_entry &e = *list[a.ival];
+					if (a.value == 1)       e.select_next_state();
+					else if (a.value == 2)  e.select_previous_state();
+					else                    e.select_default_state();
+					refresh_cheats();
+				}
+			}
+			break;
+		case EmbedCommand::CheatReload:
+			if (m.options().cheat())
+			{
+				mame_machine_manager::instance()->cheat().reload();
+				refresh_cheats();
 			}
 			break;
 		case EmbedCommand::Exit:
@@ -661,6 +759,18 @@ private:
 		c.hasCrosshair = m_machine->crosshair().get_usage();
 		c.cheatEnabled = m_machine->options().cheat();
 
+		// Device-presence flags (mirror menu_main::populate's conditions).
+		c.hasTape = (cassette_device_enumerator(m_machine->root_device()).first() != nullptr);
+		c.hasNetwork = (network_interface_enumerator(m_machine->root_device()).first() != nullptr);
+		c.hasBarcode = (device_type_enumerator<barcode_reader_device>(m_machine->root_device()).first() != nullptr);
+		for (device_t &dev : device_enumerator(m_machine->root_device()))
+		{
+			bool found = false;
+			for (tiny_rom_entry const *rom = dev.rom_region(); rom && !ROMENTRY_ISEND(rom); ++rom)
+				if (ROMENTRY_ISSYSTEM_BIOS(rom)) { found = true; break; }
+			if (found) { c.hasBios = true; break; }
+		}
+
 		if (render_target *const t = m_machine->render().first_target())
 		{
 			unsigned n = 0;
@@ -753,6 +863,185 @@ private:
 		info.bookkeeping = std::move(book);
 
 		m_session.publishInfo(std::move(info));
+	}
+
+	device_t *find_device(const std::string &tag)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (device_t &dev : device_enumerator(m_machine->root_device()))
+			if (tag == dev.tag())
+				return &dev;
+		return nullptr;
+	}
+
+	cassette_image_device *find_cassette(const std::string &tag)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (cassette_image_device &c : cassette_device_enumerator(m_machine->root_device()))
+			if (tag == c.tag())
+				return &c;
+		return nullptr;
+	}
+
+	device_network_interface *find_network(const std::string &tag)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (device_network_interface &n : network_interface_enumerator(m_machine->root_device()))
+			if (tag == n.device().tag())
+				return &n;
+		return nullptr;
+	}
+
+	barcode_reader_device *find_barcode(const std::string &tag)
+	{
+		if (!m_machine)
+			return nullptr;
+		for (barcode_reader_device &b : device_type_enumerator<barcode_reader_device>(m_machine->root_device()))
+			if (tag == b.tag())
+				return &b;
+		return nullptr;
+	}
+
+	// Publish the BIOS-selectable devices (system + slot cards), mirroring
+	// ui/miscmenu.cpp menu_bios_selection.  Static, so published once.
+	void refresh_bios()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedBios> out;
+		for (device_t &device : device_enumerator(m_machine->root_device()))
+		{
+			device_t const *const parent = device.owner();
+			device_slot_interface const *const slot = dynamic_cast<device_slot_interface const *>(parent);
+			if (parent && !(slot && slot->get_card_device() == &device))
+				continue;
+			tiny_rom_entry const *rom = device.rom_region();
+			if (!rom || ROMENTRY_ISEND(rom))
+				continue;
+			osd::qtui::EmbedBios b;
+			for ( ; rom && !ROMENTRY_ISEND(rom); ++rom)
+			{
+				if (!ROMENTRY_ISSYSTEM_BIOS(rom))
+					continue;
+				std::string label = (rom->name && rom->name[0]) ? rom->name : "";
+				if (rom->hashdata && rom->hashdata[0])
+					label += std::string("  —  ") + rom->hashdata;
+				b.options.emplace_back(int(ROM_GETBIOSFLAGS(rom)), std::move(label));
+			}
+			if (b.options.empty())
+				continue;
+			b.tag = device.tag();
+			b.label = !parent ? "System" : (device.tag() + 1);
+			b.current = device.system_bios();
+			out.push_back(std::move(b));
+		}
+		m_session.publishBios(std::move(out));
+	}
+
+	// Publish cassette devices (transport state + position).  Re-published
+	// periodically since position advances while playing.
+	void refresh_tape()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedTape> out;
+		for (cassette_image_device &cass : cassette_device_enumerator(m_machine->root_device()))
+		{
+			osd::qtui::EmbedTape t;
+			t.tag = cass.tag();
+			t.label = cass.brief_instance_name();
+			t.loaded = cass.exists();
+			cassette_state const st = cass.get_state();
+			int const ui = st & CASSETTE_MASK_UISTATE;
+			t.status = !t.loaded ? "no tape"
+					: (ui == CASSETTE_PLAY) ? "playing"
+					: (ui == CASSETTE_RECORD) ? "recording" : "stopped";
+			if (t.loaded)
+			{
+				t.position = int(cass.get_position());
+				t.length = int(cass.get_length());
+			}
+			out.push_back(std::move(t));
+		}
+		m_session.publishTapes(std::move(out));
+	}
+
+	// Publish network devices + the host interfaces they can bind to.
+	void refresh_network()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::network_device_info> const interfaces = m_machine->osd().list_network_devices();
+		std::vector<osd::qtui::EmbedNetwork> out;
+		for (device_network_interface &net : network_interface_enumerator(m_machine->root_device()))
+		{
+			osd::qtui::EmbedNetwork n;
+			n.tag = net.device().tag();
+			n.label = net.device().tag() + 1;
+			n.current = net.get_interface();
+			for (const osd::network_device_info &info : interfaces)
+				n.interfaces.emplace_back(info.id, std::string(info.description));
+			out.push_back(std::move(n));
+		}
+		m_session.publishNetwork(std::move(out));
+	}
+
+	// Publish barcode-reader devices (tag + label).
+	void refresh_barcode()
+	{
+		if (!m_machine)
+			return;
+		std::vector<std::pair<std::string, std::string>> out;
+		for (barcode_reader_device &bc : device_type_enumerator<barcode_reader_device>(m_machine->root_device()))
+			out.emplace_back(bc.tag(), std::string(bc.tag() + 1));
+		m_session.publishBarcodes(std::move(out));
+	}
+
+	// Publish the in-use per-player crosshairs and their visibility mode.
+	void refresh_crosshairs()
+	{
+		if (!m_machine)
+			return;
+		std::vector<osd::qtui::EmbedCrosshair> out;
+		if (m_machine->crosshair().get_usage())
+		{
+			for (int p = 0; p < MAX_PLAYERS; ++p)
+			{
+				render_crosshair &cross = m_machine->crosshair().get_crosshair(p);
+				if (!cross.is_used())
+					continue;
+				osd::qtui::EmbedCrosshair c;
+				c.player = p;
+				c.mode = cross.mode();
+				out.push_back(c);
+			}
+		}
+		m_session.publishCrosshairs(std::move(out));
+	}
+
+	// Publish the cheat list (global enable + per-entry description/state).
+	void refresh_cheats()
+	{
+		if (!m_machine || !m_machine->options().cheat())
+			return;
+		cheat_manager &cheat = mame_machine_manager::instance()->cheat();
+		osd::qtui::EmbedCheat out;
+		out.enabled = cheat.enabled();
+		for (const std::unique_ptr<cheat_entry> &entry : cheat.entries())
+		{
+			std::string desc, state;
+			uint32_t flags = 0;
+			entry->menu_text(desc, state, flags);
+			osd::qtui::EmbedCheat::Entry e;
+			e.description = desc;
+			e.state = state;
+			e.textOnly = entry->is_text_only();
+			out.entries.push_back(std::move(e));
+		}
+		m_session.publishCheats(std::move(out));
 	}
 
 	osd::qtui::EmbedSession &m_session;

@@ -148,12 +148,18 @@ private:
 	// Capability keys for show/hide relevance gating (see applyMenuRelevance).
 	enum CapKey { CapDips, CapConfigs, CapBios, CapSlots, CapImages, CapTape,
 			CapNetwork, CapBarcode, CapCrosshair, CapSound, CapNaturalKeyboard,
-			CapCheat };
+			CapCheat, CapInput /* natural keyboard OR crosshair */ };
 	void buildMachineMenu();
 	void addInGameMenus(QMenuBar *bar);          // add the in-game top-level menus to a bar (main + detached window)
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
 	void rebuildSlotsMenu(QMenu *menu);          // (re)populate the Slots submenu from the live slot snapshot
 	void rebuildSettingsMenu(QMenu *menu, bool config); // DIP switches / machine-config submenu from the live snapshot
+	void rebuildBiosMenu(QMenu *menu);           // BIOS selection (hard reset to apply)
+	void rebuildTapeMenu(QMenu *menu);           // cassette transport
+	void rebuildNetworkMenu(QMenu *menu);        // network device interface assignment
+	void rebuildBarcodeMenu(QMenu *menu);        // barcode reader entry
+	void rebuildCrosshairMenu(QMenu *menu);      // per-player crosshair visibility
+	void rebuildCheatMenu(QMenu *menu);          // cheat enable + per-entry state
 	void rebuildVideoMenu(QMenu *menu);          // whole Video menu: pixels/view/artwork + geometry + image + performance
 	void rebuildAudioMenu(QMenu *menu);          // volume sliders from the live slider snapshot
 	void addSliderControl(QMenu *menu, const EmbedSlider &s, int index); // submenu with a live QSlider widget
