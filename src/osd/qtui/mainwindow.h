@@ -85,6 +85,10 @@ public:
 	MainWindow(QWidget *parent = nullptr);
 	virtual ~MainWindow();
 
+	// Launch directly into an embedded play window (game + in-game menu bar) with no browser,
+	// quitting the app when it closes.  Used by the `--gooey <system> [software]` CLI flag.
+	void startStandaloneEmbedded(const QString &system, const QString &software);
+
 protected:
 	void closeEvent(QCloseEvent *event) override;
 	void changeEvent(QEvent *event) override;
@@ -264,6 +268,7 @@ private:
 	int m_embedMode = EmbedSeparate;
 	int m_embedLocation = LocWindow;
 	bool m_hideBrowserWhilePlaying = false;
+	bool m_standaloneEmbed = false;   // launched via --gooey: closing the game quits the app
 	QActionGroup *m_embedModeGroup = nullptr;
 	QActionGroup *m_embedLocationGroup = nullptr;
 	QAction *m_hideBrowserAct = nullptr;

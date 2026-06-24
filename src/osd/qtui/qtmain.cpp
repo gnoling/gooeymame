@@ -19,6 +19,10 @@
 
 #include <QtCore/QSettings>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
+
+#include <cstdio>
+#include <cstring>
 #include <QtCore/QtGlobal>
 #include <QtWidgets/QApplication>
 
@@ -51,12 +55,29 @@ int main(int argc, char *argv[])
 {
 	qtui_init_process();
 
-	// Command-line passthrough: any arguments mean "run the emulator",
-	// just like SDLMAME.
-	if (argc > 1)
+	// A leading "--gooey <system> [software]" launches straight into an embedded play window
+	// (the game inside its own window with the in-game menu bar, no browser).  Any other
+	// arguments pass through to the emulator exactly like SDLMAME.
+	QString gooeySystem, gooeySoftware;
+	bool gooeyMode = false;
+	if (argc > 1 && std::strcmp(argv[1], "--gooey") == 0)
+	{
+		if (argc < 3)
+		{
+			std::fprintf(stderr, "Usage: %s --gooey <system> [software]\n", argv[0]);
+			return 1;
+		}
+		gooeyMode = true;
+		gooeySystem = QString::fromLocal8Bit(argv[2]);
+		if (argc > 3)
+			gooeySoftware = QString::fromLocal8Bit(argv[3]);
+	}
+	else if (argc > 1)
+	{
 		return qtui_run_emulation(argc, argv);
+	}
 
-	// No arguments: show the Qt front-end.
+	// No arguments (or --gooey): show the Qt front-end.
 #ifdef _WIN32
 	// Filter the benign DPI-awareness warning the Qt platform plugin emits at
 	// startup (see qtui_message_filter).  Installed before QApplication so it
@@ -65,15 +86,31 @@ int main(int argc, char *argv[])
 #endif
 
 	QApplication app(argc, argv);
-	QApplication::setApplicationName("MAMEUI");
-	QApplication::setOrganizationName("MAMEUI");
+	QApplication::setApplicationName("GooeyMAME");
+	QApplication::setOrganizationName("GooeyMAME");
 
 #ifdef _WIN32
 	// Store GUI settings in an INI file rather than the Windows registry, so the
 	// config is inspectable/portable and consistent with the .conf used on Unix
-	// (location: %APPDATA%\MAMEUI\MAMEUI.ini).  Must precede any QSettings use.
+	// (location: %APPDATA%\GooeyMAME\GooeyMAME.ini).  Must precede any QSettings use.
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 #endif
+
+	// One-time migration from the previous "MAMEUI" settings store after the GooeyMAME rebrand, so
+	// existing GUI state (window/splitter sizes, view modes, configured paths, version prefs)
+	// carries over.  Only runs when the new store is empty so it never clobbers fresh settings.
+	{
+		QSettings current;   // GooeyMAME / GooeyMAME (IniFormat on Windows)
+		if (current.allKeys().isEmpty())
+		{
+			QSettings legacy(QStringLiteral("MAMEUI"), QStringLiteral("MAMEUI"));
+			const QStringList keys = legacy.allKeys();
+			for (const QString &key : keys)
+				current.setValue(key, legacy.value(key));
+			if (!keys.isEmpty())
+				current.sync();
+		}
+	}
 
 	// Apply the user's chosen Qt widget style and colour scheme (if any) before
 	// building the UI.  Style first: it resets the palette the scheme rides on.
@@ -81,7 +118,10 @@ int main(int argc, char *argv[])
 	osd::qtui::applyPersistedColorScheme();
 
 	osd::qtui::MainWindow window;
-	window.show();
+	if (gooeyMode)
+		window.startStandaloneEmbedded(gooeySystem, gooeySoftware);
+	else
+		window.show();
 
 	return app.exec();
 }

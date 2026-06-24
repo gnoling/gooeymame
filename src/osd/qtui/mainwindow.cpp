@@ -212,7 +212,7 @@ QList<int> captionIds(int mask)
 MainWindow::MainWindow(QWidget *parent) :
 	QMainWindow(parent)
 {
-	setWindowTitle(tr("MAMEUI"));
+	setWindowTitle(tr("GooeyMAME"));
 	resize(1100, 680);
 
 	createMenus();
@@ -3091,7 +3091,6 @@ void MainWindow::placeEmbedSurface()
 			// A QMainWindow so the detached play window carries its own menu bar
 			// with the Machine controls in its proper context.
 			m_embedWindow = new QMainWindow(this, Qt::Window);
-			m_embedWindow->setWindowTitle(tr("MAME"));
 			m_embedWindow->resize(800, 600);
 			m_embedWindow->installEventFilter(this);
 
@@ -3106,6 +3105,9 @@ void MainWindow::placeEmbedSurface()
 			if (m_machineControlsActive && m_embedSession)
 				applyMenuRelevance(m_embedSession->capsSnapshot());
 		}
+		m_embedWindow->setWindowTitle(m_runningSystem.isEmpty()
+				? tr("GooeyMAME")
+				: tr("GooeyMAME — %1").arg(m_runningSystem));
 		m_embedWindow->setCentralWidget(m_embedHost);
 		m_embedWindow->show();
 		m_embedWindow->raise();
@@ -3138,6 +3140,29 @@ void MainWindow::returnFromEmbed()
 	if (m_centralStack->indexOf(m_embedHost) < 0)
 		m_centralStack->addWidget(m_embedHost);
 	m_centralStack->setCurrentWidget(m_splitter);
+}
+
+void MainWindow::startStandaloneEmbedded(const QString &system, const QString &software)
+{
+	m_standaloneEmbed = true;
+	if (embeddingSupported())
+	{
+		// X11: embed the game inside its own window WITH the in-game menu bar (LocWindow);
+		// the browser is never shown.  Set the members directly so we don't persist over the
+		// user's normal Play Mode / location preferences.
+		m_embedMode = EmbedInProcess;
+		m_embedLocation = LocWindow;
+	}
+	else
+	{
+		// Off-X11 (e.g. Wayland): -attach_window isn't available, so fall back to in-process
+		// own-window live-controls mode — MAME runs in its own SDL window and the in-game menu
+		// bar lives on this window, which therefore has to be shown.
+		m_embedMode = EmbedInProcessWindow;
+		show();
+	}
+	// Launch once the event loop is running so the host widget realises and its XID is valid.
+	QTimer::singleShot(0, this, [this, system, software] { launchSystem(system, software); });
 }
 
 void MainWindow::launchSystem(const QString &system, const QString &software)
@@ -3250,13 +3275,18 @@ void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &sy
 		// Hide the overlay once MAME has had a moment to put up its first frames.
 		QTimer::singleShot(1500, m_embedHost, [this] { m_embedHost->showOverlay(false); });
 
-		// Nudge X keyboard focus onto the attached surface once it has mapped.  A
-		// second in-process launch reuses this window and the attached SDL window
-		// doesn't re-grab focus on its own, so prod it a few times as it comes up.
+		// Nudge X keyboard focus onto the attached surface once it has mapped, and force SDL's
+		// focus belief + pointer grab via RefocusInput.  A second in-process launch reuses this
+		// window and the attached SDL window doesn't re-grab focus on its own; a detached
+		// LocWindow toplevel (e.g. --gooey) isn't considered focused by SDL at launch either, so
+		// without the RefocusInput the lightgun pointer never grabs.  Prod a few times as it comes up.
 		for (int delay : { 700, 1400, 2200 })
 			QTimer::singleShot(delay, m_embedHost, [this] {
 				if (m_embedSession)
+				{
 					m_embedHost->nudgeFocus();
+					postEmbed({ EmbedCommand::RefocusInput, 0.0, 1, {} });
+				}
 			});
 	});
 }
@@ -3294,6 +3324,13 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 	m_embedSession.reset();
 	setMachineControlsActive(false);
 
+	if (m_standaloneEmbed)
+	{
+		// Launched via --gooey with no browser: exiting the game quits the application.
+		QApplication::quit();
+		return;
+	}
+
 	returnFromEmbed();
 	m_playAct->setEnabled(!selectedSystem().isEmpty());
 	activateWindow();
@@ -3327,8 +3364,8 @@ void MainWindow::showAbout()
 {
 	QMessageBox::about(
 			this,
-			tr("About MAMEUI"),
-			tr("MAMEUI – a cross-platform Qt front-end for MAME."));
+			tr("About GooeyMAME"),
+			tr("GooeyMAME – a cross-platform Qt front-end for MAME."));
 }
 
 } // namespace osd::qtui
