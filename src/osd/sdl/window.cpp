@@ -970,6 +970,16 @@ int sdl_window_info::complete_create()
 	//SDL_SetWindowFullscreen(window->sdl_window(), window->fullscreen());
 	SDL_RaiseWindow(platform_window());
 
+	if (attach_window && *attach_window)
+	{
+		// A foreign window adopted via SDL_CreateWindowFrom() never receives
+		// SDL_WINDOWEVENT_FOCUS_GAINED, so the OSD's focus window (which routes text input) stays
+		// null and natural-keyboard / paste / UI text entry is dropped. Designate it as the focus
+		// fallback and explicitly start text input so SDL emits SDL_TEXTINPUT for it.
+		downcast<sdl_osd_interface &>(machine().osd()).note_attached_window(this);
+		SDL_StartTextInput();
+	}
+
 #ifdef SDLMAME_WIN32
 	if (fullscreen())
 		SDL_SetWindowGrab(platform_window(), SDL_TRUE);

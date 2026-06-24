@@ -163,6 +163,7 @@ sdl_osd_interface::sdl_osd_interface(sdl_options &options) :
 	osd_common_t(options),
 	m_options(options),
 	m_focus_window(nullptr),
+	m_attach_window(nullptr),
 	m_mouse_over_window(0),
 	m_modifier_keys(0),
 	m_last_click_time(std::chrono::steady_clock::time_point::min()),
@@ -828,8 +829,22 @@ sdl_window_info *sdl_osd_interface::focus_window(T const &event) const
 	// FIXME: SDL does not properly report the window for certain versions of Ubuntu - is this still relevant?
 	if (m_enable_touch)
 		return window_from_id(event.windowID);
-	else
+	else if (m_focus_window)
 		return m_focus_window;
+	else
+		return m_attach_window;  // foreign attached window never gets FOCUS_GAINED; treat it as focused
+}
+
+
+void sdl_osd_interface::note_attached_window(sdl_window_info *window)
+{
+	// remember the attached window as the focus fallback (focus_window() above), and seed the
+	// current focus + a UI focus event once, since SDL won't deliver SDL_WINDOWEVENT_FOCUS_GAINED
+	// for a SDL_CreateWindowFrom() window
+	m_attach_window = window;
+	m_focus_window = window;
+	if (window)
+		machine().ui_input().push_window_focus_event(window->target());
 }
 
 

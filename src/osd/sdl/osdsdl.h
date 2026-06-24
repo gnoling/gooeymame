@@ -159,8 +159,13 @@ public:
 	virtual void window_exit() override;
 
 	// SDL-specific
-	virtual bool has_focus() const override { return bool(m_focus_window); }
+	virtual bool has_focus() const override { return bool(m_focus_window) || bool(m_attach_window); }
 	void release_keys();
+
+	// designate a foreign (-attach_window) window as the focus fallback: SDL never emits
+	// SDL_WINDOWEVENT_FOCUS_GAINED for a SDL_CreateWindowFrom() window, so without this the
+	// text-input route (natural keyboard / paste / UI) never resolves a focus window
+	void note_attached_window(sdl_window_info *window);
 	bool should_hide_mouse();
 	void process_events_buf();
 
@@ -195,6 +200,7 @@ private:
 
 	sdl_options &m_options;
 	sdl_window_info *m_focus_window;
+	sdl_window_info *m_attach_window;  // -attach_window foreign window, used as focus fallback
 	int m_mouse_over_window;
 	uint8_t m_modifier_keys;
 
