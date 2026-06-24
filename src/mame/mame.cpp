@@ -11,7 +11,7 @@
 #include "emu.h"
 #include "main.h"
 
-#define APPNAME                 "MAME"
+#define APPNAME                 "GooeyMAME"
 #define APPNAME_LOWER           "mame"
 #define CONFIGNAME              "mame"
 #define COPYRIGHT               "Copyright MAMEdev and contributors\nhttps://mamedev.org"
