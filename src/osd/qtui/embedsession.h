@@ -65,6 +65,7 @@ enum class EmbedCommand
 	CheatToggleGlobal,// toggle the global cheat enable
 	CheatSelect,      // ival = cheat index, value = 0 default / 1 next / 2 previous state
 	CheatReload,      // reload all cheats from disk
+	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
 	Exit
 };
 

@@ -87,6 +87,7 @@ public:
 
 protected:
 	void closeEvent(QCloseEvent *event) override;
+	void changeEvent(QEvent *event) override;
 	bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
@@ -138,6 +139,7 @@ private:
 	// Reparent the embed host into the configured location (pane/dock/window)
 	// and show it, ready to be attached to once it has been laid out.
 	void placeEmbedSurface();
+	void reassertEmbedFocus(bool active);   // (re)grab or release input focus on the attached surface
 	// Stop a running embedded game (in-process or child) without quitting.
 	void stopEmbedded();
 	bool embedRunning() const;

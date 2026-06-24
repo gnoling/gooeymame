@@ -440,17 +440,68 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
-	// Closing the detached play window stops the game and keeps the browser up.
-	if (watched == m_embedWindow && event->type() == QEvent::Close)
+	if (watched == m_embedWindow)
 	{
-		if (embedRunning())
+		// Closing the detached play window stops the game and keeps the browser up.
+		if (event->type() == QEvent::Close)
 		{
-			stopEmbedded();
-			event->ignore();
-			return true;
+			if (embedRunning())
+			{
+				stopEmbedded();
+				event->ignore();
+				return true;
+			}
+		}
+		// Activating/deactivating the detached play window (e.g. alt-tab) must re-assert or
+		// release input focus on the attached surface — SDL won't do it for a foreign window.
+		else if (event->type() == QEvent::WindowActivate)
+		{
+			reassertEmbedFocus(true);
+		}
+		else if (event->type() == QEvent::WindowDeactivate)
+		{
+			reassertEmbedFocus(false);
 		}
 	}
 	return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+	// When the browser-hosted embed (LocBrowser) gains/loses activation, re-assert or release
+	// input focus on the attached surface (same reason as the detached window in eventFilter).
+	if (event->type() == QEvent::ActivationChange)
+		reassertEmbedFocus(isActiveWindow());
+	QMainWindow::changeEvent(event);
+}
+
+void MainWindow::reassertEmbedFocus(bool active)
+{
+	// Only meaningful for a live in-process embed on an attached (X11) surface.
+	if (!m_embedSession || !embedRunning() || !m_embedHost)
+		return;
+	if (!active)
+	{
+		// Host window deactivated (alt-tab away): ask the OSD to drop the pointer grab so other
+		// windows can use the mouse.  KNOWN LIMITATION: this does not yet free the cursor when
+		// alt-tabbing away from a lightgun game — the foreign window's active X pointer grab
+		// appears to keep the cursor confined (and may stop a clean WindowDeactivate arriving).
+		// Needs runtime X-grab instrumentation; tracked for a later pass.  The activation
+		// (alt-tab back) path below works.
+		postEmbed({ EmbedCommand::RefocusInput, 0.0, 0, {} });
+		return;
+	}
+	// Activated: re-take X keyboard focus on the surface, and tell the OSD to force SDL focus and
+	// re-grab the pointer.  Repeat once after the WM settles.
+	auto const refocus = [this] {
+		if (m_embedSession && embedRunning())
+		{
+			m_embedHost->nudgeFocus();
+			postEmbed({ EmbedCommand::RefocusInput, 0.0, 1, {} });
+		}
+	};
+	refocus();
+	QTimer::singleShot(150, this, refocus);
 }
 
 bool MainWindow::embedRunning() const

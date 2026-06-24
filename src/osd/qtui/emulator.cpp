@@ -562,6 +562,34 @@ private:
 				refresh_cheats();
 			}
 			break;
+		case EmbedCommand::RefocusInput:
+			// Embed host window activation changed on an attached (-attach_window) surface.
+			// ival != 0 = activated: SDL never fires FOCUS_GAINED for a foreign window, so it keeps
+			// gating mouse motion and X keyboard focus doesn't return (Tab/keys go dead).  Force
+			// SDL's focus belief back, drop the stale capture flag so update_cursor_state re-grabs
+			// (absolute), and restore the OSD focus fallback that routes text input.
+			// ival == 0 = deactivated (alt-tab away): mark unfocused and release the grab so the
+			// pointer is freed for other windows.
+			set_embed_focus(a.ival != 0);
+			for (const auto &win : window_list())
+			{
+				if (osd_window *const w = win.get())
+				{
+					auto *const sw = static_cast<sdl_window_info *>(w);
+					if (a.ival != 0)
+					{
+						if (SDL_Window *const pw = sw->platform_window())
+						{
+							SDL_RaiseWindow(pw);
+							SDL_SetWindowInputFocus(pw);
+						}
+						note_attached_window(sw);
+					}
+					sw->release_pointer();   // reset capture: re-grabbed next frame if active
+					break;
+				}
+			}
+			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;

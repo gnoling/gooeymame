@@ -285,18 +285,19 @@ void sdl_window_info::update_cursor_state()
 	// the possibility of losing control
 	if (!(machine().debug_flags & DEBUG_FLAG_OSD_ENABLED))
 	{
-		bool should_hide_mouse = downcast<sdl_osd_interface&>(machine().osd()).should_hide_mouse();
+		auto &sdlosd = downcast<sdl_osd_interface&>(machine().osd());
+		bool should_hide_mouse = sdlosd.should_hide_mouse();
 
 		// On an attached (-attach_window) lightgun surface, grab the pointer so motion is
 		// continuous and confined to the embedded window, but stay in ABSOLUTE mode (no
 		// SDL_SetRelativeMouseMode): relative mode corrupts the gun position so aiming jumps and
-		// shots land off-screen (read as reloads). Pause clears should_hide_mouse and releases the
-		// grab, which is how the user unlocks the pointer.
+		// shots land off-screen (read as reloads). Only grab while the host window is active
+		// (Qt-driven embed_focused), so alt-tabbing away frees the cursor; pause also releases it.
 		auto const &sdlopts = downcast<sdl_options const &>(machine().options());
 		char const *const attach = sdlopts.attach_window();
 		bool const absolute_gun = attach && *attach && sdlopts.lightgun();
 
-		if (!fullscreen() && !should_hide_mouse)
+		if (!fullscreen() && (!should_hide_mouse || (absolute_gun && !sdlosd.embed_focused())))
 		{
 			show_pointer();
 			release_pointer();

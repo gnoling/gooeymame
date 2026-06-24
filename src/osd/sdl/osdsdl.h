@@ -166,6 +166,12 @@ public:
 	// SDL_WINDOWEVENT_FOCUS_GAINED for a SDL_CreateWindowFrom() window, so without this the
 	// text-input route (natural keyboard / paste / UI) never resolves a focus window
 	void note_attached_window(sdl_window_info *window);
+
+	// whether the embedded host window is currently active.  SDL can't tell for a foreign
+	// window, so the Qt front-end drives this; update_cursor_state() only grabs the lightgun
+	// pointer while the host is active, so alt-tabbing away frees the cursor.
+	void set_embed_focus(bool focused) { m_embed_focus = focused; }
+	bool embed_focused() const { return m_embed_focus; }
 	bool should_hide_mouse();
 	void process_events_buf();
 
@@ -201,6 +207,7 @@ private:
 	sdl_options &m_options;
 	sdl_window_info *m_focus_window;
 	sdl_window_info *m_attach_window;  // -attach_window foreign window, used as focus fallback
+	bool m_embed_focus = true;         // embedded host window active (Qt-driven; gates gun grab)
 	int m_mouse_over_window;
 	uint8_t m_modifier_keys;
 
