@@ -193,7 +193,12 @@ private:
 
 	virtual void osd_exit() override;
 
+protected:
+	// shared with the qtui OSD's qt_osd_interface, which reuses the SDL
+	// backend but creates Qt-native render windows in its own video_init()
 	void extract_video_config();
+
+private:
 	void output_oslog(const char *buffer);
 
 	void process_window_event(SDL_Event const &event);

@@ -528,6 +528,15 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/embedhost.h",
 		MAME_DIR .. "src/osd/qtui/embedsession.h",
 		MAME_DIR .. "src/osd/qtui/iconloader.h",
+
+		-- Qt-native OSD (Phase 13): QWindow-backed render window + GL context.
+		-- No Q_OBJECT in these, so no moc rules are needed.
+		MAME_DIR .. "src/osd/qtui/qtwindow.cpp",
+		MAME_DIR .. "src/osd/qtui/qtwindow.h",
+		MAME_DIR .. "src/osd/qtui/qtglcontext.h",
+		MAME_DIR .. "src/osd/qtui/qtglprovider.h",
+		MAME_DIR .. "src/osd/qtui/qtnativewindow.h",
+		MAME_DIR .. "src/osd/qtui/qtembedtarget.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",

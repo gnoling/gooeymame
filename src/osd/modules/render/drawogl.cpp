@@ -39,6 +39,12 @@ typedef uint64_t HashT;
 #include "sdlglcontext.h"
 #endif
 
+#if defined(OSD_QT_GL)
+// qtui build: a render window may be SDL-backed or Qt-native; the latter
+// supplies its own GL context through this (Qt-free) provider hook
+#include "qtglprovider.h"
+#endif
+
 // emu
 #include "emucore.h"
 #include "emuopts.h"
@@ -752,6 +758,16 @@ void renderer_ogl::initialize_gl()
 int renderer_ogl::create()
 {
 	// create renderer
+#if defined(OSD_QT_GL)
+	// in the qtui build a window may be Qt-native (provides its own GL context)
+	// or SDL-backed; prefer the Qt provider when present
+	if (auto *const provider = dynamic_cast<osd::qtui::qt_gl_context_provider *>(&window()))
+	{
+		m_gl_context.reset(provider->make_gl_context());
+	}
+	else
+#endif
+	{
 #if defined(OSD_WINDOWS)
 	m_gl_context.reset(new win_gl_context(dynamic_cast<win_window_info &>(window()).platform_window()));
 #elif defined(OSD_MAC)
@@ -760,6 +776,7 @@ int renderer_ogl::create()
 #else
 	m_gl_context.reset(new sdl_gl_context(dynamic_cast<sdl_window_info &>(window()).platform_window()));
 #endif
+	}
 	if (!*m_gl_context)
 	{
 		char const *const msg = m_gl_context->last_error_message();

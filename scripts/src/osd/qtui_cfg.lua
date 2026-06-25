@@ -19,6 +19,13 @@ includedirs {
 	MAME_DIR .. "src/frontend/mame",
 }
 
+-- Phase 13: enable the Qt-native GL context branch in the shared OpenGL
+-- renderer (drawogl.cpp).  Only the qtui build defines this, so the SDL build
+-- is unaffected; the branch falls back to the SDL context for SDL windows.
+defines {
+	"OSD_QT_GL",
+}
+
 -- On Windows/MinGW, qtdebuggerbuild() only adds the Qt headers under a
 -- configuration("mingw*") filter that does not match the gmake-mingw64-gcc
 -- build, so the front-end sources fail to find <QtCore/...>.  Add the Qt

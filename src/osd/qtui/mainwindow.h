@@ -42,6 +42,7 @@ class QTableView;
 class QTimer;
 class QTreeView;
 class QWidget;
+class QWindow;
 class QAbstractItemView;
 class QModelIndex;
 
@@ -138,6 +139,11 @@ private:
 	// In-process on a worker thread, but MAME opens its own separate window (no
 	// attach) — live Machine controls, works on Windows.
 	void launchEmbeddedInProcessWindow(const QString &label, const QString &system, const QString &software);
+	// Phase 13 (Qt-native OSD, experimental): render into a top-level QWindow via
+	// the Qt-native OSD + OpenGL, bypassing SDL's foreign-window path.  Gated by
+	// the GOOEY_QT_OSD=1 environment variable for A/B testing.
+	void launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software);
+	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
 	void setEmbedMode(int mode);
 	void setEmbedLocation(int location);
 	// Reparent the embed host into the configured location (pane/dock/window)
@@ -275,6 +281,10 @@ private:
 	QMainWindow *m_embedWindow = nullptr;   // host when LocWindow (own menu bar)
 	std::unique_ptr<EmbedSession> m_embedSession;   // in-process embed command bridge
 	std::thread m_embedThread;                      // runs the in-process emulation
+	// Phase 13 Qt-native OSD: GUI-thread-owned render surface handed to the worker
+	QWindow *m_nativeGlWindow = nullptr;
+	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow inside the central stack
+	std::unique_ptr<osd::qtui::QtEmbedTarget> m_nativeGlTarget;
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it

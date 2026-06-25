@@ -16,6 +16,7 @@
 #pragma once
 
 #include "embedsession.h"
+#include "qtembedtarget.h"   // osd::qtui::QtEmbedTarget (Qt-free)
 
 #include <atomic>
 #include <cstdint>
@@ -61,6 +62,17 @@ int qtui_run_embedded(
 		const std::string &system,
 		const std::string &software,
 		unsigned long long attach_window_id,
+		osd::qtui::EmbedSession &session);
+
+// Phase 13 (Qt-native OSD): run `system` (+ optional `software`) rendering into
+// the QWindow carried by `target`, using a Qt-native OSD window + OpenGL context
+// instead of SDL's foreign-window path.  Runs in-process on the CALLING thread
+// (intended for a worker thread).  The target must outlive this call.  Returns
+// the emulator exit code.
+int qtui_run_embedded_native(
+		const std::string &system,
+		const std::string &software,
+		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session);
 
 // A single software-list entry, flattened to plain data for the GUI.

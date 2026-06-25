@@ -16,7 +16,13 @@
 #include "osdsdl.h"
 #include "window.h"   // sdl_window_info (live fullscreen toggle for own-window embed)
 #include "modules/lib/osdlib.h"
+#include "modules/monitor/monitor_module.h"   // pick_monitor() for the Qt-native window
 #include "modules/diagnostics/diagnostics_module.h"
+
+// qtui Qt-native OSD (Phase 13): create render windows backed by a QWindow via
+// these Qt-free shims, so this translation unit stays clear of Qt headers
+#include "qtnativewindow.h"
+#include "qtembedtarget.h"
 
 // MAME headers
 #include "emu.h"
@@ -1078,6 +1084,93 @@ private:
 	bool m_capsInit = false;   // capabilities published on the first update() frame
 };
 
+
+//============================================================
+//  Qt-native OSD (Phase 13 foundation)
+//
+//  Reuses the SDL OSD backend for init/input/monitor/sound (transitional
+//  scaffold), but overrides video_init() to render into a QWindow via the Qt
+//  GL context instead of an SDL window.  This isolates and proves the Qt
+//  render path; input/focus and full SDL removal are later phases.
+//============================================================
+
+class qt_osd_interface : public sdl_osd_interface
+{
+public:
+	qt_osd_interface(sdl_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
+		sdl_osd_interface(options),
+		m_target(target),
+		m_session(session)
+	{
+	}
+
+	virtual void init(running_machine &machine) override
+	{
+		sdl_osd_interface::init(machine);
+		m_machine = &machine;
+		m_session.running.store(true);
+	}
+
+	virtual void update(bool skip_redraw) override
+	{
+		// Foundation: drain the in-game command queue but only apply the safe
+		// one-liner controls (the full NEWUI-parity apply() lives on the
+		// SDL-backed qtui_osd_interface and is shared in a later refactor).
+		// Handling Exit here is what lets the menu Stop and the window-close
+		// path actually halt the machine.
+		if (m_machine)
+		{
+			m_session.paused.store(m_machine->paused());
+			osd::qtui::EmbedAction a;
+			while (m_session.take(a))
+			{
+				using osd::qtui::EmbedCommand;
+				switch (a.cmd)
+				{
+				case EmbedCommand::Exit:        m_machine->schedule_exit();       break;
+				case EmbedCommand::TogglePause: if (m_machine->paused()) m_machine->resume(); else m_machine->pause(); break;
+				case EmbedCommand::SoftReset:   m_machine->schedule_soft_reset(); break;
+				case EmbedCommand::HardReset:   m_machine->schedule_hard_reset(); break;
+				default: break;   // other controls not yet wired for the Qt-native OSD
+				}
+			}
+		}
+		sdl_osd_interface::update(skip_redraw);
+	}
+
+	virtual bool video_init() override
+	{
+		extract_video_config();
+		video_config.beamwidth = options().beam_width_min();
+
+		// the Qt-native path renders a single window into the GUI-provided surface
+		video_config.numscreens = 1;
+
+		// initialise the (SDL) window subsystem — only logs hints; harmless
+		if (!window_init())
+			return false;
+
+		osd_window_config conf{};
+		auto win = osd::qtui::make_native_window(
+				machine(),
+				*m_render,
+				0,
+				m_monitor_module->pick_monitor(reinterpret_cast<osd_options &>(options()), 0),
+				conf,
+				m_target);
+		if (!win)
+			return false;
+
+		osd_common_t::s_window_list.emplace_back(std::move(win));
+		return true;
+	}
+
+private:
+	osd::qtui::QtEmbedTarget &m_target;
+	osd::qtui::EmbedSession &m_session;
+	running_machine *m_machine = nullptr;
+};
+
 } // anonymous namespace
 
 
@@ -1162,6 +1255,68 @@ int qtui_run_embedded(
 	{
 		sdl_options options;
 		qtui_osd_interface osd(options, session);
+		osd.register_options();
+		res = emulator_info::start_frontend(options, osd, args);
+	}
+
+	session.running.store(false);
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcFini();
+#endif
+#endif
+
+#ifdef SDLMAME_UNIX
+	if (cloc)
+	{
+		uselocale(prev);
+		freelocale(cloc);
+	}
+#elif defined(_WIN32)
+	std::setlocale(LC_ALL, win_prev_locale.c_str());
+#endif
+
+	return res;
+}
+
+
+int qtui_run_embedded_native(
+		const std::string &system,
+		const std::string &software,
+		osd::qtui::QtEmbedTarget *target,
+		osd::qtui::EmbedSession &session)
+{
+	int res = 0;
+
+	// Force the "C" locale for this thread only (see qtui_run_embedded).
+#ifdef SDLMAME_UNIX
+	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
+#elif defined(_WIN32)
+	_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+	std::string const win_prev_locale = std::setlocale(LC_ALL, nullptr);
+	std::setlocale(LC_ALL, "C");
+#endif
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcInit();
+#endif
+#endif
+
+	std::vector<std::string> args{ "mame", system };
+	if (!software.empty())
+		args.push_back(software);
+	args.push_back("-window");
+	// The Qt-native render path currently supports only the OpenGL renderer
+	// (drawogl, via qt_gl_context); force it regardless of the user's -video.
+	args.push_back("-video");
+	args.push_back("opengl");
+
+	{
+		sdl_options options;
+		qt_osd_interface osd(options, *target, session);
 		osd.register_options();
 		res = emulator_info::start_frontend(options, osd, args);
 	}

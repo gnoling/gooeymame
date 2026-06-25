@@ -42,6 +42,8 @@
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QtGui/QStyleHints>
 #endif
+#include <QtGui/QSurfaceFormat>
+#include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
@@ -440,6 +442,30 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+	// Phase 13 Qt-native OSD: closing the top-level OpenGL render window must
+	// stop the machine, not just hide the window — and we must NOT let the
+	// window (and its GL surface) be destroyed while the worker is still
+	// rendering into it.  Post Exit and consume the close; onEmbeddedFinished
+	// destroys the window once the worker has joined.
+	if (watched == m_nativeGlWindow)
+	{
+		if (event->type() == QEvent::Close)
+		{
+			if (embedRunning())
+			{
+				stopEmbedded();
+				event->ignore();
+				return true;
+			}
+		}
+		// Publish size changes to the worker (in device pixels) so the OpenGL
+		// renderer rescales; never touched off the GUI thread.
+		else if ((event->type() == QEvent::Resize || event->type() == QEvent::Expose) && m_nativeGlTarget)
+		{
+			updateNativeGlSize();
+		}
+	}
+
 	if (watched == m_embedWindow)
 	{
 		// Closing the detached play window stops the game and keeps the browser up.
@@ -3246,6 +3272,14 @@ void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &sy
 	if (m_embedSession || m_embedThread.joinable())
 		return;   // a run is already in progress
 
+	// Phase 13 experiment: GOOEY_QT_OSD=1 routes to the Qt-native OSD + OpenGL
+	// render path (a top-level QWindow, no SDL foreign window) instead.
+	if (qEnvironmentVariableIsSet("GOOEY_QT_OSD"))
+	{
+		launchEmbeddedNativeGl(label, system, software);
+		return;
+	}
+
 	statusBar()->showMessage(tr("Running %1 (embedded, in-process)…").arg(label));
 	m_playAct->setEnabled(false);
 	placeEmbedSurface();
@@ -3315,6 +3349,93 @@ void MainWindow::launchEmbeddedInProcessWindow(const QString &label, const QStri
 	});
 }
 
+void MainWindow::updateNativeGlSize()
+{
+	if (!m_nativeGlWindow || !m_nativeGlTarget)
+		return;
+	// device pixels: the GL framebuffer is sized in physical pixels
+	qreal const dpr = m_nativeGlWindow->devicePixelRatio();
+	int const w = int(m_nativeGlWindow->width() * dpr);
+	int const h = int(m_nativeGlWindow->height() * dpr);
+	m_nativeGlTarget->width.store((w > 0) ? w : 640, std::memory_order_relaxed);
+	m_nativeGlTarget->height.store((h > 0) ? h : 480, std::memory_order_relaxed);
+}
+
+void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software)
+{
+	if (m_embedSession || m_embedThread.joinable())
+		return;   // a run is already in progress
+
+	statusBar()->showMessage(tr("Running %1 (Qt-native OSD, OpenGL)…").arg(label));
+	m_playAct->setEnabled(false);
+
+	// Create the render surface on the GUI thread: a top-level OpenGL QWindow.
+	// (Step 1 of the Qt-native foundation isolates the render/GL-thread path; a
+	// later step embeds this surface into the browser layout.)
+	QSurfaceFormat fmt;
+	fmt.setRenderableType(QSurfaceFormat::OpenGL);
+	fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
+	fmt.setVersion(2, 1);
+	fmt.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+	fmt.setSwapInterval(1);
+
+	m_nativeGlWindow = new QWindow();
+	m_nativeGlWindow->setSurfaceType(QSurface::OpenGLSurface);
+	m_nativeGlWindow->setFormat(fmt);
+	m_nativeGlWindow->installEventFilter(this);   // resize/close
+
+	// Embed the render surface into the browser's central area (the in-game
+	// Machine menu stays available on the main menu bar).
+	m_nativeGlContainer = QWidget::createWindowContainer(m_nativeGlWindow, this);
+	m_nativeGlContainer->setMinimumSize(320, 240);
+	m_nativeGlContainer->setFocusPolicy(Qt::StrongFocus);
+	if (m_centralStack->indexOf(m_nativeGlContainer) < 0)
+		m_centralStack->addWidget(m_nativeGlContainer);
+	m_centralStack->setCurrentWidget(m_nativeGlContainer);
+
+	m_nativeGlTarget = std::make_unique<osd::qtui::QtEmbedTarget>();
+	m_nativeGlTarget->window = m_nativeGlWindow;
+	updateNativeGlSize();
+
+	m_embedSession = std::make_unique<EmbedSession>();
+	setMachineControlsActive(true);
+
+	std::string const sys = system.toStdString();
+	std::string const sw = software.toStdString();
+
+	// The QWindow must be exposed (native surface created) before the worker's
+	// GL context calls makeCurrent() against it.  Poll isExposed() before
+	// spawning the emulation thread.
+	auto *const attempts = new int(0);
+	auto spawnPtr = std::make_shared<std::function<void()>>();
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr]() {
+		if (!m_nativeGlWindow || !m_nativeGlTarget)
+		{
+			delete attempts;
+			return;   // torn down before we got going
+		}
+		if (!m_nativeGlWindow->isExposed() && (*attempts)++ < 100)
+		{
+			QTimer::singleShot(10, this, *spawnPtr);
+			return;
+		}
+		delete attempts;
+
+		// capture the now-laid-out, exposed surface's real size before launch
+		updateNativeGlSize();
+
+		EmbedSession *const session = m_embedSession.get();
+		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
+		if (!session || !target)
+			return;
+		m_embedThread = std::thread([this, sys, sw, target, session] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session);
+			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
+		});
+	};
+	QTimer::singleShot(10, this, *spawnPtr);
+}
+
 void MainWindow::onEmbeddedFinished(int exitCode)
 {
 	// Join the in-process emulation thread and tear down its bridge (no-op for
@@ -3323,6 +3444,26 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 		m_embedThread.join();
 	m_embedSession.reset();
 	setMachineControlsActive(false);
+
+	// Phase 13: the worker (and its GL context) are gone now, so it is safe to
+	// destroy the GUI-owned render surface on this (GUI) thread.  The container
+	// owns the QWindow (createWindowContainer reparents it), so deleting the
+	// container deletes the window.
+	if (m_nativeGlContainer)
+	{
+		m_centralStack->setCurrentWidget(m_splitter);   // back to the browser first
+		m_centralStack->removeWidget(m_nativeGlContainer);
+		m_nativeGlContainer->deleteLater();
+		m_nativeGlContainer = nullptr;
+		m_nativeGlWindow = nullptr;
+	}
+	else if (m_nativeGlWindow)   // top-level fallback (unused once embedded)
+	{
+		m_nativeGlWindow->destroy();
+		m_nativeGlWindow->deleteLater();
+		m_nativeGlWindow = nullptr;
+	}
+	m_nativeGlTarget.reset();
 
 	if (m_standaloneEmbed)
 	{
