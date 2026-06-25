@@ -88,7 +88,12 @@ public:
 
 	// Launch directly into an embedded play window (game + in-game menu bar) with no browser,
 	// quitting the app when it closes.  Used by the `--gooey <system> [software]` CLI flag.
-	void startStandaloneEmbedded(const QString &system, const QString &software);
+	// --gooey launcher.  renderer = "bgfx"/"opengl"/"" (empty = persisted setting);
+	// bgfxBackend = "auto"/"opengl"/"vulkan"/""; shader = effect chain name to apply
+	// once the game starts (e.g. "crt-geom"), or "".
+	void startStandaloneEmbedded(const QString &system, const QString &software,
+			const QString &renderer = QString(), const QString &bgfxBackend = QString(),
+			const QString &shader = QString());
 
 protected:
 	void closeEvent(QCloseEvent *event) override;
@@ -304,6 +309,7 @@ private:
 	int m_nativePlacement = PlaceCentral;          // current Qt-native placement preference
 	bool m_nativeGlPlacedInPane = false;           // placement actually used by the live run
 	bool m_quitAfterStop = false;                  // close-X in pane mode: quit once the game stops
+	QString m_pendingShaderChain;                  // CLI --shader: applied once the BGFX chains publish
 	int m_nativeRenderer = RendererOpenGL;         // OpenGL vs BGFX for the Qt-native window
 	int m_bgfxBackend = 0;                          // 0=auto, 1=opengl, 2=vulkan (BGFX backend)
 	int m_soundProvider = SoundPulse;               // non-SDL audio backend

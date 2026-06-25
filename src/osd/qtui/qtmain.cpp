@@ -58,19 +58,37 @@ int main(int argc, char *argv[])
 	// A leading "--gooey <system> [software]" launches straight into an embedded play window
 	// (the game inside its own window with the in-game menu bar, no browser).  Any other
 	// arguments pass through to the emulator exactly like SDLMAME.
-	QString gooeySystem, gooeySoftware;
+	QString gooeySystem, gooeySoftware, gooeyRenderer, gooeyBackend, gooeyShader;
 	bool gooeyMode = false;
 	if (argc > 1 && std::strcmp(argv[1], "--gooey") == 0)
 	{
 		if (argc < 3)
 		{
-			std::fprintf(stderr, "Usage: %s --gooey <system> [software]\n", argv[0]);
+			std::fprintf(stderr,
+					"Usage: %s --gooey <system> [software] [options]\n"
+					"  --opengl                 use the OpenGL renderer\n"
+					"  --bgfx                   use the BGFX renderer (shader chains)\n"
+					"  --bgfx-backend <b>       auto | opengl | vulkan (implies --bgfx)\n"
+					"  --shader <name>          apply a BGFX effect chain, e.g. crt-geom (implies --bgfx)\n",
+					argv[0]);
 			return 1;
 		}
 		gooeyMode = true;
 		gooeySystem = QString::fromLocal8Bit(argv[2]);
-		if (argc > 3)
-			gooeySoftware = QString::fromLocal8Bit(argv[3]);
+		for (int i = 3; i < argc; ++i)
+		{
+			char const *const a = argv[i];
+			if (std::strcmp(a, "--bgfx") == 0)
+				gooeyRenderer = QStringLiteral("bgfx");
+			else if (std::strcmp(a, "--opengl") == 0)
+				gooeyRenderer = QStringLiteral("opengl");
+			else if (std::strcmp(a, "--bgfx-backend") == 0 && (i + 1) < argc)
+				gooeyBackend = QString::fromLocal8Bit(argv[++i]);
+			else if (std::strcmp(a, "--shader") == 0 && (i + 1) < argc)
+				gooeyShader = QString::fromLocal8Bit(argv[++i]);
+			else if (a[0] != '-' && gooeySoftware.isEmpty())
+				gooeySoftware = QString::fromLocal8Bit(a);   // first bare arg = software
+		}
 	}
 	else if (argc > 1)
 	{
@@ -119,7 +137,7 @@ int main(int argc, char *argv[])
 
 	osd::qtui::MainWindow window;
 	if (gooeyMode)
-		window.startStandaloneEmbedded(gooeySystem, gooeySoftware);
+		window.startStandaloneEmbedded(gooeySystem, gooeySoftware, gooeyRenderer, gooeyBackend, gooeyShader);
 	else
 		window.show();
 

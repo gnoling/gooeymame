@@ -2267,6 +2267,24 @@ void MainWindow::updateEmbedStatus()
 			m_lastCapsGen = gen;
 			applyMenuRelevance(m_embedSession->capsSnapshot());
 		}
+
+		// Apply a CLI --shader request once the BGFX effect chains are published.
+		if (!m_pendingShaderChain.isEmpty())
+		{
+			EmbedShaderChains const sh = m_embedSession->shaderChainsSnapshot();
+			if (sh.available && !sh.names.empty())
+			{
+				for (int i = 0; i < int(sh.names.size()); ++i)
+				{
+					if (m_pendingShaderChain.compare(QString::fromStdString(sh.names[i]), Qt::CaseInsensitive) == 0)
+					{
+						postEmbed({ EmbedCommand::SetShaderChain, 0.0, i, {} });
+						break;
+					}
+				}
+				m_pendingShaderChain.clear();   // attempted once chains exist (found or not)
+			}
+		}
 	}
 }
 
@@ -3458,7 +3476,8 @@ void MainWindow::returnFromEmbed()
 	m_centralStack->setCurrentWidget(m_splitter);
 }
 
-void MainWindow::startStandaloneEmbedded(const QString &system, const QString &software)
+void MainWindow::startStandaloneEmbedded(const QString &system, const QString &software,
+		const QString &renderer, const QString &bgfxBackend, const QString &shader)
 {
 	m_standaloneEmbed = true;
 	// Qt-native OSD: the game renders in this window's central area with the
@@ -3468,6 +3487,26 @@ void MainWindow::startStandaloneEmbedded(const QString &system, const QString &s
 	// (onEmbeddedFinished honours m_standaloneEmbed).
 	m_embedMode = EmbedNativeQt;
 	m_nativePlacement = PlaceCentral;
+
+	// CLI overrides (don't persist): renderer, BGFX backend, and a shader chain
+	// to apply once the game's effects publish.
+	if (renderer == QLatin1String("bgfx"))
+		m_nativeRenderer = RendererBgfx;
+	else if (renderer == QLatin1String("opengl"))
+		m_nativeRenderer = RendererOpenGL;
+	if (!bgfxBackend.isEmpty())
+	{
+		m_nativeRenderer = RendererBgfx;   // a backend choice implies BGFX
+		if (bgfxBackend == QLatin1String("opengl"))      m_bgfxBackend = 1;
+		else if (bgfxBackend == QLatin1String("vulkan")) m_bgfxBackend = 2;
+		else                                             m_bgfxBackend = 0;   // auto
+	}
+	if (!shader.isEmpty())
+	{
+		m_nativeRenderer = RendererBgfx;   // shader chains require BGFX
+		m_pendingShaderChain = shader;
+	}
+
 	show();
 	// Launch once the event loop is running so the render surface is realised.
 	QTimer::singleShot(0, this, [this, system, software] { launchSystem(system, software); });
