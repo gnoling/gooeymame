@@ -225,18 +225,20 @@ int qtui_run_software(const std::string &system, const std::string &software)
 
 namespace {
 
-class qtui_osd_interface : public sdl_osd_interface
+// The in-game command queue + capability/snapshot publishing, factored out of
+// the OSD so it can be driven by either the SDL-backed OSD or the Qt-native
+// (osd_common_t) OSD.  Holds the running machine + EmbedSession; uses only
+// running_machine APIs and osd_common_t::window_list(), so it's OSD-agnostic.
+class EmbedController
 {
 public:
-	qtui_osd_interface(sdl_options &options, osd::qtui::EmbedSession &session) :
-		sdl_osd_interface(options),
+	EmbedController(osd::qtui::EmbedSession &session) :
 		m_session(session)
 	{
 	}
 
-	virtual void init(running_machine &machine) override
+	void init(running_machine &machine)
 	{
-		sdl_osd_interface::init(machine);
 		m_machine = &machine;
 		m_session.running.store(true);
 		// A hard reset rebuilds the machine and re-runs init() on this same OSD
@@ -253,7 +255,8 @@ public:
 		// queries don't exist yet, so calling it here crashes.
 	}
 
-	virtual void update(bool skip_redraw) override
+	// Called once per frame by the OSD (which then does its own redraw).
+	void update()
 	{
 		drain_commands();
 		if (m_machine)
@@ -301,7 +304,6 @@ public:
 				}
 			}
 		}
-		sdl_osd_interface::update(skip_redraw);
 	}
 
 private:
@@ -333,7 +335,7 @@ private:
 			// Only posted in own-window mode (no -attach_window); the GUI handles
 			// fullscreen for attached surfaces, where destroy+recreate is unsafe.
 			// Toggle the live SDL window between windowed and fullscreen.
-			for (const auto &win : window_list())
+			for (const auto &win : osd_common_t::window_list())
 			{
 				if (osd_window *const w = win.get())
 				{
@@ -459,7 +461,7 @@ private:
 			SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, video_config.filter ? "1" : "0");
 			// force every window's renderer to rebuild textures (generic — works
 			// for both the SDL and Qt-native windows)
-			for (const auto &win : window_list())
+			for (const auto &win : osd_common_t::window_list())
 				if (osd_window *const w = win.get())
 					if (w->has_renderer())
 						w->renderer().notify_changed();
@@ -501,7 +503,7 @@ private:
 		case EmbedCommand::SetShaderChain:
 			// Switch the BGFX shader effect for screen 0 (no-op if not BGFX).
 			{
-				auto const &wins = window_list();
+				auto const &wins = osd_common_t::window_list();
 				if (!wins.empty() && wins.front())
 					osd::qtui::bgfx_select_chain(*wins.front(), 0, a.ival);
 				refresh_shader_chains();
@@ -587,36 +589,10 @@ private:
 			}
 			break;
 		case EmbedCommand::RefocusInput:
-			// Embed host window activation changed on an attached (-attach_window) surface.
-			// ival != 0 = activated: SDL never fires FOCUS_GAINED for a foreign window, so it keeps
-			// gating mouse motion and X keyboard focus doesn't return (Tab/keys go dead).  Force
-			// SDL's focus belief back, drop the stale capture flag so update_cursor_state re-grabs
-			// (absolute), and restore the OSD focus fallback that routes text input.
-			// ival == 0 = deactivated (alt-tab away): mark unfocused and release the grab so the
-			// pointer is freed for other windows.
-			set_embed_focus(a.ival != 0);
-			for (const auto &win : window_list())
-			{
-				if (osd_window *const w = win.get())
-				{
-					// SDL foreign-window focus/grab dance; not needed (and unsafe)
-					// for the Qt-native window, which gets focus from Qt directly.
-					if (auto *const sw = dynamic_cast<sdl_window_info *>(w))
-					{
-						if (a.ival != 0)
-						{
-							if (SDL_Window *const pw = sw->platform_window())
-							{
-								SDL_RaiseWindow(pw);
-								SDL_SetWindowInputFocus(pw);
-							}
-							note_attached_window(sw);
-						}
-						sw->release_pointer();   // reset capture: re-grabbed next frame if active
-					}
-					break;
-				}
-			}
+			// No-op: this was the SDL foreign-window (-attach_window) focus/grab
+			// dance for the SDL embed path.  The Qt-native window gets focus from
+			// Qt directly (the input bus), so nothing is needed here.  (The SDL
+			// embed path that relied on this is being retired.)
 			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
@@ -883,7 +859,7 @@ private:
 	void refresh_shader_chains()
 	{
 		osd::qtui::EmbedShaderChains out;
-		auto const &wins = window_list();
+		auto const &wins = osd_common_t::window_list();
 		if (!wins.empty() && wins.front())
 		{
 			std::vector<std::string> names;
@@ -1126,23 +1102,64 @@ private:
 
 
 //============================================================
-//  Qt-native OSD (Phase 13)
+//  qtui_osd_interface — SDL-backed OSD driving the EmbedController
 //
-//  Inherits the full in-game command queue + capability/refresh publishing from
-//  qtui_osd_interface (so every Machine/Video/Audio/Input/Info/Cheat menu works),
-//  and overrides only the video path (render into a QWindow via the Qt GL context
-//  instead of an SDL window) and focus (driven by the Qt render window, not SDL's
-//  foreign-window tracking).  Still SDL-backed for init/monitor/sound as a
-//  transitional scaffold; input comes from the Qt providers (-*provider qt).
+//  Used by the legacy SDL embed/CLI launch paths.  (Being retired in favour of
+//  the Qt-native OSD below.)
 //============================================================
 
-class qt_osd_interface : public qtui_osd_interface
+class qtui_osd_interface : public sdl_osd_interface
+{
+public:
+	qtui_osd_interface(sdl_options &options, osd::qtui::EmbedSession &session) :
+		sdl_osd_interface(options),
+		m_ctrl(session)
+	{
+	}
+
+	virtual void init(running_machine &machine) override
+	{
+		sdl_osd_interface::init(machine);
+		m_ctrl.init(machine);
+	}
+
+	virtual void update(bool skip_redraw) override
+	{
+		m_ctrl.update();
+		sdl_osd_interface::update(skip_redraw);
+	}
+
+private:
+	EmbedController m_ctrl;
+};
+
+
+//============================================================
+//  Qt-native OSD (Phase 13) — render into a QWindow (Qt GL/BGFX), focus from
+//  the Qt input bus.  Still SDL-derived for init/monitor/sound as a transitional
+//  scaffold (Phase 13d re-parents this onto osd_common_t to drop SDL entirely).
+//============================================================
+
+class qt_osd_interface : public sdl_osd_interface
 {
 public:
 	qt_osd_interface(sdl_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
-		qtui_osd_interface(options, session),
-		m_target(target)
+		sdl_osd_interface(options),
+		m_target(target),
+		m_ctrl(session)
 	{
+	}
+
+	virtual void init(running_machine &machine) override
+	{
+		sdl_osd_interface::init(machine);
+		m_ctrl.init(machine);
+	}
+
+	virtual void update(bool skip_redraw) override
+	{
+		m_ctrl.update();
+		sdl_osd_interface::update(skip_redraw);
 	}
 
 	// Focus comes from the Qt render window (the bus), not SDL's foreign-window
@@ -1160,7 +1177,6 @@ public:
 		// the Qt-native path renders a single window into the GUI-provided surface
 		video_config.numscreens = 1;
 
-		// initialise the (SDL) window subsystem — only logs hints; harmless
 		if (!window_init())
 			return false;
 
@@ -1181,6 +1197,7 @@ public:
 
 private:
 	osd::qtui::QtEmbedTarget &m_target;
+	EmbedController m_ctrl;
 };
 
 } // anonymous namespace
