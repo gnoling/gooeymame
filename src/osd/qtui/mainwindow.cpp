@@ -13,6 +13,7 @@
 #include "embedhost.h"
 #include "emulator.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
+#include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
 #include "familytreemodel.h"
 #include "foldertree.h"
 #include "frontendpaths.h"
@@ -46,6 +47,7 @@
 #include <QtGui/QCursor>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QScreen>
 #include <QtGui/QSurfaceFormat>
 #include <QtGui/QWheelEvent>
 #include <QtGui/QWindow>
@@ -3612,6 +3614,20 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	bool const useBgfx = (m_nativeRenderer == RendererBgfx)
 			|| qEnvironmentVariableIsSet("GOOEY_QT_BGFX");
 	std::string const bgfxBackend = bgfxBackendName(m_bgfxBackend).toStdString();
+
+	// Capture desktop monitor geometry on the GUI thread for the Qt-native
+	// monitor module (which initialises on the worker thread and can't touch
+	// QScreen there).
+	{
+		std::vector<osd::qtui::QtMonitorRect> mons;
+		const QScreen *const primary = QGuiApplication::primaryScreen();
+		for (QScreen *const sc : QGuiApplication::screens())
+		{
+			QRect const g = sc->geometry();
+			mons.push_back({ g.x(), g.y(), g.width(), g.height(), sc == primary });
+		}
+		osd::qtui::qtui_set_monitors(std::move(mons));
+	}
 
 	statusBar()->showMessage(tr("Running %1 (Qt-native OSD, %2)…")
 			.arg(label, useBgfx ? QStringLiteral("BGFX") : QStringLiteral("OpenGL")));

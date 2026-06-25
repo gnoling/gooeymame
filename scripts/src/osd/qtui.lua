@@ -545,6 +545,11 @@ project ("osd_" .. _OPTIONS["osd"])
 
 		-- BGFX shader-effect query/select bridge (impl in drawbgfx.cpp).
 		MAME_DIR .. "src/osd/qtui/qtbgfxchains.h",
+
+		-- Qt-native monitor module (Phase 13c): QScreen geometry, no SDL.
+		MAME_DIR .. "src/osd/qtui/qtmonitors.cpp",
+		MAME_DIR .. "src/osd/qtui/qtmonitors.h",
+		MAME_DIR .. "src/osd/modules/monitor/monitor_qt.cpp",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",

@@ -273,6 +273,12 @@ void osd_common_t::register_options()
 	REGISTER_MODULE(m_mod_man, MONITOR_WIN32);
 	REGISTER_MODULE(m_mod_man, MONITOR_DXGI);
 	REGISTER_MODULE(m_mod_man, MONITOR_MAC);
+#if defined(OSD_QT_GL)
+	// Registered after SDL so "auto" still picks SDL by default; the Qt-native
+	// path explicitly forces -monitorprovider qt (and captures QScreen geometry
+	// on the GUI thread for it).
+	REGISTER_MODULE(m_mod_man, MONITOR_QT);
+#endif
 
 #ifdef SDLMAME_MACOSX
 	REGISTER_MODULE(m_mod_man, DEBUG_OSX);

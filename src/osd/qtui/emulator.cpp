@@ -1352,6 +1352,10 @@ int qtui_run_embedded_native(
 	args.push_back("qt");
 	args.push_back("-lightgunprovider");
 	args.push_back("qt");
+	// Qt-native monitor enumeration (QScreen geometry captured on the GUI thread)
+	// instead of the SDL monitor module.
+	args.push_back("-monitorprovider");
+	args.push_back("qt");
 
 	{
 		sdl_options options;
