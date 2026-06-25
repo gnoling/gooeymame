@@ -335,7 +335,10 @@ private:
 			{
 				if (osd_window *const w = win.get())
 				{
-					static_cast<sdl_window_info *>(w)->toggle_full_screen();
+					// SDL own-window only; the Qt-native window has no SDL
+					// fullscreen toggle (the GUI handles its own window state).
+					if (auto *const sw = dynamic_cast<sdl_window_info *>(w))
+						sw->toggle_full_screen();
 					break;
 				}
 			}
@@ -452,9 +455,12 @@ private:
 			// the SDL2/SDL3 accelerated renderers pick it up on rebuild.
 			video_config.filter = a.ival ? 1 : 0;
 			SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, video_config.filter ? "1" : "0");
+			// force every window's renderer to rebuild textures (generic — works
+			// for both the SDL and Qt-native windows)
 			for (const auto &win : window_list())
 				if (osd_window *const w = win.get())
-					static_cast<sdl_window_info *>(w)->notify_changed();
+					if (w->has_renderer())
+						w->renderer().notify_changed();
 			refresh_video();
 			break;
 		case EmbedCommand::SetKeepAspect:
@@ -582,17 +588,21 @@ private:
 			{
 				if (osd_window *const w = win.get())
 				{
-					auto *const sw = static_cast<sdl_window_info *>(w);
-					if (a.ival != 0)
+					// SDL foreign-window focus/grab dance; not needed (and unsafe)
+					// for the Qt-native window, which gets focus from Qt directly.
+					if (auto *const sw = dynamic_cast<sdl_window_info *>(w))
 					{
-						if (SDL_Window *const pw = sw->platform_window())
+						if (a.ival != 0)
 						{
-							SDL_RaiseWindow(pw);
-							SDL_SetWindowInputFocus(pw);
+							if (SDL_Window *const pw = sw->platform_window())
+							{
+								SDL_RaiseWindow(pw);
+								SDL_SetWindowInputFocus(pw);
+							}
+							note_attached_window(sw);
 						}
-						note_attached_window(sw);
+						sw->release_pointer();   // reset capture: re-grabbed next frame if active
 					}
-					sw->release_pointer();   // reset capture: re-grabbed next frame if active
 					break;
 				}
 			}
@@ -1087,63 +1097,30 @@ private:
 
 
 //============================================================
-//  Qt-native OSD (Phase 13 foundation)
+//  Qt-native OSD (Phase 13)
 //
-//  Reuses the SDL OSD backend for init/input/monitor/sound (transitional
-//  scaffold), but overrides video_init() to render into a QWindow via the Qt
-//  GL context instead of an SDL window.  This isolates and proves the Qt
-//  render path; input/focus and full SDL removal are later phases.
+//  Inherits the full in-game command queue + capability/refresh publishing from
+//  qtui_osd_interface (so every Machine/Video/Audio/Input/Info/Cheat menu works),
+//  and overrides only the video path (render into a QWindow via the Qt GL context
+//  instead of an SDL window) and focus (driven by the Qt render window, not SDL's
+//  foreign-window tracking).  Still SDL-backed for init/monitor/sound as a
+//  transitional scaffold; input comes from the Qt providers (-*provider qt).
 //============================================================
 
-class qt_osd_interface : public sdl_osd_interface
+class qt_osd_interface : public qtui_osd_interface
 {
 public:
 	qt_osd_interface(sdl_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
-		sdl_osd_interface(options),
-		m_target(target),
-		m_session(session)
+		qtui_osd_interface(options, session),
+		m_target(target)
 	{
-	}
-
-	virtual void init(running_machine &machine) override
-	{
-		sdl_osd_interface::init(machine);
-		m_machine = &machine;
-		m_session.running.store(true);
 	}
 
 	// Focus comes from the Qt render window (the bus), not SDL's foreign-window
-	// focus tracking — this is what gates input polling (should_poll_devices).
+	// focus tracking — this gates input polling (should_poll_devices).
 	virtual bool has_focus() const override
 	{
 		return osd::qtui::QtInputBus::instance().focused();
-	}
-
-	virtual void update(bool skip_redraw) override
-	{
-		// Foundation: drain the in-game command queue but only apply the safe
-		// one-liner controls (the full NEWUI-parity apply() lives on the
-		// SDL-backed qtui_osd_interface and is shared in a later refactor).
-		// Handling Exit here is what lets the menu Stop and the window-close
-		// path actually halt the machine.
-		if (m_machine)
-		{
-			m_session.paused.store(m_machine->paused());
-			osd::qtui::EmbedAction a;
-			while (m_session.take(a))
-			{
-				using osd::qtui::EmbedCommand;
-				switch (a.cmd)
-				{
-				case EmbedCommand::Exit:        m_machine->schedule_exit();       break;
-				case EmbedCommand::TogglePause: if (m_machine->paused()) m_machine->resume(); else m_machine->pause(); break;
-				case EmbedCommand::SoftReset:   m_machine->schedule_soft_reset(); break;
-				case EmbedCommand::HardReset:   m_machine->schedule_hard_reset(); break;
-				default: break;   // other controls not yet wired for the Qt-native OSD
-				}
-			}
-		}
-		sdl_osd_interface::update(skip_redraw);
 	}
 
 	virtual bool video_init() override
@@ -1175,8 +1152,6 @@ public:
 
 private:
 	osd::qtui::QtEmbedTarget &m_target;
-	osd::qtui::EmbedSession &m_session;
-	running_machine *m_machine = nullptr;
 };
 
 } // anonymous namespace
