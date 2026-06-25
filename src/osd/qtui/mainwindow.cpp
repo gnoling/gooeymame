@@ -780,6 +780,7 @@ void MainWindow::restoreSettings()
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
 	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
 	setBgfxBackend(settings.value(QStringLiteral("play/bgfxBackend"), 0).toInt());
+	setSoundProvider(settings.value(QStringLiteral("play/soundProvider"), int(SoundPulse)).toInt());
 	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
 	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
 	if (m_hideBrowserAct)
@@ -1076,6 +1077,24 @@ void MainWindow::createMenus()
 		act->setData(choice.backend);
 		m_bgfxBackendGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, b = choice.backend] { setBgfxBackend(b); });
+	}
+
+	// Audio backend for the Qt-native OSD (non-SDL).
+	QMenu *soundMenu = viewMenu->addMenu(tr("Qt-native &Audio"));
+	m_soundProviderGroup = new QActionGroup(this);
+	struct { const char *label; int prov; } const sounds[] = {
+		{ "PulseAudio", SoundPulse },
+		{ "PipeWire", SoundPipewire },
+		{ "PortAudio", SoundPortaudio },
+		{ "None (silent)", SoundNone },
+	};
+	for (const auto &choice : sounds)
+	{
+		QAction *act = soundMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.prov);
+		m_soundProviderGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, p = choice.prov] { setSoundProvider(p); });
 	}
 
 	// Where an embedded game appears (only meaningful for the embedded modes).
@@ -3329,6 +3348,30 @@ void MainWindow::setBgfxBackend(int backend)
 				act->setChecked(true);
 }
 
+// 0=pulse, 1=pipewire, 2=portaudio, 3=none
+static QString soundProviderName(int provider)
+{
+	switch (provider)
+	{
+	case 1:  return QStringLiteral("pipewire");
+	case 2:  return QStringLiteral("portaudio");
+	case 3:  return QStringLiteral("none");
+	default: return QStringLiteral("pulse");
+	}
+}
+
+void MainWindow::setSoundProvider(int provider)
+{
+	if (provider < 0 || provider > 3)
+		provider = SoundPulse;
+	m_soundProvider = provider;
+	QSettings().setValue(QStringLiteral("play/soundProvider"), provider);
+	if (m_soundProviderGroup)
+		for (QAction *act : m_soundProviderGroup->actions())
+			if (act->data().toInt() == provider)
+				act->setChecked(true);
+}
+
 void MainWindow::setEmbedLocation(int location)
 {
 	// The retired "main pane" location maps to the separate window.
@@ -3614,6 +3657,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	bool const useBgfx = (m_nativeRenderer == RendererBgfx)
 			|| qEnvironmentVariableIsSet("GOOEY_QT_BGFX");
 	std::string const bgfxBackend = bgfxBackendName(m_bgfxBackend).toStdString();
+	std::string const soundProvider = soundProviderName(m_soundProvider).toStdString();
 
 	// Capture desktop monitor geometry on the GUI thread for the Qt-native
 	// monitor module (which initialises on the worker thread and can't touch
@@ -3694,7 +3738,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// spawning the emulation thread.
 	auto *const attempts = new int(0);
 	auto spawnPtr = std::make_shared<std::function<void()>>();
-	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend]() {
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend, soundProvider]() {
 		if (!m_nativeGlWindow || !m_nativeGlTarget)
 		{
 			delete attempts;
@@ -3714,8 +3758,8 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
 		if (!session || !target)
 			return;
-		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend] {
-			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend);
+		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend, soundProvider] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend, soundProvider);
 			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 		});
 	};

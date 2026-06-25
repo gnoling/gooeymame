@@ -75,7 +75,8 @@ int qtui_run_embedded_native(
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
 		bool useBgfx,
-		const std::string &bgfxBackend);   // "" / "auto" = let BGFX choose
+		const std::string &bgfxBackend,    // "" / "auto" = let BGFX choose
+		const std::string &soundProvider); // non-SDL audio: pulse/pipewire/portaudio/none
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

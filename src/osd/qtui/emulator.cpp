@@ -1135,16 +1135,19 @@ private:
 
 
 //============================================================
-//  Qt-native OSD (Phase 13) — render into a QWindow (Qt GL/BGFX), focus from
-//  the Qt input bus.  Still SDL-derived for init/monitor/sound as a transitional
-//  scaffold (Phase 13d re-parents this onto osd_common_t to drop SDL entirely).
+//  Qt-native OSD (Phase 13f) — derives directly from osd_common_t, NO SDL.
+//
+//  Renders into a QWindow (Qt GL/BGFX), takes input from the Qt bus, enumerates
+//  monitors from QScreen, and selects non-SDL sound/font.  Initializes zero SDL
+//  at runtime.  The in-game command queue is the shared EmbedController.
 //============================================================
 
-class qt_osd_interface : public sdl_osd_interface
+class qt_osd_interface : public osd_common_t
 {
 public:
 	qt_osd_interface(sdl_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
-		sdl_osd_interface(options),
+		osd_common_t(options),
+		m_options(options),
 		m_target(target),
 		m_ctrl(session)
 	{
@@ -1152,33 +1155,41 @@ public:
 
 	virtual void init(running_machine &machine) override
 	{
-		sdl_osd_interface::init(machine);
+		osd_common_t::init(machine);
+		osd_common_t::init_subsystems();   // module-based; calls our video_init() + input_init()
 		m_ctrl.init(machine);
 	}
 
 	virtual void update(bool skip_redraw) override
 	{
 		m_ctrl.update();
-		sdl_osd_interface::update(skip_redraw);
+		osd_common_t::update(skip_redraw);   // resets the watchdog
+		if (!skip_redraw)
+			for (auto const &win : window_list())
+				win->update();
 	}
 
-	// Focus comes from the Qt render window (the bus), not SDL's foreign-window
-	// focus tracking — this gates input polling (should_poll_devices).
-	virtual bool has_focus() const override
-	{
-		return osd::qtui::QtInputBus::instance().focused();
-	}
+	// Qt input arrives via the bus; there is no SDL event pump to drain.
+	virtual void process_events() override { }
+	virtual void input_update(bool relative_reset) override { poll_input_modules(relative_reset); }
+	virtual void check_osd_inputs() override { }
+
+	// Focus comes from the Qt render window (the bus); gates input polling.
+	virtual bool has_focus() const override { return osd::qtui::QtInputBus::instance().focused(); }
 
 	virtual bool video_init() override
 	{
-		extract_video_config();
-		video_config.beamwidth = options().beam_width_min();
-
-		// the Qt-native path renders a single window into the GUI-provided surface
+		// Populate the bits of video_config the renderer/window read (replacing
+		// the SDL OSD's private extract_video_config()).
+		video_config.windowed = 1;
 		video_config.numscreens = 1;
-
-		if (!window_init())
-			return false;
+		video_config.prescale = m_options.prescale();
+		if (video_config.prescale < 1 || video_config.prescale > 20)
+			video_config.prescale = 1;
+		video_config.filter = m_options.filter();
+		video_config.waitvsync = m_options.wait_vsync();
+		video_config.syncrefresh = m_options.sync_refresh();
+		video_config.beamwidth = m_options.beam_width_min();
 
 		osd_window_config conf{};
 		auto win = osd::qtui::make_native_window(
@@ -1195,7 +1206,22 @@ public:
 		return true;
 	}
 
+	virtual void video_exit() override { window_exit(); }
+
+	virtual void window_exit() override
+	{
+		while (!osd_common_t::s_window_list.empty())
+		{
+			auto win = std::move(osd_common_t::s_window_list.back());
+			osd_common_t::s_window_list.pop_back();
+			win->destroy();
+		}
+	}
+
+	virtual sdl_options &options() override { return m_options; }
+
 private:
+	sdl_options &m_options;
 	osd::qtui::QtEmbedTarget &m_target;
 	EmbedController m_ctrl;
 };
@@ -1316,7 +1342,8 @@ int qtui_run_embedded_native(
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
 		bool useBgfx,
-		const std::string &bgfxBackend)
+		const std::string &bgfxBackend,
+		const std::string &soundProvider)
 {
 	int res = 0;
 
@@ -1373,6 +1400,14 @@ int qtui_run_embedded_native(
 	// instead of the SDL monitor module.
 	args.push_back("-monitorprovider");
 	args.push_back("qt");
+	// Non-SDL sound/font/joystick so the Qt-native OSD initializes zero SDL.
+	// (-sound auto would pick SDL since it registers first.)
+	args.push_back("-sound");
+	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
+	args.push_back("-uifontprovider");
+	args.push_back("none");
+	args.push_back("-joystickprovider");
+	args.push_back("none");
 
 	{
 		sdl_options options;

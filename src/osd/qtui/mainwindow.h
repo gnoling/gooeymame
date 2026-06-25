@@ -138,6 +138,9 @@ private:
 	// which unlocks the shader chains).
 	enum NativeRenderer { RendererOpenGL = 0, RendererBgfx = 1 };
 
+	// Non-SDL audio backend for the Qt-native OSD.
+	enum SoundProvider { SoundPulse = 0, SoundPipewire = 1, SoundPortaudio = 2, SoundNone = 3 };
+
 	// True when the platform supports attaching MAME to a Qt window (X11/xcb).
 	static bool embeddingSupported();
 	// Launch routing: dispatches on m_embedMode.
@@ -154,6 +157,7 @@ private:
 	void setNativePlacement(int placement);   // central (full) vs pane (beside list)
 	void setNativeRenderer(int renderer);     // OpenGL vs BGFX for the Qt-native window
 	void setBgfxBackend(int backend);         // Auto/OpenGL/Vulkan for the BGFX renderer
+	void setSoundProvider(int provider);      // non-SDL audio for the Qt-native OSD
 	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
 	void setEmbedMode(int mode);
 	void setEmbedLocation(int location);
@@ -302,9 +306,11 @@ private:
 	bool m_quitAfterStop = false;                  // close-X in pane mode: quit once the game stops
 	int m_nativeRenderer = RendererOpenGL;         // OpenGL vs BGFX for the Qt-native window
 	int m_bgfxBackend = 0;                          // 0=auto, 1=opengl, 2=vulkan (BGFX backend)
+	int m_soundProvider = SoundPulse;               // non-SDL audio backend
 	QActionGroup *m_nativePlacementGroup = nullptr;
 	QActionGroup *m_nativeRendererGroup = nullptr;
 	QActionGroup *m_bgfxBackendGroup = nullptr;
+	QActionGroup *m_soundProviderGroup = nullptr;
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it
