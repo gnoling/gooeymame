@@ -77,6 +77,13 @@ public:
 	uint32_t screen_count() const { return m_screen_count; }
 	bgfx_chain* screen_chain(uint32_t screen);
 	std::unique_ptr<bgfx_chain> load_chain(std::string name, uint32_t screen_index);
+
+	// Effect (shader chain) enumeration/selection, for a front-end shader menu.
+	uint32_t available_chain_count() const { return uint32_t(m_available_chains.size()); }
+	const std::string &available_chain_name(uint32_t i) const { return m_available_chains[i].m_name; }
+	int32_t current_chain(uint32_t screen) const { return (screen < m_current_chain.size()) ? m_current_chain[screen] : 0; }
+	// select an effect for a screen (mirrors the selection slider: applies + reloads)
+	void select_chain(uint32_t screen, int32_t index) { slider_changed(int(screen), nullptr, index); }
 	bool has_applicable_chain(uint32_t screen);
 	std::vector<ui::menu_item> get_slider_list();
 	std::vector<std::vector<float>> slider_settings();

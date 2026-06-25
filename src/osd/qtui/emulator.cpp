@@ -24,6 +24,7 @@
 #include "qtnativewindow.h"
 #include "qtembedtarget.h"
 #include "qtinput.h"   // QtInputBus focus state for has_focus()
+#include "qtbgfxchains.h"   // BGFX shader-effect enumeration/selection
 
 // MAME headers
 #include "emu.h"
@@ -267,6 +268,7 @@ public:
 				m_capsInit = true;
 				refresh_caps();
 				refresh_sliders();
+				refresh_shader_chains();
 				refresh_info();
 				refresh_bios();
 				refresh_tape();
@@ -494,6 +496,15 @@ private:
 					sl[a.ival]->update(nullptr, std::int32_t(a.dval));
 					refresh_sliders();
 				}
+			}
+			break;
+		case EmbedCommand::SetShaderChain:
+			// Switch the BGFX shader effect for screen 0 (no-op if not BGFX).
+			{
+				auto const &wins = window_list();
+				if (!wins.empty() && wins.front())
+					osd::qtui::bgfx_select_chain(*wins.front(), 0, a.ival);
+				refresh_shader_chains();
 			}
 			break;
 		case EmbedCommand::SetBios:
@@ -867,6 +878,24 @@ private:
 			out.push_back(std::move(e));
 		}
 		m_session.publishSliders(std::move(out));
+	}
+
+	void refresh_shader_chains()
+	{
+		osd::qtui::EmbedShaderChains out;
+		auto const &wins = window_list();
+		if (!wins.empty() && wins.front())
+		{
+			std::vector<std::string> names;
+			int current = 0, screens = 0;
+			if (osd::qtui::bgfx_chain_info(*wins.front(), names, current, screens))
+			{
+				out.available = true;
+				out.names = std::move(names);
+				out.current = current;
+			}
+		}
+		m_session.publishShaderChains(std::move(out));
 	}
 
 	// Publish read-only info text (system info / warnings / bookkeeping) for the
@@ -1269,7 +1298,8 @@ int qtui_run_embedded_native(
 		const std::string &software,
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
-		bool useBgfx)
+		bool useBgfx,
+		const std::string &bgfxBackend)
 {
 	int res = 0;
 
@@ -1301,8 +1331,14 @@ int qtui_run_embedded_native(
 	if (useBgfx)
 	{
 		args.push_back("bgfx");
-		args.push_back("-bgfx_backend");
-		args.push_back("opengl");
+		// Let BGFX auto-pick by default (best shader support); honour an explicit
+		// backend when the user selects one (e.g. vulkan renders more chains
+		// correctly than the GL backend).
+		if (!bgfxBackend.empty() && bgfxBackend != "auto")
+		{
+			args.push_back("-bgfx_backend");
+			args.push_back(bgfxBackend);
+		}
 	}
 	else
 	{

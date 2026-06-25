@@ -43,6 +43,7 @@
 // qtui build: a render window may be Qt-native and supply its own platform
 // handles through this (Qt-free) provider hook
 #include "qtglprovider.h"
+#include "qtbgfxchains.h"
 #endif
 
 #include <bx/math.h>
@@ -1799,3 +1800,40 @@ void renderer_bgfx::save_config(util::xml::data_node &parentnode)
 	else
 		m_chains->save_config(parentnode);
 }
+
+
+#if defined(OSD_QT_GL)
+//============================================================
+//  Qt-native shader-chain query/select (Qt-free entry points;
+//  declared in qtbgfxchains.h, used by the qtui OSD's shader menu)
+//============================================================
+
+namespace osd::qtui {
+
+bool bgfx_chain_info(osd_window &window, std::vector<std::string> &names, int &current, int &screenCount)
+{
+	if (!window.has_renderer())
+		return false;
+	auto *const r = dynamic_cast<renderer_bgfx *>(&window.renderer());
+	if (!r)
+		return false;
+
+	chain_manager &c = r->chains();
+	names.clear();
+	for (uint32_t i = 0; i < c.available_chain_count(); i++)
+		names.push_back(c.available_chain_name(i));
+	screenCount = int(c.screen_count());
+	current = int(c.current_chain(0));
+	return !names.empty();
+}
+
+void bgfx_select_chain(osd_window &window, int screen, int index)
+{
+	if (!window.has_renderer())
+		return;
+	if (auto *const r = dynamic_cast<renderer_bgfx *>(&window.renderer()))
+		r->chains().select_chain(uint32_t(screen), int32_t(index));
+}
+
+} // namespace osd::qtui
+#endif // OSD_QT_GL

@@ -777,6 +777,7 @@ void MainWindow::restoreSettings()
 	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedNativeQt)).toInt());
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
 	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
+	setBgfxBackend(settings.value(QStringLiteral("play/bgfxBackend"), 0).toInt());
 	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
 	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
 	if (m_hideBrowserAct)
@@ -1054,6 +1055,25 @@ void MainWindow::createMenus()
 		act->setData(choice.rend);
 		m_nativeRendererGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, rend = choice.rend] { setNativeRenderer(rend); });
+	}
+
+	// BGFX backend (only relevant when the BGFX renderer is selected).  Different
+	// backends render different shader chains correctly; Vulkan generally has the
+	// best coverage on Linux, the GL backend the least.
+	QMenu *backendMenu = rendMenu->addMenu(tr("BGFX &Backend"));
+	m_bgfxBackendGroup = new QActionGroup(this);
+	struct { const char *label; int backend; } const backends[] = {
+		{ "Auto", 0 },
+		{ "OpenGL", 1 },
+		{ "Vulkan", 2 },
+	};
+	for (const auto &choice : backends)
+	{
+		QAction *act = backendMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.backend);
+		m_bgfxBackendGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, b = choice.backend] { setBgfxBackend(b); });
 	}
 
 	// Where an embedded game appears (only meaningful for the embedded modes).
@@ -1867,6 +1887,31 @@ void MainWindow::rebuildVideoMenu(QMenu *menu)
 				act.value = on ? 1u : 0u;
 				postEmbed(act);
 			});
+		}
+	}
+
+	// Shader effect (BGFX renderer only): a radio list of effect chains
+	// (default / crt-geom / hlsl / lcd-grid / …) in its own submenu.  Absent on
+	// the OpenGL renderer.
+	{
+		EmbedShaderChains const shaders = m_embedSession->shaderChainsSnapshot();
+		if (shaders.available && !shaders.names.empty())
+		{
+			QMenu *effects = menu->addMenu(tr("Shader &Effect"));
+			// There can be many chains; scroll the submenu rather than letting it
+			// wrap into multiple columns.
+			effects->setStyleSheet(QStringLiteral("QMenu { menu-scrollable: 1; }"));
+			QActionGroup *group = new QActionGroup(effects);
+			for (int i = 0; i < int(shaders.names.size()); ++i)
+			{
+				QAction *a = effects->addAction(QString::fromStdString(shaders.names[i]));
+				a->setCheckable(true);
+				group->addAction(a);
+				a->setChecked(i == shaders.current);
+				connect(a, &QAction::triggered, this, [this, i] {
+					postEmbed({ EmbedCommand::SetShaderChain, 0.0, i, {} });
+				});
+			}
 		}
 	}
 
@@ -3259,6 +3304,29 @@ void MainWindow::setNativeRenderer(int renderer)
 				act->setChecked(true);
 }
 
+// 0=auto, 1=opengl, 2=vulkan
+static QString bgfxBackendName(int backend)
+{
+	switch (backend)
+	{
+	case 1:  return QStringLiteral("opengl");
+	case 2:  return QStringLiteral("vulkan");
+	default: return QStringLiteral("auto");
+	}
+}
+
+void MainWindow::setBgfxBackend(int backend)
+{
+	if (backend < 0 || backend > 2)
+		backend = 0;
+	m_bgfxBackend = backend;
+	QSettings().setValue(QStringLiteral("play/bgfxBackend"), backend);
+	if (m_bgfxBackendGroup)
+		for (QAction *act : m_bgfxBackendGroup->actions())
+			if (act->data().toInt() == backend)
+				act->setChecked(true);
+}
+
 void MainWindow::setEmbedLocation(int location)
 {
 	// The retired "main pane" location maps to the separate window.
@@ -3543,6 +3611,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// View ▸ Qt-native Renderer setting (GOOEY_QT_BGFX=1 forces BGFX too).
 	bool const useBgfx = (m_nativeRenderer == RendererBgfx)
 			|| qEnvironmentVariableIsSet("GOOEY_QT_BGFX");
+	std::string const bgfxBackend = bgfxBackendName(m_bgfxBackend).toStdString();
 
 	statusBar()->showMessage(tr("Running %1 (Qt-native OSD, %2)…")
 			.arg(label, useBgfx ? QStringLiteral("BGFX") : QStringLiteral("OpenGL")));
@@ -3609,7 +3678,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// spawning the emulation thread.
 	auto *const attempts = new int(0);
 	auto spawnPtr = std::make_shared<std::function<void()>>();
-	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx]() {
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend]() {
 		if (!m_nativeGlWindow || !m_nativeGlTarget)
 		{
 			delete attempts;
@@ -3629,8 +3698,8 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
 		if (!session || !target)
 			return;
-		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx] {
-			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx);
+		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend);
 			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 		});
 	};

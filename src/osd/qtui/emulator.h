@@ -74,7 +74,8 @@ int qtui_run_embedded_native(
 		const std::string &software,
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
-		bool useBgfx);
+		bool useBgfx,
+		const std::string &bgfxBackend);   // "" / "auto" = let BGFX choose
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

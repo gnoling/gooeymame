@@ -62,6 +62,9 @@ public:
 
 	virtual render_primitive_list *get_primitives() override;
 
+	// access to the shader-chain manager (front-end shader-effect menu)
+	chain_manager &chains() const { return *m_chains; }
+
 	static char const *const WINDOW_PREFIX;
 
 private:

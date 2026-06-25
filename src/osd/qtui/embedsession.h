@@ -66,6 +66,7 @@ enum class EmbedCommand
 	CheatSelect,      // ival = cheat index, value = 0 default / 1 next / 2 previous state
 	CheatReload,      // reload all cheats from disk
 	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
+	SetShaderChain,   // ival = BGFX effect/chain index for screen 0 (Qt-native BGFX renderer)
 	Exit
 };
 
@@ -145,6 +146,15 @@ struct EmbedSlider
 	int maxval = 0;
 	int incval = 1;
 	int current = 0;
+};
+
+// BGFX shader-effect ("chain") selection for the Video menu's Shader Effect list
+// (only populated when the Qt-native BGFX renderer is active).
+struct EmbedShaderChains
+{
+	bool                     available = false;   // BGFX renderer with effects present
+	std::vector<std::string> names;               // effect names (index = selection value)
+	int                      current = 0;          // active effect index for screen 0
 };
 
 // Read-only informational text about the running machine, for the Info menu's
@@ -357,6 +367,19 @@ public:
 		return m_sliders;
 	}
 
+	// BGFX shader-effect list/selection snapshot for the Video menu.
+	void publishShaderChains(EmbedShaderChains c)
+	{
+		std::lock_guard<std::mutex> lk(m_shaderMutex);
+		m_shaderChains = std::move(c);
+	}
+
+	EmbedShaderChains shaderChainsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_shaderMutex);
+		return m_shaderChains;
+	}
+
 	// Read-only Info text (system info / warnings / bookkeeping).
 	void publishInfo(EmbedInfo info)
 	{
@@ -470,6 +493,9 @@ private:
 
 	mutable std::mutex m_sliderMutex;
 	std::vector<EmbedSlider> m_sliders;
+
+	mutable std::mutex m_shaderMutex;
+	EmbedShaderChains m_shaderChains;
 
 	mutable std::mutex m_infoMutex;
 	EmbedInfo m_info;

@@ -542,6 +542,9 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/qtinput.cpp",
 		MAME_DIR .. "src/osd/qtui/qtinput.h",
 		MAME_DIR .. "src/osd/modules/input/input_qt.cpp",
+
+		-- BGFX shader-effect query/select bridge (impl in drawbgfx.cpp).
+		MAME_DIR .. "src/osd/qtui/qtbgfxchains.h",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",
