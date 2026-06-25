@@ -430,11 +430,18 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-	// While a game runs embedded, the window's close button means "stop the
-	// game and return to the browser", not "quit the application".  The stop is
-	// asynchronous; onEmbeddedFinished() restores the UI when the run ends.
+	// While a game runs embedded, the window's close button normally means "stop
+	// the game and return to the browser", not "quit the application" (the game
+	// fills the window).  The stop is asynchronous; onEmbeddedFinished() restores
+	// the UI when the run ends.
+	//
+	// Exception: in Qt-native *pane* mode the browser is fully visible beside the
+	// game, so the window X reads as "quit the app" — stop the game first, then
+	// quit once it has torn down safely.
 	if (embedRunning())
 	{
+		if (m_nativeGlPlacedInPane)
+			m_quitAfterStop = true;
 		stopEmbedded();
 		event->ignore();
 		return;
@@ -767,7 +774,8 @@ void MainWindow::restoreSettings()
 			act->setChecked(true);
 
 	// Restore the play (embed) mode; clamps to a separate window off X11.
-	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedSeparate)).toInt());
+	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedNativeQt)).toInt());
+	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
 	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
 	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
 	if (m_hideBrowserAct)
@@ -991,10 +999,11 @@ void MainWindow::createMenus()
 	QMenu *playMenu = viewMenu->addMenu(tr("&Play Mode"));
 	m_embedModeGroup = new QActionGroup(this);
 	struct { const char *label; int mode; } const playModes[] = {
-		{ "Separate window", EmbedSeparate },
-		{ "Separate window (live controls)", EmbedInProcessWindow },
-		{ "Embedded in browser (in-process)", EmbedInProcess },
+		{ "Embedded in browser (Qt-native, OpenGL)", EmbedNativeQt },
+		{ "Embedded in browser (in-process, SDL)", EmbedInProcess },
 		{ "Embedded in browser (child process)", EmbedChild },
+		{ "Separate window (live controls)", EmbedInProcessWindow },
+		{ "Separate window", EmbedSeparate },
 	};
 	for (const auto &choice : playModes)
 	{
@@ -1012,6 +1021,22 @@ void MainWindow::createMenus()
 		playMenu->addSeparator();
 		QAction *note = playMenu->addAction(tr("(browser-embedded modes need an X11 session)"));
 		note->setEnabled(false);
+	}
+
+	// Where the Qt-native game surface is shown.
+	QMenu *placeMenu = viewMenu->addMenu(tr("Qt-native &Placement"));
+	m_nativePlacementGroup = new QActionGroup(this);
+	struct { const char *label; int place; } const placements[] = {
+		{ "Full window (replace list)", PlaceCentral },
+		{ "Pane beside list", PlacePane },
+	};
+	for (const auto &choice : placements)
+	{
+		QAction *act = placeMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.place);
+		m_nativePlacementGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, place = choice.place] { setNativePlacement(place); });
 	}
 
 	// Where an embedded game appears (only meaningful for the embedded modes).
@@ -3193,6 +3218,18 @@ void MainWindow::setEmbedMode(int mode)
 			act->setChecked(true);
 }
 
+void MainWindow::setNativePlacement(int placement)
+{
+	if (placement != PlacePane)
+		placement = PlaceCentral;
+	m_nativePlacement = placement;
+	QSettings().setValue(QStringLiteral("play/nativePlacement"), placement);
+	if (m_nativePlacementGroup)
+		for (QAction *act : m_nativePlacementGroup->actions())
+			if (act->data().toInt() == placement)
+				act->setChecked(true);
+}
+
 void MainWindow::setEmbedLocation(int location)
 {
 	// The retired "main pane" location maps to the separate window.
@@ -3342,6 +3379,10 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 		}
 		return;
 
+	case EmbedNativeQt:
+		launchEmbeddedNativeGl(label, system, software);
+		return;
+
 	case EmbedInProcess:
 		launchEmbeddedInProcess(label, system, software);
 		return;
@@ -3382,14 +3423,6 @@ void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &sy
 {
 	if (m_embedSession || m_embedThread.joinable())
 		return;   // a run is already in progress
-
-	// Phase 13 experiment: GOOEY_QT_OSD=1 routes to the Qt-native OSD + OpenGL
-	// render path (a top-level QWindow, no SDL foreign window) instead.
-	if (qEnvironmentVariableIsSet("GOOEY_QT_OSD"))
-	{
-		launchEmbeddedNativeGl(label, system, software);
-		return;
-	}
 
 	statusBar()->showMessage(tr("Running %1 (embedded, in-process)…").arg(label));
 	m_playAct->setEnabled(false);
@@ -3495,8 +3528,6 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	m_nativeGlWindow->setFormat(fmt);
 	m_nativeGlWindow->installEventFilter(this);   // resize/close
 
-	// Embed the render surface into the browser's central area (the in-game
-	// Machine menu stays available on the main menu bar).
 	m_nativeGlContainer = QWidget::createWindowContainer(m_nativeGlWindow, this);
 	m_nativeGlContainer->setMinimumSize(320, 240);
 	m_nativeGlContainer->setFocusPolicy(Qt::StrongFocus);
@@ -3505,9 +3536,21 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// ahead of the pipeline-delayed reticule no longer reads as lag.
 	m_nativeGlContainer->setCursor(Qt::BlankCursor);
 	m_nativeGlWindow->setCursor(Qt::BlankCursor);
-	if (m_centralStack->indexOf(m_nativeGlContainer) < 0)
-		m_centralStack->addWidget(m_nativeGlContainer);
-	m_centralStack->setCurrentWidget(m_nativeGlContainer);
+
+	// Place the surface: full central area (replacing the browser list) or in a
+	// pane beside the list (hosted in the artwork pane, list stays visible).
+	m_nativeGlPlacedInPane = (m_nativePlacement == PlacePane);
+	if (m_nativeGlPlacedInPane)
+	{
+		m_artwork->setVisible(true);
+		m_artwork->attachGame(m_nativeGlContainer);
+	}
+	else
+	{
+		if (m_centralStack->indexOf(m_nativeGlContainer) < 0)
+			m_centralStack->addWidget(m_nativeGlContainer);
+		m_centralStack->setCurrentWidget(m_nativeGlContainer);
+	}
 
 	m_nativeGlTarget = std::make_unique<osd::qtui::QtEmbedTarget>();
 	m_nativeGlTarget->window = m_nativeGlWindow;
@@ -3574,8 +3617,15 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 	// container deletes the window.
 	if (m_nativeGlContainer)
 	{
-		m_centralStack->setCurrentWidget(m_splitter);   // back to the browser first
-		m_centralStack->removeWidget(m_nativeGlContainer);
+		if (m_nativeGlPlacedInPane)
+		{
+			m_artwork->detachGame();   // reparents the container out of the pane
+		}
+		else
+		{
+			m_centralStack->setCurrentWidget(m_splitter);   // back to the browser first
+			m_centralStack->removeWidget(m_nativeGlContainer);
+		}
 		m_nativeGlContainer->deleteLater();
 		m_nativeGlContainer = nullptr;
 		m_nativeGlWindow = nullptr;
@@ -3591,6 +3641,17 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 	if (m_standaloneEmbed)
 	{
 		// Launched via --gooey with no browser: exiting the game quits the application.
+		QApplication::quit();
+		return;
+	}
+
+	if (m_quitAfterStop)
+	{
+		// The user closed the (pane-mode) main window: now that the game has
+		// stopped and its surface is gone, finish quitting the application.
+		m_quitAfterStop = false;
+		saveSettings();
+		saveSoftwareCache();
 		QApplication::quit();
 		return;
 	}

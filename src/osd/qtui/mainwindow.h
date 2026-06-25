@@ -120,7 +120,7 @@ private:
 	enum MainLayout { SoftwareBesideArt = 0, SoftwareUnderSystems };
 
 	// How a selected system/software is launched.
-	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2, EmbedInProcessWindow = 3 };
+	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2, EmbedInProcessWindow = 3, EmbedNativeQt = 4 };
 	// Attach-based modes (in-process / child) need X11's -attach_window; the
 	// own-window mode does not, so it is available everywhere (incl. Windows).
 	static bool modeNeedsX11(int mode) { return mode == EmbedInProcess || mode == EmbedChild; }
@@ -129,6 +129,10 @@ private:
 	// but its value is kept so old settings remap cleanly.)  LocBrowser hosts
 	// the game in the right (artwork) pane via the panel's game view modes.
 	enum EmbedLocation { LocMainPane = 0, LocBrowser = 1, LocWindow = 2 };
+
+	// Where the Qt-native (EmbedNativeQt) game surface is shown: full central
+	// area (browser list replaced) or in a pane beside the list.
+	enum NativePlacement { PlaceCentral = 0, PlacePane = 1 };
 
 	// True when the platform supports attaching MAME to a Qt window (X11/xcb).
 	static bool embeddingSupported();
@@ -143,6 +147,7 @@ private:
 	// the Qt-native OSD + OpenGL, bypassing SDL's foreign-window path.  Gated by
 	// the GOOEY_QT_OSD=1 environment variable for A/B testing.
 	void launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software);
+	void setNativePlacement(int placement);   // central (full) vs pane (beside list)
 	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
 	void setEmbedMode(int mode);
 	void setEmbedLocation(int location);
@@ -283,9 +288,13 @@ private:
 	std::thread m_embedThread;                      // runs the in-process emulation
 	// Phase 13 Qt-native OSD: GUI-thread-owned render surface handed to the worker
 	QWindow *m_nativeGlWindow = nullptr;
-	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow inside the central stack
+	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow (central stack or artwork pane)
 	std::unique_ptr<osd::qtui::QtEmbedTarget> m_nativeGlTarget;
 	int m_nativeGlLastMouseX = 0, m_nativeGlLastMouseY = 0;   // for relative mouse deltas
+	int m_nativePlacement = PlaceCentral;          // current Qt-native placement preference
+	bool m_nativeGlPlacedInPane = false;           // placement actually used by the live run
+	bool m_quitAfterStop = false;                  // close-X in pane mode: quit once the game stops
+	QActionGroup *m_nativePlacementGroup = nullptr;
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it
