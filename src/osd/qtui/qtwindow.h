@@ -28,7 +28,7 @@ namespace osd::qtui {
 
 struct QtEmbedTarget;
 
-class qt_window_info : public osd_window_t<QWindow *>, public qt_gl_context_provider
+class qt_window_info : public osd_window_t<QWindow *>, public qt_gl_context_provider, public qt_native_handle_provider
 {
 public:
 	qt_window_info(
@@ -57,6 +57,9 @@ public:
 
 	// qt_gl_context_provider
 	osd_gl_context *make_gl_context() override;
+
+	// qt_native_handle_provider (for the BGFX renderer)
+	bool native_handles(void *&ndt, void *&nwh, bool &wayland) const override;
 
 private:
 	int complete_create();

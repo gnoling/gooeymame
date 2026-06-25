@@ -39,6 +39,12 @@
 #include "modules/lib/osdobj_common.h"
 #include "window.h"
 
+#if defined(OSD_QT_GL)
+// qtui build: a render window may be Qt-native and supply its own platform
+// handles through this (Qt-free) provider hook
+#include "qtglprovider.h"
+#endif
+
 #include <bx/math.h>
 #include <bx/readerwriter.h>
 
@@ -443,6 +449,29 @@ bool video_bgfx::set_platform_data(bgfx::PlatformData &platform_data, osd_window
 #else
 bool video_bgfx::set_platform_data(bgfx::PlatformData &platform_data, osd_window const &window)
 {
+#if defined(OSD_QT_GL)
+	// Qt-native render window: get the platform handles directly from the
+	// QWindow (no SDL), via the Qt-free provider hook.
+	if (auto const *const prov = dynamic_cast<osd::qtui::qt_native_handle_provider const *>(&window))
+	{
+		void *ndt = nullptr, *nwh = nullptr;
+		bool wayland = false;
+		if (!prov->native_handles(ndt, nwh, wayland))
+		{
+			osd_printf_error("BGFX: failed to resolve Qt native window handles\n");
+			return false;
+		}
+		platform_data.ndt = ndt;
+		platform_data.nwh = nwh;
+		if (wayland)
+			platform_data.type = bgfx::NativeWindowHandleType::Wayland;
+		platform_data.context = nullptr;
+		platform_data.backBuffer = nullptr;
+		platform_data.backBufferDS = nullptr;
+		bgfx::setPlatformData(platform_data);
+		return true;
+	}
+#endif
 #if defined(OSD_WINDOWS)
 	platform_data.ndt = nullptr;
 	platform_data.nwh = dynamic_cast<win_window_info const &>(window).platform_window();

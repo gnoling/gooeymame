@@ -34,6 +34,20 @@ public:
 	virtual osd_gl_context *make_gl_context() = 0;
 };
 
+
+// Lets the BGFX renderer obtain the QWindow's native platform handles without
+// any Qt dependency of its own (mirrors the GL provider).  `ndt` is the native
+// display/connection (X11 Display* / Wayland wl_display, else null), `nwh` is
+// the native window handle (X11 Window / HWND / wl_surface).  Returns false if
+// the handles can't be resolved.
+class qt_native_handle_provider
+{
+public:
+	virtual ~qt_native_handle_provider() = default;
+
+	virtual bool native_handles(void *&ndt, void *&nwh, bool &wayland) const = 0;
+};
+
 } // namespace osd::qtui
 
 #endif // MAME_OSD_QTUI_QTGLPROVIDER_H

@@ -73,7 +73,8 @@ int qtui_run_embedded_native(
 		const std::string &system,
 		const std::string &software,
 		osd::qtui::QtEmbedTarget *target,
-		osd::qtui::EmbedSession &session);
+		osd::qtui::EmbedSession &session,
+		bool useBgfx);
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

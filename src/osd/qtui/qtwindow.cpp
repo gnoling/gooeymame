@@ -33,7 +33,10 @@
 // Qt-aware headers last
 #include "qtglcontext.h"
 
+#include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
+
+#include <cstdint>
 
 
 namespace osd::qtui {
@@ -97,6 +100,30 @@ osd_gl_context *qt_window_info::make_gl_context()
 #else
 	return nullptr;
 #endif
+}
+
+bool qt_window_info::native_handles(void *&ndt, void *&nwh, bool &wayland) const
+{
+	QWindow *const w = platform_window();
+	if (!w)
+		return false;
+
+	ndt = nullptr;
+	nwh = nullptr;
+	wayland = false;
+
+	QString const plat = QGuiApplication::platformName();
+	if (plat == QLatin1String("xcb"))
+	{
+		// X11: ndt = Display*, nwh = X11 Window (from winId()).
+		if (auto *const x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>())
+			ndt = x11->display();
+		nwh = reinterpret_cast<void *>(std::uintptr_t(w->winId()));
+		return ndt && nwh;
+	}
+
+	// Wayland and others: not wired yet (BGFX needs wl_display/wl_surface).
+	return false;
 }
 
 void qt_window_info::update()

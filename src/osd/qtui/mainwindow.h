@@ -134,6 +134,10 @@ private:
 	// area (browser list replaced) or in a pane beside the list.
 	enum NativePlacement { PlaceCentral = 0, PlacePane = 1 };
 
+	// Renderer for the Qt-native window: OpenGL (drawogl) or BGFX (drawbgfx,
+	// which unlocks the shader chains).
+	enum NativeRenderer { RendererOpenGL = 0, RendererBgfx = 1 };
+
 	// True when the platform supports attaching MAME to a Qt window (X11/xcb).
 	static bool embeddingSupported();
 	// Launch routing: dispatches on m_embedMode.
@@ -148,6 +152,7 @@ private:
 	// the GOOEY_QT_OSD=1 environment variable for A/B testing.
 	void launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software);
 	void setNativePlacement(int placement);   // central (full) vs pane (beside list)
+	void setNativeRenderer(int renderer);     // OpenGL vs BGFX for the Qt-native window
 	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
 	void setEmbedMode(int mode);
 	void setEmbedLocation(int location);
@@ -294,7 +299,9 @@ private:
 	int m_nativePlacement = PlaceCentral;          // current Qt-native placement preference
 	bool m_nativeGlPlacedInPane = false;           // placement actually used by the live run
 	bool m_quitAfterStop = false;                  // close-X in pane mode: quit once the game stops
+	int m_nativeRenderer = RendererOpenGL;         // OpenGL vs BGFX for the Qt-native window
 	QActionGroup *m_nativePlacementGroup = nullptr;
+	QActionGroup *m_nativeRendererGroup = nullptr;
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it

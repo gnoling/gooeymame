@@ -1268,7 +1268,8 @@ int qtui_run_embedded_native(
 		const std::string &system,
 		const std::string &software,
 		osd::qtui::QtEmbedTarget *target,
-		osd::qtui::EmbedSession &session)
+		osd::qtui::EmbedSession &session,
+		bool useBgfx)
 {
 	int res = 0;
 
@@ -1292,10 +1293,21 @@ int qtui_run_embedded_native(
 	if (!software.empty())
 		args.push_back(software);
 	args.push_back("-window");
-	// The Qt-native render path currently supports only the OpenGL renderer
-	// (drawogl, via qt_gl_context); force it regardless of the user's -video.
+	// Force the renderer that the Qt-native window supports: OpenGL (drawogl via
+	// qt_gl_context) or BGFX (drawbgfx via the native-handle provider).  BGFX
+	// uses its OpenGL backend for now — most compatible with the GLX-capable
+	// QWindow surface embedded via createWindowContainer.
 	args.push_back("-video");
-	args.push_back("opengl");
+	if (useBgfx)
+	{
+		args.push_back("bgfx");
+		args.push_back("-bgfx_backend");
+		args.push_back("opengl");
+	}
+	else
+	{
+		args.push_back("opengl");
+	}
 	// Use the Qt-native input providers (fed from the render window via the
 	// QtInputBus) instead of SDL, which never sees our foreign window's events.
 	args.push_back("-keyboardprovider");

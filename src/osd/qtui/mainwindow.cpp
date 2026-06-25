@@ -776,6 +776,7 @@ void MainWindow::restoreSettings()
 	// Restore the play (embed) mode; clamps to a separate window off X11.
 	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedNativeQt)).toInt());
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
+	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
 	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
 	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
 	if (m_hideBrowserAct)
@@ -1037,6 +1038,22 @@ void MainWindow::createMenus()
 		act->setData(choice.place);
 		m_nativePlacementGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, place = choice.place] { setNativePlacement(place); });
+	}
+
+	// Renderer for the Qt-native window.
+	QMenu *rendMenu = viewMenu->addMenu(tr("Qt-native &Renderer"));
+	m_nativeRendererGroup = new QActionGroup(this);
+	struct { const char *label; int rend; } const renderers[] = {
+		{ "OpenGL", RendererOpenGL },
+		{ "BGFX (shader chains)", RendererBgfx },
+	};
+	for (const auto &choice : renderers)
+	{
+		QAction *act = rendMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.rend);
+		m_nativeRendererGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, rend = choice.rend] { setNativeRenderer(rend); });
 	}
 
 	// Where an embedded game appears (only meaningful for the embedded modes).
@@ -3230,6 +3247,18 @@ void MainWindow::setNativePlacement(int placement)
 				act->setChecked(true);
 }
 
+void MainWindow::setNativeRenderer(int renderer)
+{
+	if (renderer != RendererBgfx)
+		renderer = RendererOpenGL;
+	m_nativeRenderer = renderer;
+	QSettings().setValue(QStringLiteral("play/nativeRenderer"), renderer);
+	if (m_nativeRendererGroup)
+		for (QAction *act : m_nativeRendererGroup->actions())
+			if (act->data().toInt() == renderer)
+				act->setChecked(true);
+}
+
 void MainWindow::setEmbedLocation(int location)
 {
 	// The retired "main pane" location maps to the separate window.
@@ -3510,12 +3539,18 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	if (m_embedSession || m_embedThread.joinable())
 		return;   // a run is already in progress
 
-	statusBar()->showMessage(tr("Running %1 (Qt-native OSD, OpenGL)…").arg(label));
+	// Renderer for the Qt-native window: OpenGL (default) or BGFX, from the
+	// View ▸ Qt-native Renderer setting (GOOEY_QT_BGFX=1 forces BGFX too).
+	bool const useBgfx = (m_nativeRenderer == RendererBgfx)
+			|| qEnvironmentVariableIsSet("GOOEY_QT_BGFX");
+
+	statusBar()->showMessage(tr("Running %1 (Qt-native OSD, %2)…")
+			.arg(label, useBgfx ? QStringLiteral("BGFX") : QStringLiteral("OpenGL")));
 	m_playAct->setEnabled(false);
 
-	// Create the render surface on the GUI thread: a top-level OpenGL QWindow.
-	// (Step 1 of the Qt-native foundation isolates the render/GL-thread path; a
-	// later step embeds this surface into the browser layout.)
+	// Create the render surface on the GUI thread.  A GL-capable QWindow works
+	// for both the OpenGL renderer (QOpenGLContext) and BGFX's OpenGL backend
+	// (which renders to the window's native handle).
 	QSurfaceFormat fmt;
 	fmt.setRenderableType(QSurfaceFormat::OpenGL);
 	fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
@@ -3574,7 +3609,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// spawning the emulation thread.
 	auto *const attempts = new int(0);
 	auto spawnPtr = std::make_shared<std::function<void()>>();
-	*spawnPtr = [this, sys, sw, attempts, spawnPtr]() {
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx]() {
 		if (!m_nativeGlWindow || !m_nativeGlTarget)
 		{
 			delete attempts;
@@ -3594,8 +3629,8 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
 		if (!session || !target)
 			return;
-		m_embedThread = std::thread([this, sys, sw, target, session] {
-			int const code = qtui_run_embedded_native(sys, sw, target, *session);
+		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx);
 			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 		});
 	};
