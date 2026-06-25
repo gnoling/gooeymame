@@ -21,6 +21,7 @@
 #include "modules/lib/osdobj_common.h"   // osd_common_t::window_list()
 #include "render.h"
 #include "screen.h"
+#include "uiinput.h"
 
 #include <cmath>
 
@@ -166,6 +167,31 @@ bool map_lightgun(int x, int y, int surfaceW, int surfaceH, float &nx, float &ny
 	nx = cx;
 	ny = cy;
 	return true;
+}
+
+
+void ui_push_char(char32_t ch)
+{
+	auto const &wins = osd_common_t::window_list();
+	if (wins.empty())
+		return;
+	osd_window *const w = wins.front().get();
+	if (w->target())
+		w->machine().ui_input().push_char_event(w->target(), ch);
+}
+
+void ui_push_focus(bool gained)
+{
+	auto const &wins = osd_common_t::window_list();
+	if (wins.empty())
+		return;
+	osd_window *const w = wins.front().get();
+	if (!w->target())
+		return;
+	if (gained)
+		w->machine().ui_input().push_window_focus_event(w->target());
+	else
+		w->machine().ui_input().push_window_defocus_event(w->target());
 }
 
 

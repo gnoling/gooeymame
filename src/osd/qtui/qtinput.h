@@ -33,6 +33,9 @@ enum class QtInputType
 {
 	KeyPress,
 	KeyRelease,
+	Char,           // committed text codepoint in `codepoint` (natural keyboard / UI)
+	FocusGained,    // render window gained keyboard focus
+	FocusLost,      // render window lost keyboard focus
 	MouseMove,      // x,y are absolute within the surface; also carries relative dx,dy
 	MouseButton,    // button index in `button`, pressed in `value`
 	MouseWheel,     // wheel delta in `value`

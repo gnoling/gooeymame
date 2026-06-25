@@ -46,6 +46,12 @@ std::unique_ptr<osd_window> make_native_window(
 // when the point is over it.  Used by the Qt-native lightgun for accurate aim.
 bool map_lightgun(int x, int y, int surfaceW, int surfaceH, float &nx, float &ny);
 
+// Natural-keyboard / UI text: push a committed character (and window focus
+// changes) into the running machine's ui_input, targeting the render window.
+// Called from the Qt keyboard module's poll on the emulation thread.
+void ui_push_char(char32_t ch);
+void ui_push_focus(bool gained);
+
 } // namespace osd::qtui
 
 #endif // MAME_OSD_QTUI_QTNATIVEWINDOW_H

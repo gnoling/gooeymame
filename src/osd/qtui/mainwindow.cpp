@@ -476,6 +476,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 		case QEvent::KeyRelease:
 		{
 			auto *const ke = static_cast<QKeyEvent *>(event);
+			// Committed text → char events for the natural keyboard / UI (allow
+			// auto-repeat so held keys keep typing).
+			if (event->type() == QEvent::KeyPress)
+			{
+				for (uint cp : ke->text().toUcs4())
+				{
+					if (!cp)
+						continue;
+					osd::qtui::QtInputEvent ce;
+					ce.type = osd::qtui::QtInputType::Char;
+					ce.codepoint = cp;
+					osd::qtui::QtInputBus::instance().pushKeyboard(ce);
+				}
+			}
+			// Raw key state (positional), no auto-repeat.
 			if (!ke->isAutoRepeat())
 			{
 				osd::qtui::QtInputEvent e;
@@ -542,11 +557,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			return true;
 		}
 		case QEvent::FocusIn:
+		{
 			osd::qtui::QtInputBus::instance().setFocused(true);
+			osd::qtui::QtInputEvent e;
+			e.type = osd::qtui::QtInputType::FocusGained;
+			osd::qtui::QtInputBus::instance().pushKeyboard(e);
 			break;
+		}
 		case QEvent::FocusOut:
+		{
 			osd::qtui::QtInputBus::instance().setFocused(false);
+			osd::qtui::QtInputEvent e;
+			e.type = osd::qtui::QtInputType::FocusLost;
+			osd::qtui::QtInputBus::instance().pushKeyboard(e);
 			break;
+		}
 		default:
 			break;
 		}

@@ -181,13 +181,30 @@ public:
 	{
 		for (auto const &e : osd::qtui::QtInputBus::instance().takeKeyboard())
 		{
-			auto const it = m_index.find(e.key);
-			if (it == m_index.end())
-				continue;
-			if (e.type == osd::qtui::QtInputType::KeyPress)
-				m_state[it->second] = 0x80;
-			else if (e.type == osd::qtui::QtInputType::KeyRelease)
-				m_state[it->second] = 0x00;
+			switch (e.type)
+			{
+			case osd::qtui::QtInputType::KeyPress:
+			case osd::qtui::QtInputType::KeyRelease:
+			{
+				auto const it = m_index.find(e.key);
+				if (it != m_index.end())
+					m_state[it->second] = (e.type == osd::qtui::QtInputType::KeyPress) ? 0x80 : 0x00;
+				break;
+			}
+			case osd::qtui::QtInputType::Char:
+				// natural keyboard / UI text entry
+				if (e.codepoint)
+					osd::qtui::ui_push_char(char32_t(e.codepoint));
+				break;
+			case osd::qtui::QtInputType::FocusGained:
+				osd::qtui::ui_push_focus(true);
+				break;
+			case osd::qtui::QtInputType::FocusLost:
+				osd::qtui::ui_push_focus(false);
+				break;
+			default:
+				break;
+			}
 		}
 	}
 
