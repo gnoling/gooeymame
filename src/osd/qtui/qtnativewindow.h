@@ -40,6 +40,12 @@ std::unique_ptr<osd_window> make_native_window(
 		const osd_window_config &config,
 		QtEmbedTarget &target);
 
+// Map a pointer position (surface-local pixels, with the surface's logical size)
+// to the running machine's first screen container, accounting for letterbox AND
+// artwork/bezel layout.  Returns true and fills nx/ny in [0,1] within the screen
+// when the point is over it.  Used by the Qt-native lightgun for accurate aim.
+bool map_lightgun(int x, int y, int surfaceW, int surfaceH, float &nx, float &ny);
+
 } // namespace osd::qtui
 
 #endif // MAME_OSD_QTUI_QTNATIVEWINDOW_H

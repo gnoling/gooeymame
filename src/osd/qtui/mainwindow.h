@@ -285,6 +285,7 @@ private:
 	QWindow *m_nativeGlWindow = nullptr;
 	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow inside the central stack
 	std::unique_ptr<osd::qtui::QtEmbedTarget> m_nativeGlTarget;
+	int m_nativeGlLastMouseX = 0, m_nativeGlLastMouseY = 0;   // for relative mouse deltas
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it

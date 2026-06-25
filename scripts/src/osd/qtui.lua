@@ -537,6 +537,11 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/qtglprovider.h",
 		MAME_DIR .. "src/osd/qtui/qtnativewindow.h",
 		MAME_DIR .. "src/osd/qtui/qtembedtarget.h",
+
+		-- Qt-native input (Phase 13b): Qt-free event bus + MAME-side providers.
+		MAME_DIR .. "src/osd/qtui/qtinput.cpp",
+		MAME_DIR .. "src/osd/qtui/qtinput.h",
+		MAME_DIR .. "src/osd/modules/input/input_qt.cpp",
 		GEN_DIR .. "osd/qtui/mainwindow.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp",
 		GEN_DIR .. "osd/qtui/gamelistproxy.moc.cpp",

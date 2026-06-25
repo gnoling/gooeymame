@@ -300,6 +300,11 @@ void osd_common_t::register_options()
 	REGISTER_MODULE(m_mod_man, KEYBOARDINPUT_RAWINPUT);
 	REGISTER_MODULE(m_mod_man, KEYBOARDINPUT_DINPUT);
 	REGISTER_MODULE(m_mod_man, KEYBOARDINPUT_WIN32);
+#if defined(OSD_QT_GL)
+	// Registered after SDL so "auto" keeps picking SDL by default; the Qt-native
+	// render path explicitly forces -keyboardprovider qt.
+	REGISTER_MODULE(m_mod_man, KEYBOARDINPUT_QT);
+#endif
 	REGISTER_MODULE(m_mod_man, KEYBOARD_NONE);
 
 #if defined(SDLMAME_SDL2) || defined(SDLMAME_SDL3)
@@ -308,6 +313,9 @@ void osd_common_t::register_options()
 	REGISTER_MODULE(m_mod_man, MOUSEINPUT_RAWINPUT);
 	REGISTER_MODULE(m_mod_man, MOUSEINPUT_DINPUT);
 	REGISTER_MODULE(m_mod_man, MOUSEINPUT_WIN32);
+#if defined(OSD_QT_GL)
+	REGISTER_MODULE(m_mod_man, MOUSEINPUT_QT);
+#endif
 	REGISTER_MODULE(m_mod_man, MOUSE_NONE);
 
 #if defined(SDLMAME_SDL2) || defined(SDLMAME_SDL3)
@@ -316,6 +324,9 @@ void osd_common_t::register_options()
 	REGISTER_MODULE(m_mod_man, LIGHTGUN_X11);
 	REGISTER_MODULE(m_mod_man, LIGHTGUNINPUT_RAWINPUT);
 	REGISTER_MODULE(m_mod_man, LIGHTGUNINPUT_WIN32);
+#if defined(OSD_QT_GL)
+	REGISTER_MODULE(m_mod_man, LIGHTGUNINPUT_QT);
+#endif
 	REGISTER_MODULE(m_mod_man, LIGHTGUN_NONE);
 
 #if defined(SDLMAME_SDL2) || defined(SDLMAME_SDL3)

@@ -23,6 +23,7 @@
 // these Qt-free shims, so this translation unit stays clear of Qt headers
 #include "qtnativewindow.h"
 #include "qtembedtarget.h"
+#include "qtinput.h"   // QtInputBus focus state for has_focus()
 
 // MAME headers
 #include "emu.h"
@@ -1111,6 +1112,13 @@ public:
 		m_session.running.store(true);
 	}
 
+	// Focus comes from the Qt render window (the bus), not SDL's foreign-window
+	// focus tracking — this is what gates input polling (should_poll_devices).
+	virtual bool has_focus() const override
+	{
+		return osd::qtui::QtInputBus::instance().focused();
+	}
+
 	virtual void update(bool skip_redraw) override
 	{
 		// Foundation: drain the in-game command queue but only apply the safe
@@ -1313,6 +1321,14 @@ int qtui_run_embedded_native(
 	// (drawogl, via qt_gl_context); force it regardless of the user's -video.
 	args.push_back("-video");
 	args.push_back("opengl");
+	// Use the Qt-native input providers (fed from the render window via the
+	// QtInputBus) instead of SDL, which never sees our foreign window's events.
+	args.push_back("-keyboardprovider");
+	args.push_back("qt");
+	args.push_back("-mouseprovider");
+	args.push_back("qt");
+	args.push_back("-lightgunprovider");
+	args.push_back("qt");
 
 	{
 		sdl_options options;

@@ -18,8 +18,11 @@
 #include "emu.h"
 
 #include "modules/osdwindow.h"
+#include "modules/lib/osdobj_common.h"   // osd_common_t::window_list()
 #include "render.h"
 #include "screen.h"
+
+#include <cmath>
 
 // qtui (Qt-free) headers
 #include "qtnativewindow.h"
@@ -125,6 +128,44 @@ void qt_window_info::complete_destroy()
 	// QWindow itself belongs to the GUI thread and is freed there once the
 	// worker has been joined
 	renderer_reset();
+}
+
+
+bool map_lightgun(int x, int y, int surfaceW, int surfaceH, float &nx, float &ny)
+{
+	auto const &wins = osd_common_t::window_list();
+	if (wins.empty() || surfaceW <= 1 || surfaceH <= 1)
+		return false;
+
+	osd_window *const w = wins.front().get();
+	render_target *const t = w->target();
+	if (!t)
+		return false;
+
+	screen_device_enumerator iter(w->machine().root_device());
+	screen_device *const screen = iter.first();
+	if (!screen)
+		return false;
+
+	// scale surface-local (logical) pixels to render-target pixels
+	int const tx = int(std::lround(double(x) * t->width() / surfaceW));
+	int const ty = int(std::lround(double(y) * t->height() / surfaceH));
+
+	// Note: we use the container coordinates whether or not the point is within
+	// the screen bounds.  map_point_container() extrapolates them past [0,1] when
+	// the cursor is in the surrounding letterbox/artwork, so pointing off the
+	// game image yields axis extremes after normalisation — which is exactly how
+	// lightgun games detect an off-screen shot (e.g. Lethal Enforcers reload).
+	float cx = 0.0f, cy = 0.0f;
+	bool const onscreen = t->map_point_container(tx, ty, screen->container(), cx, cy);
+
+	// guard the "no visible screen item" sentinel (both exactly -1)
+	if (!onscreen && cx == -1.0f && cy == -1.0f)
+		return false;
+
+	nx = cx;
+	ny = cy;
+	return true;
 }
 
 

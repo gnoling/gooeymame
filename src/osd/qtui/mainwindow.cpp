@@ -12,6 +12,7 @@
 #include "auditmanager.h"
 #include "embedhost.h"
 #include "emulator.h"
+#include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "familytreemodel.h"
 #include "foldertree.h"
 #include "frontendpaths.h"
@@ -42,7 +43,11 @@
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QtGui/QStyleHints>
 #endif
+#include <QtGui/QCursor>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QSurfaceFormat>
+#include <QtGui/QWheelEvent>
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStyle>
@@ -449,20 +454,101 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 	// destroys the window once the worker has joined.
 	if (watched == m_nativeGlWindow)
 	{
-		if (event->type() == QEvent::Close)
+		switch (event->type())
 		{
+		case QEvent::Close:
 			if (embedRunning())
 			{
 				stopEmbedded();
 				event->ignore();
 				return true;
 			}
-		}
+			break;
 		// Publish size changes to the worker (in device pixels) so the OpenGL
 		// renderer rescales; never touched off the GUI thread.
-		else if ((event->type() == QEvent::Resize || event->type() == QEvent::Expose) && m_nativeGlTarget)
+		case QEvent::Resize:
+		case QEvent::Expose:
+			if (m_nativeGlTarget)
+				updateNativeGlSize();
+			break;
+		// Feed keyboard input to the Qt-native input module via the bus.
+		case QEvent::KeyPress:
+		case QEvent::KeyRelease:
 		{
-			updateNativeGlSize();
+			auto *const ke = static_cast<QKeyEvent *>(event);
+			if (!ke->isAutoRepeat())
+			{
+				osd::qtui::QtInputEvent e;
+				e.type = (event->type() == QEvent::KeyPress)
+						? osd::qtui::QtInputType::KeyPress : osd::qtui::QtInputType::KeyRelease;
+				e.key = ke->key();
+				e.nativeScanCode = ke->nativeScanCode();
+				e.modifiers = unsigned(ke->modifiers());
+				osd::qtui::QtInputBus::instance().pushKeyboard(e);
+			}
+			return true;   // consumed by the game
+		}
+		case QEvent::MouseMove:
+		{
+			auto *const me = static_cast<QMouseEvent *>(event);
+			QPointF const p = me->position();
+			osd::qtui::QtInputEvent e;
+			e.type = osd::qtui::QtInputType::MouseMove;
+			e.x = int(p.x());
+			e.y = int(p.y());
+			e.dx = e.x - m_nativeGlLastMouseX;
+			e.dy = e.y - m_nativeGlLastMouseY;
+			e.surfaceW = m_nativeGlWindow->width();
+			e.surfaceH = m_nativeGlWindow->height();
+			m_nativeGlLastMouseX = e.x;
+			m_nativeGlLastMouseY = e.y;
+			osd::qtui::QtInputBus::instance().pushMouse(e);
+			break;
+		}
+		case QEvent::MouseButtonPress:
+		case QEvent::MouseButtonRelease:
+		{
+			auto *const me = static_cast<QMouseEvent *>(event);
+			int idx = -1;
+			switch (me->button())
+			{
+			case Qt::LeftButton:   idx = 0; break;
+			case Qt::RightButton:  idx = 1; break;
+			case Qt::MiddleButton: idx = 2; break;
+			default: break;
+			}
+			if (idx >= 0)
+			{
+				QPointF const p = me->position();
+				osd::qtui::QtInputEvent e;
+				e.type = osd::qtui::QtInputType::MouseButton;
+				e.button = idx;
+				e.value = (event->type() == QEvent::MouseButtonPress) ? 1 : 0;
+				e.x = int(p.x());
+				e.y = int(p.y());
+				e.surfaceW = m_nativeGlWindow->width();
+				e.surfaceH = m_nativeGlWindow->height();
+				osd::qtui::QtInputBus::instance().pushMouse(e);
+			}
+			return true;
+		}
+		case QEvent::Wheel:
+		{
+			auto *const we = static_cast<QWheelEvent *>(event);
+			osd::qtui::QtInputEvent e;
+			e.type = osd::qtui::QtInputType::MouseWheel;
+			e.value = we->angleDelta().y();
+			osd::qtui::QtInputBus::instance().pushMouse(e);
+			return true;
+		}
+		case QEvent::FocusIn:
+			osd::qtui::QtInputBus::instance().setFocused(true);
+			break;
+		case QEvent::FocusOut:
+			osd::qtui::QtInputBus::instance().setFocused(false);
+			break;
+		default:
+			break;
 		}
 	}
 
@@ -3389,6 +3475,11 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	m_nativeGlContainer = QWidget::createWindowContainer(m_nativeGlWindow, this);
 	m_nativeGlContainer->setMinimumSize(320, 240);
 	m_nativeGlContainer->setFocusPolicy(Qt::StrongFocus);
+	// Hide the OS pointer over the game surface (matches SDL): the in-game
+	// crosshair is the visible aiming reference, so the bare pointer racing
+	// ahead of the pipeline-delayed reticule no longer reads as lag.
+	m_nativeGlContainer->setCursor(Qt::BlankCursor);
+	m_nativeGlWindow->setCursor(Qt::BlankCursor);
 	if (m_centralStack->indexOf(m_nativeGlContainer) < 0)
 		m_centralStack->addWidget(m_nativeGlContainer);
 	m_centralStack->setCurrentWidget(m_nativeGlContainer);
@@ -3396,6 +3487,13 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	m_nativeGlTarget = std::make_unique<osd::qtui::QtEmbedTarget>();
 	m_nativeGlTarget->window = m_nativeGlWindow;
 	updateNativeGlSize();
+
+	// Prime the Qt-native input bus: drop stale events and assume focus (the
+	// surface is about to be shown and given keyboard focus).
+	osd::qtui::QtInputBus::instance().clear();
+	osd::qtui::QtInputBus::instance().setFocused(true);
+	m_nativeGlContainer->setFocus(Qt::OtherFocusReason);
+	m_nativeGlWindow->requestActivate();
 
 	m_embedSession = std::make_unique<EmbedSession>();
 	setMachineControlsActive(true);
