@@ -3461,23 +3461,15 @@ void MainWindow::returnFromEmbed()
 void MainWindow::startStandaloneEmbedded(const QString &system, const QString &software)
 {
 	m_standaloneEmbed = true;
-	if (embeddingSupported())
-	{
-		// X11: embed the game inside its own window WITH the in-game menu bar (LocWindow);
-		// the browser is never shown.  Set the members directly so we don't persist over the
-		// user's normal Play Mode / location preferences.
-		m_embedMode = EmbedInProcess;
-		m_embedLocation = LocWindow;
-	}
-	else
-	{
-		// Off-X11 (e.g. Wayland): -attach_window isn't available, so fall back to in-process
-		// own-window live-controls mode — MAME runs in its own SDL window and the in-game menu
-		// bar lives on this window, which therefore has to be shown.
-		m_embedMode = EmbedInProcessWindow;
-		show();
-	}
-	// Launch once the event loop is running so the host widget realises and its XID is valid.
+	// Qt-native OSD: the game renders in this window's central area with the
+	// in-game menu bar; the browser list isn't shown.  No SDL, no X11 attach —
+	// works on any platform.  Set members directly so we don't persist over the
+	// user's normal preferences.  Closing the window quits the app
+	// (onEmbeddedFinished honours m_standaloneEmbed).
+	m_embedMode = EmbedNativeQt;
+	m_nativePlacement = PlaceCentral;
+	show();
+	// Launch once the event loop is running so the render surface is realised.
 	QTimer::singleShot(0, this, [this, system, software] { launchSystem(system, software); });
 }
 
