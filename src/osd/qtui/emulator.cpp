@@ -4,17 +4,18 @@
 //
 //  emulator.cpp - qtui emulation entry points (no Qt dependencies)
 //
-//  Reuses the SDL OSD as the emulation backend.  The body mirrors
-//  src/osd/sdl/sdlmain.cpp, factored into functions so it can be driven
-//  either by command-line passthrough or by the Qt GUI.
+//  Drives the Qt-native OSD (qt_osd_interface : osd_common_t) — renders into a
+//  QWindow, takes input from the Qt bus, uses non-SDL sound/font/monitor — so
+//  the qtui build needs nothing from src/osd/sdl.  Factored into functions so it
+//  can be driven either by command-line passthrough or by the Qt GUI.
 //
 //============================================================
 
 #include "emulator.h"
 
 // OSD headers
-#include "osdsdl.h"
-#include "window.h"   // sdl_window_info (live fullscreen toggle for own-window embed)
+#include "modules/lib/osdobj_common.h"   // osd_common_t / osd_options
+#include "modules/osdwindow.h"           // osd_window / video_config
 #include "modules/lib/osdlib.h"
 #include "modules/monitor/monitor_module.h"   // pick_monitor() for the Qt-native window
 #include "modules/diagnostics/diagnostics_module.h"
@@ -77,17 +78,14 @@
 
 #include "embedsession.h"
 
-#include <SDL2/SDL.h>
-
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
-#ifndef SDLMAME_HAIKU
+// Desktop-unix fontconfig init (Linux/BSD): the bitmap UI font provider doesn't
+// need it, but MAME's font handling expects fontconfig to be available there.
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__HAIKU__) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+#define QTUI_USE_FONTCONFIG 1
 #include <fontconfig/fontconfig.h>
 #endif
-#endif
-#endif
 
-#if !defined(SDLMAME_WIN32)
+#if !defined(_WIN32)
 #include <unistd.h>
 #endif
 
@@ -100,9 +98,7 @@
 //  Qt debugger module references it, so define it here.
 //============================================================
 
-#if defined(SDLMAME_UNIX) || defined(SDLMAME_WIN32)
 int sdl_entered_debugger;
-#endif
 
 
 //============================================================
@@ -117,6 +113,32 @@ int sdl_entered_debugger;
 namespace {
 
 std::mutex g_core_mutex;
+
+// Per-platform default ini search path, mirroring the SDL OSD's (sdlopts.cpp)
+// so existing user config (e.g. under $HOME/.<appname>) is still found — the
+// bare emu_options default ("ini") would only look in ./ini.  APP_NAME is
+// substituted with the lowercase application name at construction.
+#if defined(_WIN32)
+	#define QTUI_INI_PATH ".;ini;ini/presets"
+#elif defined(__APPLE__)
+	#define QTUI_INI_PATH "$HOME/Library/Application Support/APP_NAME;$HOME/.APP_NAME;.;ini"
+#else
+	#define QTUI_INI_PATH "$HOME/.APP_NAME;.;ini"
+#endif
+
+// Options class for the Qt-native OSD: osd_options (all the OSDOPTION_* video/
+// render options the renderers read) plus the per-platform inipath default.
+// Replaces qt_options so the qtui build needs nothing from src/osd/sdl.
+class qt_options : public osd_options
+{
+public:
+	qt_options()
+	{
+		std::string inipath(QTUI_INI_PATH);
+		strreplace(inipath, "APP_NAME", emulator_info::get_appname_lower());
+		set_default_value(OPTION_INIPATH, std::move(inipath));
+	}
+};
 
 // RAII helper: hold the core mutex and force the "C" locale (which the MAME
 // parsers require) for the duration, restoring it on scope exit.
@@ -278,20 +300,9 @@ private:
 			m.video().save_active_screen_snapshots();
 			break;
 		case EmbedCommand::ToggleFullscreen:
-			// Only posted in own-window mode (no -attach_window); the GUI handles
-			// fullscreen for attached surfaces, where destroy+recreate is unsafe.
-			// Toggle the live SDL window between windowed and fullscreen.
-			for (const auto &win : osd_common_t::window_list())
-			{
-				if (osd_window *const w = win.get())
-				{
-					// SDL own-window only; the Qt-native window has no SDL
-					// fullscreen toggle (the GUI handles its own window state).
-					if (auto *const sw = dynamic_cast<sdl_window_info *>(w))
-						sw->toggle_full_screen();
-					break;
-				}
-			}
+			// No-op for the Qt-native OSD: fullscreen of the render surface is a
+			// GUI-window concern, handled by MainWindow::setEmbedFullscreen (the
+			// OSD window has no SDL-style destroy+recreate fullscreen toggle).
 			break;
 		case EmbedCommand::ToggleFps:
 			{
@@ -401,12 +412,9 @@ private:
 			// Screen scaling: bilinear (smooth/blurry) vs nearest (sharp pixels).
 			// The renderers read the global video_config.filter at texture-create
 			// time, so flip it and force every window to rebuild its textures —
-			// live on the next frame, no reset.  Re-set the SDL render hint too so
-			// the SDL2/SDL3 accelerated renderers pick it up on rebuild.
+			// live on the next frame, no reset.
 			video_config.filter = a.ival ? 1 : 0;
-			SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, video_config.filter ? "1" : "0");
-			// force every window's renderer to rebuild textures (generic — works
-			// for both the SDL and Qt-native windows)
+			// force every window's renderer to rebuild textures (drawogl/drawbgfx)
 			for (const auto &win : osd_common_t::window_list())
 				if (osd_window *const w = win.get())
 					if (w->has_renderer())
@@ -1058,7 +1066,7 @@ private:
 class qt_osd_interface : public osd_common_t
 {
 public:
-	qt_osd_interface(sdl_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
+	qt_osd_interface(qt_options &options, osd::qtui::QtEmbedTarget &target, osd::qtui::EmbedSession &session) :
 		osd_common_t(options),
 		m_options(options),
 		m_target(target),
@@ -1141,10 +1149,10 @@ public:
 		}
 	}
 
-	virtual sdl_options &options() override { return m_options; }
+	virtual qt_options &options() override { return m_options; }
 
 private:
-	sdl_options &m_options;
+	qt_options &m_options;
 	osd::qtui::QtEmbedTarget &m_target;
 	EmbedController m_ctrl;
 };
@@ -1166,7 +1174,7 @@ int qtui_run_embedded_native(
 	// Force the "C" locale for this thread only (see qtui_run_args): the MAME
 	// ini/number parsers require it, while the Qt GUI thread keeps the user's
 	// locale.  Unix uses POSIX uselocale; Windows uses per-thread CRT locale.
-#ifdef SDLMAME_UNIX
+#if !defined(_WIN32)
 	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
 #elif defined(_WIN32)
@@ -1175,10 +1183,8 @@ int qtui_run_embedded_native(
 	std::setlocale(LC_ALL, "C");
 #endif
 
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+#ifdef QTUI_USE_FONTCONFIG
 	FcInit();
-#endif
 #endif
 
 	std::vector<std::string> args{ "mame", system };
@@ -1228,7 +1234,7 @@ int qtui_run_embedded_native(
 	args.push_back("none");
 
 	{
-		sdl_options options;
+		qt_options options;
 		qt_osd_interface osd(options, *target, session);
 		osd.register_options();
 		res = emulator_info::start_frontend(options, osd, args);
@@ -1236,13 +1242,11 @@ int qtui_run_embedded_native(
 
 	session.running.store(false);
 
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+#ifdef QTUI_USE_FONTCONFIG
 	FcFini();
 #endif
-#endif
 
-#ifdef SDLMAME_UNIX
+#if !defined(_WIN32)
 	if (cloc)
 	{
 		uselocale(prev);
@@ -1268,7 +1272,7 @@ int qtui_run_args_native(
 	// thread (the Qt event loop owns the main thread), so force the "C" locale
 	// per-thread — the MAME ini/number parsers require it while the GUI thread
 	// keeps the user's locale.  See qtui_run_embedded_native().
-#ifdef SDLMAME_UNIX
+#if !defined(_WIN32)
 	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
 #elif defined(_WIN32)
@@ -1277,10 +1281,8 @@ int qtui_run_args_native(
 	std::setlocale(LC_ALL, "C");
 #endif
 
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+#ifdef QTUI_USE_FONTCONFIG
 	FcInit();
-#endif
 #endif
 
 	// Append the providers the Qt-native OSD requires, so they take precedence
@@ -1307,7 +1309,7 @@ int qtui_run_args_native(
 	args.push_back("none");
 
 	{
-		sdl_options options;
+		qt_options options;
 		qt_osd_interface osd(options, *target, session);
 		osd.register_options();
 		res = emulator_info::start_frontend(options, osd, args);
@@ -1315,13 +1317,11 @@ int qtui_run_args_native(
 
 	session.running.store(false);
 
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+#ifdef QTUI_USE_FONTCONFIG
 	FcFini();
 #endif
-#endif
 
-#ifdef SDLMAME_UNIX
+#if !defined(_WIN32)
 	if (cloc)
 	{
 		uselocale(prev);
@@ -1360,7 +1360,7 @@ void qtui_load_software(
 
 		// Load the configured paths (hashpath in particular) so the software
 		// list definition files can be found.
-		sdl_options options;
+		qt_options options;
 		std::ostringstream errors;
 		mame_options::parse_standard_inis(options, errors, &driver);
 
@@ -1457,7 +1457,7 @@ std::vector<qtui_option_group> qtui_read_options()
 
 	core_guard guard;
 
-	sdl_options options;
+	qt_options options;
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors);
 
@@ -1510,7 +1510,7 @@ bool qtui_write_options(
 {
 	core_guard guard;
 
-	sdl_options options;
+	qt_options options;
 
 	// Find the mame.ini that is actually loaded, by searching the *default*
 	// inipath (the search MAME itself uses on startup) before parse_standard_inis
@@ -1659,7 +1659,7 @@ std::vector<qtui_option_group> qtui_read_game_options(
 		return {};
 	const game_driver &driver = driver_list::driver(index);
 
-	sdl_options options;
+	qt_options options;
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors, &driver);
 
@@ -1696,7 +1696,7 @@ bool qtui_write_game_options(
 	if (driver_list::find(system.c_str()) < 0)
 		return false;
 
-	sdl_options options;
+	qt_options options;
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors);
 	std::string const dir = first_inipath_dir(options);
@@ -2045,7 +2045,7 @@ void qtui_audit_all(
 {
 	// One options set / enumerator for the whole sweep; the enumerator caches
 	// machine configurations as it advances.
-	sdl_options options;
+	qt_options options;
 	{
 		core_guard guard;
 		std::ostringstream errors;
@@ -2100,7 +2100,7 @@ void qtui_audit_all_software(
 		const std::function<void (const std::string &, const std::vector<int> &, bool)> &on_system,
 		const std::atomic<bool> &cancel)
 {
-	sdl_options options;
+	qt_options options;
 	{
 		core_guard guard;
 		std::ostringstream errors;
