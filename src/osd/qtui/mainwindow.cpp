@@ -11,6 +11,7 @@
 #include "artworkpanel.h"
 #include "auditmanager.h"
 #include "emulator.h"
+#include "inputmapdialog.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
 #include "familytreemodel.h"
@@ -1294,7 +1295,11 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 
 	//---- Input: keyboard mode + paste (natural-keyboard machines), crosshair --
 	QMenu *input = topMenu(tr("&Input"));
-	relevant(input->menuAction(), CapInput);
+	// Input remapping is universal (every machine has assignable inputs), so the
+	// Input menu is always shown while a game runs — not gated on keyboard/crosshair.
+	connect(input->addAction(tr("Input &Mapping…")), &QAction::triggered, this,
+			[this] { showInputMapDialog(); });
+	input->addSeparator();
 	QMenu *keyboard = input->addMenu(tr("&Keyboard"));
 	track(keyboard->menuAction());
 	relevant(keyboard->menuAction(), CapNaturalKeyboard);
@@ -1999,6 +2004,17 @@ void MainWindow::rebuildAudioMenu(QMenu *menu)
 	}
 	if (!any)
 		menu->addAction(tr("(this machine has no volume controls)"))->setEnabled(false);
+}
+
+void MainWindow::showInputMapDialog()
+{
+	if (!m_embedSession)
+		return;
+	if (!m_inputMapDialog)
+		m_inputMapDialog = new osd::qtui::InputMapDialog(m_embedSession.get(), this);
+	m_inputMapDialog->show();
+	m_inputMapDialog->raise();
+	m_inputMapDialog->activateWindow();
 }
 
 void MainWindow::showInfoText(const QString &title, const QString &text)
@@ -3561,6 +3577,14 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 
 void MainWindow::onEmbeddedFinished(int exitCode)
 {
+	// Close the input-mapping dialog before the session it references is freed.
+	if (m_inputMapDialog)
+	{
+		m_inputMapDialog->close();
+		m_inputMapDialog->deleteLater();
+		m_inputMapDialog = nullptr;
+	}
+
 	// Join the in-process emulation thread and tear down its bridge (no-op for
 	// the child-process embed path, which uses neither).
 	if (m_embedThread.joinable())

@@ -65,6 +65,10 @@ enum class EmbedCommand
 	CheatToggleGlobal,// toggle the global cheat enable
 	CheatSelect,      // ival = cheat index, value = 0 default / 1 next / 2 previous state
 	CheatReload,      // reload all cheats from disk
+	InputCaptureStart,// ival = input index (into the EmbedInputMap), value = 1 append / 0 replace
+	InputCaptureCancel,// abandon an in-progress capture
+	InputSetDefault,  // ival = input index — restore the input to its default binding
+	InputSetNone,     // ival = input index — clear the input's binding to none
 	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
 	SetShaderChain,   // ival = BGFX effect/chain index for screen 0 (Qt-native BGFX renderer)
 	Exit
@@ -210,6 +214,31 @@ struct EmbedCheat
 	bool enabled = false;  // global cheat enable
 	struct Entry { std::string description; std::string state; bool textOnly = false; };
 	std::vector<Entry> entries;   // index = command key
+};
+
+// One remappable input on the running machine: a machine field (this game's
+// controls) or a general input (UI / standard player controls), for a single
+// sequence type (digital = one entry; analog = a Standard/Increment/Decrement
+// triple).  The index in the published vector is the command key — the worker
+// re-derives the field/type from a parallel target list it keeps.
+struct EmbedInputEntry
+{
+	std::string group;             // grouping label ("Player 1", "User Interface", …)
+	std::string name;              // input display name (+ " Inc"/" Dec" for analog)
+	std::string seqText;           // current binding, human-readable
+	bool        analog = false;
+	bool        isDefault = false; // currently using the default assignment
+	bool        isNone = false;    // currently cleared to none
+};
+
+// Live state of an interactive input-capture ("press a control") session.
+struct EmbedCapture
+{
+	bool        active = false;    // a capture is in progress
+	int         index = -1;        // which EmbedInputMap entry is being captured
+	std::string prompt;            // partial sequence captured so far ("" = nothing yet)
+	bool        finished = false;  // capture completed this frame (UI: refresh + close)
+	bool        cancelled = false; // capture was abandoned
 };
 
 // Capability flags describing what the running machine actually supports, so the
@@ -465,6 +494,33 @@ public:
 		return m_cheats;
 	}
 
+	// Remappable-input list (published at init + after each change).  The
+	// generation counter lets the dialog refresh only when it changes.
+	void publishInputMap(std::vector<EmbedInputEntry> list)
+	{
+		std::lock_guard<std::mutex> lk(m_inputMapMutex);
+		m_inputMap = std::move(list);
+		m_inputMapGen.fetch_add(1, std::memory_order_relaxed);
+	}
+	std::vector<EmbedInputEntry> inputMapSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_inputMapMutex);
+		return m_inputMap;
+	}
+	unsigned inputMapGeneration() const { return m_inputMapGen.load(std::memory_order_relaxed); }
+
+	// Live input-capture state (published each frame while capturing).
+	void publishCapture(EmbedCapture c)
+	{
+		std::lock_guard<std::mutex> lk(m_captureMutex);
+		m_capture = std::move(c);
+	}
+	EmbedCapture captureSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_captureMutex);
+		return m_capture;
+	}
+
 	// Status published by the emulation thread for the UI to read.
 	std::atomic<bool> running{false};
 	std::atomic<bool> paused{false};
@@ -517,6 +573,13 @@ private:
 
 	mutable std::mutex m_cheatMutex;
 	EmbedCheat m_cheats;
+
+	mutable std::mutex m_inputMapMutex;
+	std::vector<EmbedInputEntry> m_inputMap;
+	std::atomic<unsigned> m_inputMapGen{0};
+
+	mutable std::mutex m_captureMutex;
+	EmbedCapture m_capture;
 };
 
 } // namespace osd::qtui

@@ -57,6 +57,7 @@ class FolderTree;
 class GameListModel;
 class GridView;
 class InfoLoader;
+class InputMapDialog;
 class RepresentativeProxy;
 class SoftwareLoader;
 class SoftwareModel;
@@ -180,6 +181,7 @@ private:
 	void rebuildAudioMenu(QMenu *menu);          // volume sliders from the live slider snapshot
 	void addSliderControl(QMenu *menu, const EmbedSlider &s, int index); // submenu with a live QSlider widget
 	void showInfoText(const QString &title, const QString &text); // shared read-only Info dialog
+	void showInputMapDialog();                                    // in-game input remapping dialog
 	void showRunningHistory();                   // load + show the running game's history (async)
 	void applyMenuRelevance(const EmbedCaps &caps); // hide menus/submenus the running machine lacks
 	void setEmbedFullscreen(bool on);            // GUI-level fullscreen of the embedded game surface
@@ -305,6 +307,7 @@ private:
 	QString m_pendingLaunchSoftware;
 	QTimer *m_embedStatusTimer = nullptr;           // polls live paused state
 	QDialog *m_infoDialog = nullptr;                // shared read-only Info dialog
+	osd::qtui::InputMapDialog *m_inputMapDialog = nullptr;  // in-game input remapping dialog
 	QPlainTextEdit *m_infoTextView = nullptr;       // its text area
 	InfoLoader *m_embedInfoLoader = nullptr;        // async loader for the running game's History
 	quint64 m_embedInfoEpoch = 0;                   // discards stale History results

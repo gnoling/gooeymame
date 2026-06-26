@@ -39,6 +39,7 @@
 #include "dinetwork.h"     // device_network_interface (Network Devices menu)
 #include "dislot.h"
 #include "natkeyboard.h"
+#include "uiinput.h"       // ui_input_manager::reset() during input capture
 #include "romload.h"       // system-BIOS rom entries (BIOS Selection menu)
 #include "imagedev/cassette.h"   // cassette_image_device (Tape Control menu)
 #include "machine/bcreader.h"    // barcode_reader_device (Barcode Reader menu)
@@ -47,6 +48,7 @@
 #include "ui/info.h"       // machine_info::game_info_string()/warnings_string()
 #include "ui/menuitem.h"   // ui::menu_item (slider list entries)
 #include "ui/slider.h"     // slider_state + SLIDER_NOCHANGE (live adjustments)
+#include "iptseqpoll.h"    // input_sequence_poller (interactive input remapping)
 #include "bookkeeping.h"   // bookkeeping_manager (coin counters, tickets)
 
 #include "drivenum.h"
@@ -291,6 +293,13 @@ public:
 	{
 	}
 
+	// True while an interactive input-remap capture is running.  The OSD reports
+	// focus during capture so device polling continues even though the remap
+	// dialog (not the game surface) holds the keyboard focus — otherwise
+	// should_poll_devices() (background_input || has_focus) is false and neither
+	// the keyboard nor the controller is ever polled, so the poller sees nothing.
+	bool capture_active() const { return m_seqPoll != nullptr; }
+
 	void init(running_machine &machine)
 	{
 		m_machine = &machine;
@@ -313,6 +322,9 @@ public:
 	void update()
 	{
 		drain_commands();
+		// advance any in-progress input-remap capture (publishes the partial
+		// sequence each frame; applies + refreshes when it finishes)
+		poll_capture();
 		if (m_machine)
 		{
 			m_session.paused.store(m_machine->paused());
@@ -333,6 +345,7 @@ public:
 				refresh_barcode();
 				refresh_crosshairs();
 				refresh_cheats();
+				refresh_inputmap();
 			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
@@ -627,6 +640,18 @@ private:
 				mame_machine_manager::instance()->cheat().reload();
 				refresh_cheats();
 			}
+			break;
+		case EmbedCommand::InputCaptureStart:
+			start_capture(a.ival, a.value != 0);
+			break;
+		case EmbedCommand::InputCaptureCancel:
+			cancel_capture();
+			break;
+		case EmbedCommand::InputSetDefault:
+			set_input_default_or_none(a.ival, true);
+			break;
+		case EmbedCommand::InputSetNone:
+			set_input_default_or_none(a.ival, false);
 			break;
 		case EmbedCommand::RefocusInput:
 			// No-op: this was the SDL foreign-window (-attach_window) focus/grab
@@ -1134,10 +1159,219 @@ private:
 		m_session.publishCheats(std::move(out));
 	}
 
+	//------------------------------------------------------------------
+	//  Input remapping
+	//------------------------------------------------------------------
+
+	// A remappable input target the GUI refers to by index (parallel to the
+	// published EmbedInputMap).  Either a machine field or a general input type.
+	struct InputTarget
+	{
+		ioport_field   *field = nullptr;            // machine field (else general)
+		ioport_type     type = IPT_INVALID;         // general input type (field==nullptr)
+		int             player = 0;
+		input_seq_type  seqtype = SEQ_TYPE_STANDARD;
+		bool            analog = false;
+	};
+
+	static std::string seqtype_suffix(bool analog, input_seq_type st)
+	{
+		if (!analog)
+			return std::string();
+		switch (st)
+		{
+		case SEQ_TYPE_INCREMENT: return " Inc";
+		case SEQ_TYPE_DECREMENT: return " Dec";
+		default:                 return " Analog";
+		}
+	}
+
+	input_seq current_seq(const InputTarget &t) const
+	{
+		if (t.field)
+			return t.field->seq(t.seqtype);
+		return m_machine->ioport().type_seq(t.type, t.player, t.seqtype);
+	}
+
+	void refresh_inputmap()
+	{
+		if (!m_machine)
+			return;
+
+		m_inputTargets.clear();
+		std::vector<osd::qtui::EmbedInputEntry> out;
+		ioport_manager &iom = m_machine->ioport();
+
+		auto add_entry = [&] (const InputTarget &t, const std::string &group, const std::string &name)
+		{
+			input_seq const seq = current_seq(t);
+			osd::qtui::EmbedInputEntry e;
+			e.group = group;
+			e.name = name + seqtype_suffix(t.analog, t.seqtype);
+			e.seqText = m_machine->input().seq_name(seq);
+			e.analog = t.analog;
+			e.isNone = !seq.length();
+			e.isDefault = (t.field) ? (seq == t.field->defseq(t.seqtype)) : false;
+			m_inputTargets.push_back(t);
+			out.push_back(std::move(e));
+		};
+
+		// this machine's controls
+		for (auto const &port : iom.ports())
+		{
+			for (ioport_field &field : port.second->fields())
+			{
+				if (!field.enabled())
+					continue;
+				auto const cls = field.type_class();
+				if (cls != INPUT_CLASS_CONTROLLER && cls != INPUT_CLASS_MISC && cls != INPUT_CLASS_KEYBOARD)
+					continue;
+				bool const analog = field.is_analog();
+				int const last = analog ? SEQ_TYPE_DECREMENT : SEQ_TYPE_STANDARD;
+				std::string const group = field.player() >= 0 && field.type_class() == INPUT_CLASS_CONTROLLER
+						? ("Player " + std::to_string(field.player() + 1))
+						: std::string("This Machine");
+				for (int st = SEQ_TYPE_STANDARD; st <= last; st++)
+				{
+					InputTarget t;
+					t.field = &field;
+					t.player = field.player();
+					t.seqtype = input_seq_type(st);
+					t.analog = analog;
+					add_entry(t, group, field.name());
+				}
+			}
+		}
+
+		// general inputs (UI navigation + standard player controls)
+		for (input_type_entry const &entry : iom.types())
+		{
+			if (entry.name().empty())
+				continue;
+			bool const analog = ioport_manager::type_is_analog(entry.type());
+			int const last = analog ? SEQ_TYPE_DECREMENT : SEQ_TYPE_STANDARD;
+			std::string const group = (entry.group() == IPG_UI)
+					? std::string("User Interface")
+					: std::string("General Input");
+			for (int st = SEQ_TYPE_STANDARD; st <= last; st++)
+			{
+				InputTarget t;
+				t.type = entry.type();
+				t.player = entry.player();
+				t.seqtype = input_seq_type(st);
+				t.analog = analog;
+				add_entry(t, group, entry.name());
+			}
+		}
+
+		m_session.publishInputMap(std::move(out));
+	}
+
+	// Apply a captured/explicit sequence to the input at `index`.
+	void apply_seq(int index, const input_seq &seq)
+	{
+		if (index < 0 || index >= int(m_inputTargets.size()))
+			return;
+		InputTarget const &t = m_inputTargets[index];
+		if (t.field)
+		{
+			ioport_field::user_settings settings;
+			t.field->get_user_settings(settings);
+			settings.seq[t.seqtype] = seq;
+			if (seq.is_default())
+				settings.cfg[t.seqtype].clear();
+			else if (!seq.length())
+				settings.cfg[t.seqtype] = "NONE";
+			else
+				settings.cfg[t.seqtype] = m_machine->input().seq_to_tokens(seq);
+			t.field->set_user_settings(settings);
+		}
+		else
+		{
+			m_machine->ioport().set_type_seq(t.type, t.player, t.seqtype, seq);
+		}
+	}
+
+	void publish_capture(bool finished, bool cancelled)
+	{
+		osd::qtui::EmbedCapture c;
+		c.active = (m_seqPoll != nullptr);
+		c.index = m_captureIndex;
+		c.finished = finished;
+		c.cancelled = cancelled;
+		if (m_seqPoll)
+			c.prompt = m_machine->input().seq_name(m_seqPoll->sequence());
+		m_session.publishCapture(std::move(c));
+	}
+
+	void start_capture(int index, bool recordNext)
+	{
+		if (!m_machine || index < 0 || index >= int(m_inputTargets.size()))
+			return;
+		InputTarget const &t = m_inputTargets[index];
+		m_captureIndex = index;
+		if (t.analog)
+			m_seqPoll = std::make_unique<axis_sequence_poller>(m_machine->input());
+		else
+			m_seqPoll = std::make_unique<switch_sequence_poller>(m_machine->input());
+		if (recordNext)
+			m_seqPoll->start(current_seq(t));
+		else
+			m_seqPoll->start();
+		publish_capture(false, false);
+	}
+
+	void cancel_capture()
+	{
+		if (!m_seqPoll)
+			return;
+		m_seqPoll.reset();
+		m_machine->ui_input().reset();
+		m_captureIndex = -1;
+		publish_capture(false, true);
+	}
+
+	// Called every frame while a capture is active (returns when finished).
+	void poll_capture()
+	{
+		if (!m_seqPoll)
+			return;
+		if (m_seqPoll->poll())   // finished (1s after the last input change)
+		{
+			if (m_seqPoll->valid())
+				apply_seq(m_captureIndex, m_seqPoll->sequence());
+			m_seqPoll.reset();
+			m_machine->ui_input().reset();
+			m_captureIndex = -1;
+			refresh_inputmap();
+			publish_capture(true, false);
+		}
+		else
+		{
+			publish_capture(false, false);   // live partial-sequence display
+		}
+	}
+
+	void set_input_default_or_none(int index, bool toDefault)
+	{
+		input_seq seq;
+		if (toDefault)
+			seq.set_default();
+		else
+			seq.reset();   // none
+		apply_seq(index, seq);
+		refresh_inputmap();
+	}
+
 	osd::qtui::EmbedSession &m_session;
 	running_machine *m_machine = nullptr;
 	unsigned m_imageRefreshTick = 0;
 	bool m_capsInit = false;   // capabilities published on the first update() frame
+
+	// input remapping
+	std::vector<InputTarget> m_inputTargets;
+	std::unique_ptr<input_sequence_poller> m_seqPoll;
+	int m_captureIndex = -1;
 };
 
 
@@ -1182,7 +1416,12 @@ public:
 	virtual void check_osd_inputs() override { }
 
 	// Focus comes from the Qt render window (the bus); gates input polling.
-	virtual bool has_focus() const override { return osd::qtui::QtInputBus::instance().focused(); }
+	// Force focus while an input-remap capture is active so device polling keeps
+	// running even though the remap dialog holds the keyboard focus.
+	virtual bool has_focus() const override
+	{
+		return osd::qtui::QtInputBus::instance().focused() || m_ctrl.capture_active();
+	}
 
 	virtual bool video_init() override
 	{
