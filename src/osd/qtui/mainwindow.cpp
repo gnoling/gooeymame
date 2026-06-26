@@ -1811,15 +1811,19 @@ void MainWindow::rebuildVideoMenu(QMenu *menu)
 		}
 	}
 
-	// Render views (radio): switching changes the whole view (e.g. with/without
-	// bezel for layouts that ship separate views).
+	// Render views (radio): MAME's layout "views" — bezel on/off, cocktail,
+	// cropped, individual screens, full artwork, …  Switching changes the whole
+	// presentation.  Some games ship many, which overflow a flat list into
+	// multiple columns, so present them in a scrollable "Layout" submenu (like
+	// Shader Effect below).
 	if (video.views.size() > 1)
 	{
-		menu->addSection(tr("View"));
-		QActionGroup *group = new QActionGroup(menu);
+		QMenu *views = menu->addMenu(tr("&Layout"));
+		views->setStyleSheet(QStringLiteral("QMenu { menu-scrollable: 1; }"));
+		QActionGroup *group = new QActionGroup(views);
 		for (int i = 0; i < int(video.views.size()); ++i)
 		{
-			QAction *a = menu->addAction(QString::fromStdString(video.views[i]));
+			QAction *a = views->addAction(QString::fromStdString(video.views[i]));
 			a->setCheckable(true);
 			group->addAction(a);
 			a->setChecked(i == video.currentView);
