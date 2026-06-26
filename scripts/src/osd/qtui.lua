@@ -524,8 +524,6 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/regions.h",
 		MAME_DIR .. "src/osd/qtui/familytreemodel.cpp",
 		MAME_DIR .. "src/osd/qtui/familytreemodel.h",
-		MAME_DIR .. "src/osd/qtui/embedhost.cpp",
-		MAME_DIR .. "src/osd/qtui/embedhost.h",
 		MAME_DIR .. "src/osd/qtui/embedsession.h",
 		MAME_DIR .. "src/osd/qtui/iconloader.h",
 
@@ -567,7 +565,6 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/thumbnailloader.moc.cpp",
 		GEN_DIR .. "osd/qtui/gridview.moc.cpp",
 		GEN_DIR .. "osd/qtui/familytreemodel.moc.cpp",
-		GEN_DIR .. "osd/qtui/embedhost.moc.cpp",
 	}
 
 	-- The PDF manual viewer is only built where Qt PDF is available.
@@ -597,7 +594,6 @@ project ("osd_" .. _OPTIONS["osd"])
 		{ MAME_DIR .. "src/osd/qtui/thumbnailloader.h", GEN_DIR .. "osd/qtui/thumbnailloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/gridview.h", GEN_DIR .. "osd/qtui/gridview.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/familytreemodel.h", GEN_DIR .. "osd/qtui/familytreemodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
-		{ MAME_DIR .. "src/osd/qtui/embedhost.h", GEN_DIR .. "osd/qtui/embedhost.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 	}
 
 

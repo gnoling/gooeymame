@@ -52,7 +52,6 @@ class ArtworkPanel;
 class AuditManager;
 class SoftwareAuditManager;
 class CheckableComboBox;
-class EmbedHost;
 class FamilyTreeModel;
 class FolderTree;
 class GameListModel;
@@ -124,19 +123,8 @@ private:
 	// Arrangement of the system list, software list, and artwork panes.
 	enum MainLayout { SoftwareBesideArt = 0, SoftwareUnderSystems };
 
-	// How a selected system/software is launched.
-	enum EmbedMode { EmbedSeparate = 0, EmbedInProcess = 1, EmbedChild = 2, EmbedInProcessWindow = 3, EmbedNativeQt = 4 };
-	// Attach-based modes (in-process / child) need X11's -attach_window; the
-	// own-window mode does not, so it is available everywhere (incl. Windows).
-	static bool modeNeedsX11(int mode) { return mode == EmbedInProcess || mode == EmbedChild; }
-
-	// Where an embedded game's video surface is shown.  (LocMainPane is retired
-	// but its value is kept so old settings remap cleanly.)  LocBrowser hosts
-	// the game in the right (artwork) pane via the panel's game view modes.
-	enum EmbedLocation { LocMainPane = 0, LocBrowser = 1, LocWindow = 2 };
-
-	// Where the Qt-native (EmbedNativeQt) game surface is shown: full central
-	// area (browser list replaced) or in a pane beside the list.
+	// Where the Qt-native game surface is shown: full central area (browser list
+	// replaced) or in a pane beside the list.
 	enum NativePlacement { PlaceCentral = 0, PlacePane = 1 };
 
 	// Renderer for the Qt-native window: OpenGL (drawogl) or BGFX (drawbgfx,
@@ -146,34 +134,19 @@ private:
 	// Non-SDL audio backend for the Qt-native OSD.
 	enum SoundProvider { SoundPulse = 0, SoundPipewire = 1, SoundPortaudio = 2, SoundNone = 3 };
 
-	// True when the platform supports attaching MAME to a Qt window (X11/xcb).
-	static bool embeddingSupported();
-	// Launch routing: dispatches on m_embedMode.
+	// Launch routing: all play goes through the Qt-native OSD.
 	void launchSystem(const QString &system, const QString &software);
-	void launchEmbeddedChild(const QString &label, const QStringList &mameArgs);
-	void launchEmbeddedInProcess(const QString &label, const QString &system, const QString &software);
-	// In-process on a worker thread, but MAME opens its own separate window (no
-	// attach) — live Machine controls, works on Windows.
-	void launchEmbeddedInProcessWindow(const QString &label, const QString &system, const QString &software);
-	// Phase 13 (Qt-native OSD, experimental): render into a top-level QWindow via
-	// the Qt-native OSD + OpenGL, bypassing SDL's foreign-window path.  Gated by
-	// the GOOEY_QT_OSD=1 environment variable for A/B testing.
+	// Render into a QWindow via the Qt-native OSD (OpenGL or BGFX), no SDL.
 	void launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software);
 	void setNativePlacement(int placement);   // central (full) vs pane (beside list)
 	void setNativeRenderer(int renderer);     // OpenGL vs BGFX for the Qt-native window
 	void setBgfxBackend(int backend);         // Auto/OpenGL/Vulkan for the BGFX renderer
 	void setSoundProvider(int provider);      // non-SDL audio for the Qt-native OSD
 	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
-	void setEmbedMode(int mode);
-	void setEmbedLocation(int location);
-	// Reparent the embed host into the configured location (pane/dock/window)
-	// and show it, ready to be attached to once it has been laid out.
-	void placeEmbedSurface();
-	void reassertEmbedFocus(bool active);   // (re)grab or release input focus on the attached surface
-	// Stop a running embedded game (in-process or child) without quitting.
+	// Stop a running embedded game without quitting.
 	void stopEmbedded();
 	bool embedRunning() const;
-	// Restore the UI after an embedded run ends (per location).
+	// Restore the browser UI after a Qt-native run ends.
 	void returnFromEmbed();
 
 	// NEWUI-parity in-game controls (active only during an in-process embed).
@@ -253,9 +226,6 @@ private:
 	// Short name of the currently selected system, or empty if none.
 	QString selectedSystem() const;
 
-	// Hide the window, run the emulator, restore the window; report failures.
-	void runModal(const QString &label, const std::function<int ()> &runner);
-
 	GameListModel *m_model = nullptr;
 	GameListProxy *m_proxy = nullptr;
 	QTableView *m_view = nullptr;
@@ -289,16 +259,8 @@ private:
 	QComboBox *m_softwareViewMode = nullptr;
 	QSplitter *m_splitter = nullptr;
 	QSplitter *m_rightSplitter = nullptr;
-	QStackedWidget *m_centralStack = nullptr;   // browser page / embedded play page
-	EmbedHost *m_embedHost = nullptr;
-	int m_embedMode = EmbedSeparate;
-	int m_embedLocation = LocWindow;
-	bool m_hideBrowserWhilePlaying = false;
+	QStackedWidget *m_centralStack = nullptr;   // browser page / Qt-native play page
 	bool m_standaloneEmbed = false;   // launched via --gooey: closing the game quits the app
-	QActionGroup *m_embedModeGroup = nullptr;
-	QActionGroup *m_embedLocationGroup = nullptr;
-	QAction *m_hideBrowserAct = nullptr;
-	QMainWindow *m_embedWindow = nullptr;   // host when LocWindow (own menu bar)
 	std::unique_ptr<EmbedSession> m_embedSession;   // in-process embed command bridge
 	std::thread m_embedThread;                      // runs the in-process emulation
 	// Phase 13 Qt-native OSD: GUI-thread-owned render surface handed to the worker

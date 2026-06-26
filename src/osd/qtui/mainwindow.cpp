@@ -10,7 +10,6 @@
 
 #include "artworkpanel.h"
 #include "auditmanager.h"
-#include "embedhost.h"
 #include "emulator.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
@@ -586,82 +585,25 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 		}
 	}
 
-	if (watched == m_embedWindow)
-	{
-		// Closing the detached play window stops the game and keeps the browser up.
-		if (event->type() == QEvent::Close)
-		{
-			if (embedRunning())
-			{
-				stopEmbedded();
-				event->ignore();
-				return true;
-			}
-		}
-		// Activating/deactivating the detached play window (e.g. alt-tab) must re-assert or
-		// release input focus on the attached surface — SDL won't do it for a foreign window.
-		else if (event->type() == QEvent::WindowActivate)
-		{
-			reassertEmbedFocus(true);
-		}
-		else if (event->type() == QEvent::WindowDeactivate)
-		{
-			reassertEmbedFocus(false);
-		}
-	}
 	return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::changeEvent(QEvent *event)
 {
-	// When the browser-hosted embed (LocBrowser) gains/loses activation, re-assert or release
-	// input focus on the attached surface (same reason as the detached window in eventFilter).
-	if (event->type() == QEvent::ActivationChange)
-		reassertEmbedFocus(isActiveWindow());
 	QMainWindow::changeEvent(event);
-}
-
-void MainWindow::reassertEmbedFocus(bool active)
-{
-	// Only meaningful for a live in-process embed on an attached (X11) surface.
-	if (!m_embedSession || !embedRunning() || !m_embedHost)
-		return;
-	if (!active)
-	{
-		// Host window deactivated (alt-tab away): ask the OSD to drop the pointer grab so other
-		// windows can use the mouse.  KNOWN LIMITATION: this does not yet free the cursor when
-		// alt-tabbing away from a lightgun game — the foreign window's active X pointer grab
-		// appears to keep the cursor confined (and may stop a clean WindowDeactivate arriving).
-		// Needs runtime X-grab instrumentation; tracked for a later pass.  The activation
-		// (alt-tab back) path below works.
-		postEmbed({ EmbedCommand::RefocusInput, 0.0, 0, {} });
-		return;
-	}
-	// Activated: re-take X keyboard focus on the surface, and tell the OSD to force SDL focus and
-	// re-grab the pointer.  Repeat once after the WM settles.
-	auto const refocus = [this] {
-		if (m_embedSession && embedRunning())
-		{
-			m_embedHost->nudgeFocus();
-			postEmbed({ EmbedCommand::RefocusInput, 0.0, 1, {} });
-		}
-	};
-	refocus();
-	QTimer::singleShot(150, this, refocus);
 }
 
 bool MainWindow::embedRunning() const
 {
-	return m_embedThread.joinable() || (m_embedHost && m_embedHost->isChildRunning());
+	return m_embedThread.joinable();
 }
 
 void MainWindow::stopEmbedded()
 {
-	// Both paths are asynchronous and converge on onEmbeddedFinished().
+	// Asynchronous: posts Exit and converges on onEmbeddedFinished() when the
+	// worker thread returns.
 	if (m_embedSession)
-		m_embedSession->post({ EmbedCommand::Exit, 0.0, 0, {} });   // in-process
-	if (m_embedHost && m_embedHost->isChildRunning())
-		m_embedHost->stopChild();                                   // child-process
+		m_embedSession->post({ EmbedCommand::Exit, 0.0, 0, {} });
 }
 
 void MainWindow::saveSettings() const
@@ -775,16 +717,11 @@ void MainWindow::restoreSettings()
 		if (act->data().toInt() == iconSize)
 			act->setChecked(true);
 
-	// Restore the play (embed) mode; clamps to a separate window off X11.
-	setEmbedMode(settings.value(QStringLiteral("play/embedMode"), int(EmbedNativeQt)).toInt());
+	// Restore the Qt-native play settings (placement / renderer / backend / audio).
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
 	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
 	setBgfxBackend(settings.value(QStringLiteral("play/bgfxBackend"), 0).toInt());
 	setSoundProvider(settings.value(QStringLiteral("play/soundProvider"), int(SoundPulse)).toInt());
-	setEmbedLocation(settings.value(QStringLiteral("play/embedLocation"), int(LocWindow)).toInt());
-	m_hideBrowserWhilePlaying = settings.value(QStringLiteral("play/hideBrowser"), false).toBool();
-	if (m_hideBrowserAct)
-		m_hideBrowserAct->setChecked(m_hideBrowserWhilePlaying);
 
 	// Restore per-pane grid view state (group already ended, so use full keys).
 	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
@@ -1000,34 +937,6 @@ void MainWindow::createMenus()
 		connect(act, &QAction::triggered, this, [this, key] { applyColorScheme(key); });
 	}
 
-	// Play mode: how a launched system runs (separate window vs embedded).
-	QMenu *playMenu = viewMenu->addMenu(tr("&Play Mode"));
-	m_embedModeGroup = new QActionGroup(this);
-	struct { const char *label; int mode; } const playModes[] = {
-		{ "Embedded in browser (Qt-native, OpenGL)", EmbedNativeQt },
-		{ "Embedded in browser (in-process, SDL)", EmbedInProcess },
-		{ "Embedded in browser (child process)", EmbedChild },
-		{ "Separate window (live controls)", EmbedInProcessWindow },
-		{ "Separate window", EmbedSeparate },
-	};
-	for (const auto &choice : playModes)
-	{
-		QAction *act = playMenu->addAction(tr(choice.label));
-		act->setCheckable(true);
-		act->setData(choice.mode);
-		// Only the attach-based (browser-embedded) modes require X11.
-		if (modeNeedsX11(choice.mode) && !embeddingSupported())
-			act->setEnabled(false);
-		m_embedModeGroup->addAction(act);
-		connect(act, &QAction::triggered, this, [this, mode = choice.mode] { setEmbedMode(mode); });
-	}
-	if (!embeddingSupported())
-	{
-		playMenu->addSeparator();
-		QAction *note = playMenu->addAction(tr("(browser-embedded modes need an X11 session)"));
-		note->setEnabled(false);
-	}
-
 	// Where the Qt-native game surface is shown.
 	QMenu *placeMenu = viewMenu->addMenu(tr("Qt-native &Placement"));
 	m_nativePlacementGroup = new QActionGroup(this);
@@ -1096,34 +1005,6 @@ void MainWindow::createMenus()
 		m_soundProviderGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, p = choice.prov] { setSoundProvider(p); });
 	}
-
-	// Where an embedded game appears (only meaningful for the embedded modes).
-	QMenu *locMenu = viewMenu->addMenu(tr("Embed &Location"));
-	m_embedLocationGroup = new QActionGroup(this);
-	struct { const char *label; int loc; } const locations[] = {
-		{ "Separate window", LocWindow },
-		{ "Browser right pane", LocBrowser },
-	};
-	for (const auto &choice : locations)
-	{
-		QAction *act = locMenu->addAction(tr(choice.label));
-		act->setCheckable(true);
-		act->setData(choice.loc);
-		if (!embeddingSupported())
-			act->setEnabled(false);
-		m_embedLocationGroup->addAction(act);
-		connect(act, &QAction::triggered, this, [this, loc = choice.loc] { setEmbedLocation(loc); });
-	}
-	locMenu->addSeparator();
-	m_hideBrowserAct = locMenu->addAction(tr("Hide browser window while playing"));
-	m_hideBrowserAct->setCheckable(true);
-	m_hideBrowserAct->setToolTip(tr("With a separate play window, hide the browser until the game exits"));
-	if (!embeddingSupported())
-		m_hideBrowserAct->setEnabled(false);
-	connect(m_hideBrowserAct, &QAction::toggled, this, [this] (bool on) {
-		m_hideBrowserWhilePlaying = on;
-		QSettings().setValue(QStringLiteral("play/hideBrowser"), on);
-	});
 
 	// Machine-list filters: shared QActions used by both the View ▸ Filters
 	// menu and the "Filters" button in the list's bar.
@@ -2058,11 +1939,7 @@ void MainWindow::rebuildAudioMenu(QMenu *menu)
 
 void MainWindow::showInfoText(const QString &title, const QString &text)
 {
-	// Parent the dialog to the detached play window when the game runs in its own
-	// window, so the dialog stacks above the game instead of pulling the browser
-	// (the dialog's would-be parent) to the front and pushing the game behind it.
-	QWidget *const owner = (m_embedWindow && m_embedWindow->isVisible())
-			? static_cast<QWidget *>(m_embedWindow) : static_cast<QWidget *>(this);
+	QWidget *const owner = this;
 
 	// One reusable modeless read-only dialog for all the Info screens.
 	if (!m_infoDialog)
@@ -2141,25 +2018,7 @@ void MainWindow::setEmbedFullscreen(bool on)
 		a->setChecked(on);
 	}
 
-	// Own-window mode: the game is in MAME's own SDL window (not a Qt surface),
-	// so toggle that window's fullscreen via the OSD rather than the Qt window.
-	if (m_embedMode == EmbedInProcessWindow)
-	{
-		postEmbed({ EmbedCommand::ToggleFullscreen, 0.0, 0, {} });
-		return;
-	}
-
-	// A game hosted in its own window: just fullscreen that window.
-	if (m_embedWindow && m_embedWindow->isVisible())
-	{
-		if (on)
-			m_embedWindow->showFullScreen();
-		else
-			m_embedWindow->showNormal();
-		return;
-	}
-
-	// Game hosted in the browser (artwork pane): fill the main window with it by
+	// Qt-native game surface (central or pane): fill the main window with it by
 	// hiding the surrounding panes and going fullscreen.  The menu bar stays
 	// visible so the toggle remains reachable while the game holds keyboard focus.
 	if (on)
@@ -2179,14 +2038,9 @@ void MainWindow::setEmbedFullscreen(bool on)
 
 void MainWindow::showReloadOverlay(const QString &message)
 {
-	// A media or slot change can trigger a machine reset; cover the reload gap
-	// with correct feedback rather than letting stale surface pixels (e.g. the
-	// old "Launching…" frame) show through.  Auto-hides shortly after.
-	if (!m_embedHost)
-		return;
-	m_embedHost->setStatus(message);
-	m_embedHost->showOverlay(true);
-	QTimer::singleShot(1800, m_embedHost, [this] { m_embedHost->showOverlay(false); });
+	// A media or slot change can trigger a machine reset; surface that in the
+	// status bar (the Qt-native render surface has no overlay widget).
+	statusBar()->showMessage(message, 1800);
 }
 
 void MainWindow::postEmbed(const EmbedAction &action)
@@ -2622,13 +2476,11 @@ void MainWindow::createWidgets()
 	m_splitter = new QSplitter(Qt::Horizontal);
 	applyMainLayout(m_mainLayout);
 
-	// The browser splitter and the embedded-gameplay host share a stack as the
-	// central widget; the play page is shown only while a game runs embedded.
+	// The browser splitter and the Qt-native game surface share a stack as the
+	// central widget; the game's window container is added as a second page (and
+	// shown) only while a game runs embedded in full-window placement.
 	m_centralStack = new QStackedWidget(this);
 	m_centralStack->addWidget(m_splitter);    // page 0: browser
-	m_embedHost = new EmbedHost;
-	m_centralStack->addWidget(m_embedHost);   // page 1: embedded play
-	connect(m_embedHost, &EmbedHost::finished, this, &MainWindow::onEmbeddedFinished);
 	setCentralWidget(m_centralStack);
 
 	// Debounce timer for software enumeration.
@@ -3245,35 +3097,6 @@ QString MainWindow::selectedSystem() const
 	return m_model->index(row, 0).data(GameListModel::ShortNameRole).toString();
 }
 
-void MainWindow::runModal(const QString &label, const std::function<int ()> &runner)
-{
-	statusBar()->showMessage(tr("Launching %1…").arg(label));
-	hide();
-	QApplication::processEvents();
-
-	int const result = runner();
-
-	show();
-	raise();
-	activateWindow();
-	m_view->setFocus();
-
-	if (result != 0)
-	{
-		statusBar()->showMessage(tr("%1 exited with code %2").arg(label).arg(result));
-		QMessageBox::warning(
-				this,
-				tr("Launch failed"),
-				tr("Running \"%1\" failed (exit code %2).\n\n"
-				   "Check that the ROMs are available and the paths are configured.")
-						.arg(label).arg(result));
-	}
-	else
-	{
-		updateStatusCount();
-	}
-}
-
 void MainWindow::launchSelectedSystem()
 {
 	QString const system = selectedSystem();
@@ -3301,23 +3124,6 @@ void MainWindow::launchSelectedSoftware()
 	launchSystem(system, software);
 }
 
-bool MainWindow::embeddingSupported()
-{
-	// MAME's -attach_window is X11-only (src/osd/sdl/window.cpp); xcb covers
-	// both native X11 and XWayland.
-	return QGuiApplication::platformName() == QLatin1String("xcb");
-}
-
-void MainWindow::setEmbedMode(int mode)
-{
-	if (modeNeedsX11(mode) && !embeddingSupported())
-		mode = EmbedSeparate;
-	m_embedMode = mode;
-	QSettings().setValue(QStringLiteral("play/embedMode"), mode);
-	for (QAction *act : m_embedModeGroup->actions())
-		if (act->data().toInt() == mode)
-			act->setChecked(true);
-}
 
 void MainWindow::setNativePlacement(int placement)
 {
@@ -3390,89 +3196,17 @@ void MainWindow::setSoundProvider(int provider)
 				act->setChecked(true);
 }
 
-void MainWindow::setEmbedLocation(int location)
-{
-	// The retired "main pane" location maps to the separate window.
-	if (location == LocMainPane)
-		location = LocWindow;
-	m_embedLocation = location;
-	QSettings().setValue(QStringLiteral("play/embedLocation"), location);
-	if (m_embedLocationGroup)
-		for (QAction *act : m_embedLocationGroup->actions())
-			if (act->data().toInt() == location)
-				act->setChecked(true);
-}
-
-void MainWindow::placeEmbedSurface()
-{
-	// Reparent the host into the configured location and show it.  winId() is
-	// taken later (after layout), so the surface is created in its final parent
-	// at full size.
-	if (m_embedLocation == LocBrowser)
-	{
-		// Host the game in the right (artwork) pane; the panel adds the
-		// Game/Game+Art/Game+Info views while it is attached.  Force the Details
-		// pane visible if the user has it collapsed — the game renders there, and
-		// returnFromEmbed() restores the toggle afterwards.  (Only this location
-		// needs it; LocWindow uses its own window.)
-		m_artwork->setVisible(true);
-		m_artwork->attachGame(m_embedHost);
-	}
-	else   // LocWindow
-	{
-		if (!m_embedWindow)
-		{
-			// A QMainWindow so the detached play window carries its own menu bar
-			// with the Machine controls in its proper context.
-			m_embedWindow = new QMainWindow(this, Qt::Window);
-			m_embedWindow->resize(800, 600);
-			m_embedWindow->installEventFilter(this);
-
-			QMenu *fileMenu = m_embedWindow->menuBar()->addMenu(tr("&File"));
-			connect(fileMenu->addAction(tr("Stop &Game")), &QAction::triggered,
-					this, [this] { stopEmbedded(); });
-			// The same in-game top-level menus (Machine / Video / Input …) in the
-			// detached window's own bar, in their proper context.  This bar is
-			// built lazily (after setMachineControlsActive ran), so gate its new
-			// submenus for the current machine right away.
-			addInGameMenus(m_embedWindow->menuBar());
-			if (m_machineControlsActive && m_embedSession)
-				applyMenuRelevance(m_embedSession->capsSnapshot());
-		}
-		m_embedWindow->setWindowTitle(m_runningSystem.isEmpty()
-				? tr("GooeyMAME")
-				: tr("GooeyMAME — %1").arg(m_runningSystem));
-		m_embedWindow->setCentralWidget(m_embedHost);
-		m_embedWindow->show();
-		m_embedWindow->raise();
-		m_embedWindow->activateWindow();
-
-		if (m_hideBrowserWhilePlaying)
-			hide();
-	}
-	m_embedHost->show();
-}
-
 void MainWindow::returnFromEmbed()
 {
-	// Robust regardless of where the host ended up: restore the browser, take
-	// the game back out of the artwork pane, and hide the detached window.
-	// Leave fullscreen first (restores window + panes) so the browser returns to
-	// its normal arrangement.
+	// Restore the browser after a Qt-native run: leave fullscreen first (restores
+	// window + panes), take the game container out of the artwork pane, and show
+	// the browser splitter again.
 	if (m_embedFullscreen)
 		setEmbedFullscreen(false);
 	if (isHidden())
 		show();
 	m_artwork->detachGame();
-	// Restore the user's pane toggles: the Details pane may have been force-shown
-	// to host an in-process embedded game (placeEmbedSurface, LocBrowser).
 	applyPaneVisibility();
-	if (m_embedWindow)
-		m_embedWindow->hide();
-	// Re-home the host to the central stack (hidden) so it stays owned and is
-	// ready to be reparented for the next launch.
-	if (m_centralStack->indexOf(m_embedHost) < 0)
-		m_centralStack->addWidget(m_embedHost);
 	m_centralStack->setCurrentWidget(m_splitter);
 }
 
@@ -3485,7 +3219,6 @@ void MainWindow::startStandaloneEmbedded(const QString &system, const QString &s
 	// works on any platform.  Set members directly so we don't persist over the
 	// user's normal preferences.  Closing the window quits the app
 	// (onEmbeddedFinished honours m_standaloneEmbed).
-	m_embedMode = EmbedNativeQt;
 	m_nativePlacement = PlaceCentral;
 
 	// CLI overrides (don't persist): renderer, BGFX backend, and a shader chain
@@ -3535,135 +3268,8 @@ void MainWindow::launchSystem(const QString &system, const QString &software)
 			? system
 			: QStringLiteral("%1 %2").arg(system, software);
 
-	int mode = m_embedMode;
-	if (modeNeedsX11(mode) && !embeddingSupported())
-		mode = EmbedSeparate;
-
-	switch (mode)
-	{
-	case EmbedChild:
-		{
-			QStringList args;
-			args << system;
-			if (!software.isEmpty())
-				args << software;
-			args << QStringLiteral("-window");
-			launchEmbeddedChild(label, args);
-		}
-		return;
-
-	case EmbedNativeQt:
-		launchEmbeddedNativeGl(label, system, software);
-		return;
-
-	case EmbedInProcess:
-		launchEmbeddedInProcess(label, system, software);
-		return;
-
-	case EmbedInProcessWindow:
-		launchEmbeddedInProcessWindow(label, system, software);
-		return;
-
-	case EmbedSeparate:
-	default:
-		if (software.isEmpty())
-			runModal(label, [system] { return qtui_run_system(system.toStdString()); });
-		else
-			runModal(label, [system, software] {
-				return qtui_run_software(system.toStdString(), software.toStdString());
-			});
-		return;
-	}
-}
-
-void MainWindow::launchEmbeddedChild(const QString &label, const QStringList &mameArgs)
-{
-	if (m_embedHost->isChildRunning())
-		return;
-
-	statusBar()->showMessage(tr("Running %1 (embedded)…").arg(label));
-	m_playAct->setEnabled(false);
-	placeEmbedSurface();
-	bool const wantsGl = qtui_renderer_needs_gl(mameArgs.value(0).toStdString());
-	QStringList const args = mameArgs;
-	// Defer so the host is laid out at full size before its XID is taken.
-	QTimer::singleShot(50, this, [this, args, wantsGl] {
-		m_embedHost->startChildProcess(args, wantsGl);
-	});
-}
-
-void MainWindow::launchEmbeddedInProcess(const QString &label, const QString &system, const QString &software)
-{
-	if (m_embedSession || m_embedThread.joinable())
-		return;   // a run is already in progress
-
-	statusBar()->showMessage(tr("Running %1 (embedded, in-process)…").arg(label));
-	m_playAct->setEnabled(false);
-	placeEmbedSurface();
-	m_embedHost->showOverlay(true);
-	m_embedHost->setStatus(tr("Launching %1…").arg(label));
-
-	// Create the bridge now so a second launch is blocked while this one runs.
-	m_embedSession = std::make_unique<EmbedSession>();
-	setMachineControlsActive(true);
-
-	std::string const sys = system.toStdString();
-	std::string const sw = software.toStdString();
-
-	// Defer the actual launch one event-loop turn so the embed page is laid out
-	// and the native surface has its final size before MAME's SDL_CreateWindowFrom()
-	// adopts it — otherwise the game renders into a tiny, not-yet-sized window.
-	QTimer::singleShot(50, this, [this, sys, sw] {
-		EmbedSession *const session = m_embedSession.get();
-		if (!session)
-			return;
-		unsigned long long const xid = m_embedHost->surfaceId();
-		m_embedThread = std::thread([this, sys, sw, xid, session] {
-			int const code = qtui_run_embedded(sys, sw, xid, *session);
-			// Marshal completion back to the GUI thread.
-			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
-		});
-		// Hide the overlay once MAME has had a moment to put up its first frames.
-		QTimer::singleShot(1500, m_embedHost, [this] { m_embedHost->showOverlay(false); });
-
-		// Nudge X keyboard focus onto the attached surface once it has mapped, and force SDL's
-		// focus belief + pointer grab via RefocusInput.  A second in-process launch reuses this
-		// window and the attached SDL window doesn't re-grab focus on its own; a detached
-		// LocWindow toplevel (e.g. --gooey) isn't considered focused by SDL at launch either, so
-		// without the RefocusInput the lightgun pointer never grabs.  Prod a few times as it comes up.
-		for (int delay : { 700, 1400, 2200 })
-			QTimer::singleShot(delay, m_embedHost, [this] {
-				if (m_embedSession)
-				{
-					m_embedHost->nudgeFocus();
-					postEmbed({ EmbedCommand::RefocusInput, 0.0, 1, {} });
-				}
-			});
-	});
-}
-
-void MainWindow::launchEmbeddedInProcessWindow(const QString &label, const QString &system, const QString &software)
-{
-	if (m_embedSession || m_embedThread.joinable())
-		return;   // a run is already in progress
-
-	// In-process on a worker thread (so the browser + live Machine menu stay
-	// responsive), but with NO -attach_window: MAME opens its own separate
-	// window.  This sidesteps the foreign-window keyboard-focus problem, so it
-	// works on Windows too — no embed surface, no X11 requirement.
-	statusBar()->showMessage(tr("Running %1 (separate window, live controls)…").arg(label));
-	m_playAct->setEnabled(false);
-
-	m_embedSession = std::make_unique<EmbedSession>();
-	setMachineControlsActive(true);
-
-	std::string const sys = system.toStdString();
-	std::string const sw = software.toStdString();
-	EmbedSession *const session = m_embedSession.get();
-	m_embedThread = std::thread([this, sys, sw, session] {
-		int const code = qtui_run_embedded(sys, sw, 0 /* no attach: own window */, *session);
-		QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
-	});
+	// All play now goes through the Qt-native OSD (renders into a QWindow, no SDL).
+	launchEmbeddedNativeGl(label, system, software);
 }
 
 void MainWindow::updateNativeGlSize()

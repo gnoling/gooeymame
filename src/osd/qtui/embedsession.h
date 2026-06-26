@@ -5,8 +5,8 @@
 //  embedsession.h - bridge between the Qt UI and an in-process embedded run
 //
 //  The Qt menu/toolbar posts high-level commands from the GUI thread; the
-//  qtui_osd_interface drains and applies them from the emulation thread (the
-//  only thread that may touch running_machine).  Deliberately Qt-free so it
+//  Qt-native OSD's EmbedController drains and applies them from the emulation
+//  thread (the only thread that may touch running_machine).  Qt-free so it
 //  can be included by both the Qt UI (mainwindow.cpp) and the emulation
 //  backend (emulator.cpp).
 //

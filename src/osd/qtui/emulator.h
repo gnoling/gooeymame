@@ -38,32 +38,6 @@ int qtui_run_emulation(int argc, char **argv);
 // system in-process.  Returns the emulator exit code.
 int qtui_run_args(std::vector<std::string> &args);
 
-// Launch a single system by short name (e.g. "pacman") in-process, reading
-// configured options from the usual .ini files.  Convenience wrapper around
-// qtui_run_args() used by the Qt front-end's modal launch.  Returns the
-// emulator exit code.
-int qtui_run_system(const std::string &system);
-
-// Launch a system with a piece of software from one of its software lists
-// (e.g. system "nes", software "smb").  Returns the emulator exit code.
-int qtui_run_software(const std::string &system, const std::string &software);
-
-// True if the system's configured -video renderer needs an OpenGL-capable
-// window (everything except "soft"/"none").  Used to decide whether to set the
-// SDL foreign-window OpenGL hint when embedding.  Safe to call from any thread.
-bool qtui_renderer_needs_gl(const std::string &system);
-
-// Run `system` (+ optional `software`, "" for none) embedded into the native
-// window `attach_window_id` (an X11 XID), in-process on the CALLING thread.
-// Intended to run on a dedicated worker thread so the Qt event loop keeps
-// running; `session` is the command/status bridge the UI uses to drive the
-// live machine (pause, reset, save state, …).  Returns the emulator exit code.
-int qtui_run_embedded(
-		const std::string &system,
-		const std::string &software,
-		unsigned long long attach_window_id,
-		osd::qtui::EmbedSession &session);
-
 // Phase 13 (Qt-native OSD): run `system` (+ optional `software`) rendering into
 // the QWindow carried by `target`, using a Qt-native OSD window + OpenGL context
 // instead of SDL's foreign-window path.  Runs in-process on the CALLING thread

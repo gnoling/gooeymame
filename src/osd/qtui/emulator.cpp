@@ -199,26 +199,12 @@ int qtui_run_emulation(int argc, char **argv)
 }
 
 
-int qtui_run_system(const std::string &system)
-{
-	std::vector<std::string> args{ "mame", system };
-	return qtui_run_args(args);
-}
-
-
-int qtui_run_software(const std::string &system, const std::string &software)
-{
-	std::vector<std::string> args{ "mame", system, software };
-	return qtui_run_args(args);
-}
-
-
 //============================================================
 //  Embedded in-process emulation
 //
-//  A qtui_osd_interface subclass captures the running_machine and, each frame
-//  (in update(), which runs on the emulation thread), drains the UI's command
-//  queue and applies it directly to the machine.  This is the faithful analog
+//  The Qt-native OSD captures the running_machine and, each frame (in update(),
+//  which runs on the emulation thread), drains the UI's command queue via the
+//  EmbedController and applies it directly to the machine.  This is the analog
 //  of NEWUI, whose native menu is serviced by the Windows OSD's message pump
 //  (src/osd/winui/newui.cpp invoke_command()).
 //============================================================
@@ -1102,39 +1088,6 @@ private:
 
 
 //============================================================
-//  qtui_osd_interface — SDL-backed OSD driving the EmbedController
-//
-//  Used by the legacy SDL embed/CLI launch paths.  (Being retired in favour of
-//  the Qt-native OSD below.)
-//============================================================
-
-class qtui_osd_interface : public sdl_osd_interface
-{
-public:
-	qtui_osd_interface(sdl_options &options, osd::qtui::EmbedSession &session) :
-		sdl_osd_interface(options),
-		m_ctrl(session)
-	{
-	}
-
-	virtual void init(running_machine &machine) override
-	{
-		sdl_osd_interface::init(machine);
-		m_ctrl.init(machine);
-	}
-
-	virtual void update(bool skip_redraw) override
-	{
-		m_ctrl.update();
-		sdl_osd_interface::update(skip_redraw);
-	}
-
-private:
-	EmbedController m_ctrl;
-};
-
-
-//============================================================
 //  Qt-native OSD (Phase 13f) — derives directly from osd_common_t, NO SDL.
 //
 //  Renders into a QWindow (Qt GL/BGFX), takes input from the Qt bus, enumerates
@@ -1229,113 +1182,6 @@ private:
 } // anonymous namespace
 
 
-bool qtui_renderer_needs_gl(const std::string &system)
-{
-	int const idx = driver_list::find(system.c_str());
-	if (idx < 0)
-		return true;
-
-	// Resolve the effective -video value through the standard ini hierarchy.
-	// core_guard serialises core access and forces the "C" locale the ini
-	// parser needs, so this is safe to call from the GUI thread too.
-	core_guard guard;
-	try
-	{
-		sdl_options probe;
-		std::ostringstream errors;
-		mame_options::parse_standard_inis(probe, errors, &driver_list::driver(idx));
-		std::string const v = probe.video();
-		return (v != "soft") && (v != "none");
-	}
-	catch (...)
-	{
-		return true;
-	}
-}
-
-
-int qtui_run_embedded(
-		const std::string &system,
-		const std::string &software,
-		unsigned long long attach_window_id,
-		osd::qtui::EmbedSession &session)
-{
-	int res = 0;
-
-	// Force the "C" locale for this thread only: the MAME ini/number parsers
-	// require it, but the Qt GUI thread keeps running in the user's locale (an
-	// embedded run shares the process with the live GUI).  See qtui_run_args().
-	// Unix uses POSIX uselocale; Windows uses per-thread CRT locale (the
-	// own-window embed mode runs this path on Windows too).
-#ifdef SDLMAME_UNIX
-	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
-	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
-#elif defined(_WIN32)
-	_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
-	std::string const win_prev_locale = std::setlocale(LC_ALL, nullptr);
-	std::setlocale(LC_ALL, "C");
-#endif
-
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
-	FcInit();
-#endif
-#endif
-
-	std::vector<std::string> args{ "mame", system };
-	if (!software.empty())
-		args.push_back(software);
-	args.push_back("-window");
-	// attach_window_id == 0 means "no attach": MAME opens its OWN window (the
-	// separate-window-with-live-controls mode, which also works on Windows since
-	// it avoids the foreign-window keyboard-focus problem of SDL_CreateWindowFrom).
-	if (attach_window_id != 0)
-	{
-		args.push_back("-attach_window");
-		args.push_back(std::to_string(attach_window_id));
-
-		// MAME's attach path calls SDL_CreateWindowFrom() without flagging the
-		// window for OpenGL, so the GL-based renderers (opengl/accel) abort with
-		// "the specified window isn't an OpenGL window".  SDL's foreign-window hint
-		// fixes that, BUT it must be set only when the renderer actually needs GL:
-		// the software renderer can't get a window surface from a GL-flagged window,
-		// and requesting both GL and Vulkan flags fails outright ("Vulkan and OpenGL
-		// not supported on same window").  So enable the GL flag for everything
-		// except soft/none, and never request the Vulkan flag alongside it.  Only
-		// relevant for a foreign window — MAME's own window is created normally.
-		SDL_SetHintWithPriority(SDL_HINT_VIDEO_FOREIGN_WINDOW_OPENGL,
-				qtui_renderer_needs_gl(system) ? "1" : "0", SDL_HINT_OVERRIDE);
-	}
-
-	{
-		sdl_options options;
-		qtui_osd_interface osd(options, session);
-		osd.register_options();
-		res = emulator_info::start_frontend(options, osd, args);
-	}
-
-	session.running.store(false);
-
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
-	FcFini();
-#endif
-#endif
-
-#ifdef SDLMAME_UNIX
-	if (cloc)
-	{
-		uselocale(prev);
-		freelocale(cloc);
-	}
-#elif defined(_WIN32)
-	std::setlocale(LC_ALL, win_prev_locale.c_str());
-#endif
-
-	return res;
-}
-
-
 int qtui_run_embedded_native(
 		const std::string &system,
 		const std::string &software,
@@ -1347,7 +1193,9 @@ int qtui_run_embedded_native(
 {
 	int res = 0;
 
-	// Force the "C" locale for this thread only (see qtui_run_embedded).
+	// Force the "C" locale for this thread only (see qtui_run_args): the MAME
+	// ini/number parsers require it, while the Qt GUI thread keeps the user's
+	// locale.  Unix uses POSIX uselocale; Windows uses per-thread CRT locale.
 #ifdef SDLMAME_UNIX
 	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
 	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
