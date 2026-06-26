@@ -122,12 +122,18 @@ function maintargetosdoptions(_target,_subtarget)
 		}
 	end
 
-	-- fontconfig (the Qt-native OSD links no SDL/SDL2_ttf — fonts come from the
+	-- fontconfig (the Qt-native OSD links no SDL2_ttf — fonts come from the
 	-- built-in bitmap provider + fontconfig).
 	if BASE_TARGETOS=="unix" and _OPTIONS["targetos"]~="macosx" and _OPTIONS["targetos"]~="android" and _OPTIONS["targetos"]~="asmjs" then
 		local str = backtick(pkgconfigcmd() .. " --libs fontconfig")
 		addlibfromstring(str)
 		addoptionsfromstring(str)
+
+		-- libSDL2 for the SDL game-controller joystick module (input_sdlgame.cpp).
+		-- gamecontroller subsystem only; no SDL video/window is ever initialised.
+		local sdlstr = backtick(pkgconfigcmd() .. " --libs sdl2")
+		addlibfromstring(sdlstr)
+		addoptionsfromstring(sdlstr)
 	end
 
 	if _OPTIONS["targetos"]=="windows" then
@@ -517,6 +523,12 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/qtinput.cpp",
 		MAME_DIR .. "src/osd/qtui/qtinput.h",
 		MAME_DIR .. "src/osd/modules/input/input_qt.cpp",
+
+		-- Joystick: SDL game-controller (non-Windows) — upstream Linux MAME uses
+		-- SDL for joysticks too.  Compiles to a stub on Windows (which uses the
+		-- native winhybrid provider).  Links libSDL2 on Linux (gamecontroller
+		-- subsystem only — no SDL video/window, so no foreign-window focus issues).
+		MAME_DIR .. "src/osd/modules/input/input_sdlgame.cpp",
 
 		-- BGFX shader-effect query/select bridge (impl in drawbgfx.cpp).
 		MAME_DIR .. "src/osd/qtui/qtbgfxchains.h",

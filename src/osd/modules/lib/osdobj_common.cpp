@@ -339,6 +339,10 @@ void osd_common_t::register_options()
 	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_SDLGAME);
 	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_SDLJOY);
 #endif
+#if defined(OSD_QT_GL) && !defined(_WIN32)
+	// qtui on non-Windows: SDL game-controller joystick (Windows uses winhybrid).
+	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_QTSDLGAME);
+#endif
 	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_WINHYBRID);
 	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_DINPUT);
 	REGISTER_MODULE(m_mod_man, JOYSTICKINPUT_XINPUT);

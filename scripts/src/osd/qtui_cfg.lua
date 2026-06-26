@@ -102,10 +102,13 @@ if BASE_TARGETOS=="unix" then
 		"SDLMAME_UNIX",
 	}
 	-- fontconfig (desktop unix, non-macOS/android) — MAME's font handling
-	-- expects it; no SDL cflags here.
+	-- expects it.  Plus SDL2 headers for the SDL game-controller joystick module
+	-- (input_sdlgame.cpp) — the only SDL we use on Linux (gamecontroller only,
+	-- no video/window).
 	if _OPTIONS["targetos"]~="macosx" and _OPTIONS["targetos"]~="android" and _OPTIONS["targetos"]~="asmjs" then
 		buildoptions {
 			backtick(pkgconfigcmd() .. " --cflags fontconfig"),
+			backtick(pkgconfigcmd() .. " --cflags sdl2"),
 		}
 	end
 end

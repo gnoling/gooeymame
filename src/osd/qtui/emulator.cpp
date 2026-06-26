@@ -1320,14 +1320,21 @@ int qtui_run_embedded_native(
 	// instead of the SDL monitor module.
 	args.push_back("-monitorprovider");
 	args.push_back("qt");
-	// Non-SDL sound/font/joystick so the Qt-native OSD initializes zero SDL.
-	// (-sound auto would pick SDL since it registers first.)
+	// Non-SDL sound/font (the Qt-native OSD never initialises SDL video/window).
+	// (-sound auto would pick SDL since it registers first.)  Joystick is the one
+	// exception — the SDL game-controller subsystem on Linux (set below).
 	args.push_back("-sound");
 	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
 	args.push_back("-uifontprovider");
 	args.push_back("none");
+	// Gamepads (hybrid, like upstream MAME): native winhybrid on Windows, the
+	// SDL game-controller module on Linux (input_sdlgame.cpp).
 	args.push_back("-joystickprovider");
-	args.push_back("none");
+#if defined(_WIN32)
+	args.push_back("winhybrid");
+#else
+	args.push_back("sdlgame");
+#endif
 
 	{
 		qt_options options;
@@ -1401,8 +1408,14 @@ int qtui_run_args_native(
 	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
 	args.push_back("-uifontprovider");
 	args.push_back("none");
+	// Gamepads (hybrid, like upstream MAME): native winhybrid on Windows, the
+	// SDL game-controller module on Linux (input_sdlgame.cpp).
 	args.push_back("-joystickprovider");
-	args.push_back("none");
+#if defined(_WIN32)
+	args.push_back("winhybrid");
+#else
+	args.push_back("sdlgame");
+#endif
 
 	{
 		qt_options options;
