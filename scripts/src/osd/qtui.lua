@@ -28,6 +28,19 @@ _OPTIONS["USE_QTDEBUG"] = "1"
 
 
 function maintargetosdoptions(_target,_subtarget)
+	-- Windows: mark the executable as a GUI-subsystem app so launching the
+	-- front-end does not pop a console window (and closing a console can no
+	-- longer kill the process).  We flip only the PE subsystem flag and keep the
+	-- console entry point (mainCRTStartup → our main() in qtmain.cpp), rather
+	-- than kind "WindowedApp", which on mingw expects a WinMain entry (as winui
+	-- uses).  Trade-off: CLI passthrough output (e.g. -listxml) no longer goes to
+	-- a console — same as any GUI front-end.  No effect off Windows.
+	if _OPTIONS["targetos"]=="windows" then
+		linkoptions {
+			"-Wl,--subsystem,windows",
+		}
+	end
+
 	osdmodulestargetconf()
 
 	-- The qtui front-end uses Qt Multimedia for its video/soundtrack tabs.
