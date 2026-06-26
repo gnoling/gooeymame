@@ -107,7 +107,8 @@ Rz          Rudder
 #include "util/corestr.h"
 
 #if defined(OSD_QT_GL)
-#include "qtglprovider.h"   // qt_native_handle_provider (Qt-free, no SDL)
+#include "modules/osdwindow.h"   // complete osd_window for the dynamic_cast
+#include "qtglprovider.h"        // qt_native_handle_provider (Qt-free, no SDL)
 #elif defined(SDLMAME_WIN32)
 #ifdef SDLMAME_SDL3
 #include <SDL3/SDL.h>
