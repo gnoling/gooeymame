@@ -90,12 +90,10 @@ int main(int argc, char *argv[])
 				gooeySoftware = QString::fromLocal8Bit(a);   // first bare arg = software
 		}
 	}
-	else if (argc > 1)
-	{
-		return qtui_run_emulation(argc, argv);
-	}
 
-	// No arguments (or --gooey): show the Qt front-end.
+	// Every entry point now needs Qt: a plain CLI passthrough (`./mame pacman`)
+	// runs through the Qt-native OSD on a worker thread, so it builds a
+	// QApplication too (and a render window, lazily, only if the run uses video).
 #ifdef _WIN32
 	// Filter the benign DPI-awareness warning the Qt platform plugin emits at
 	// startup (see qtui_message_filter).  Installed before QApplication so it
@@ -137,9 +135,20 @@ int main(int argc, char *argv[])
 
 	osd::qtui::MainWindow window;
 	if (gooeyMode)
+	{
 		window.startStandaloneEmbedded(gooeySystem, gooeySoftware, gooeyRenderer, gooeyBackend, gooeyShader);
+	}
+	else if (argc > 1)
+	{
+		// CLI passthrough through the Qt-native OSD (browser never shown).  Decode
+		// the command line after QApplication has stripped any Qt-specific options.
+		std::vector<std::string> args = qtui_command_line(argc, argv);
+		window.runCliPassthrough(args);
+	}
 	else
+	{
 		window.show();
+	}
 
 	return app.exec();
 }

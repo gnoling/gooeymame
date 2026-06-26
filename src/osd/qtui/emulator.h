@@ -29,14 +29,22 @@
 // Safe to call once at startup regardless of GUI vs CLI mode.
 void qtui_init_process();
 
-// Run the emulator with raw command-line arguments (argv[0] is the program
-// name).  Used for command-line passthrough.  Returns the emulator exit code.
-int qtui_run_emulation(int argc, char **argv);
+// Decode the process command line into an argument vector (args[0] is the
+// program name).  Wraps the OSD's UTF-8/wide-aware decoder so qtmain.cpp (which
+// keeps clear of MAME core headers) can build the vector for CLI passthrough.
+std::vector<std::string> qtui_command_line(int argc, char **argv);
 
-// Run the emulator with an explicit argument vector (args[0] is the program
-// name, e.g. {"mame", "pacman"}).  Used by the GUI to launch a selected
-// system in-process.  Returns the emulator exit code.
-int qtui_run_args(std::vector<std::string> &args);
+// Run a command-line invocation (CLI passthrough) through the Qt-native OSD on
+// the CALLING thread (intended for a worker thread; the Qt event loop owns the
+// main thread).  `args` is the full argument vector (args[0] = program name);
+// the Qt-native providers are appended.  The render window is created lazily by
+// the OSD via target->create_window only if the run actually needs video, so
+// headless commands (-listxml, …) open no window.  Returns the exit code.
+int qtui_run_args_native(
+		std::vector<std::string> &args,
+		osd::qtui::QtEmbedTarget *target,
+		osd::qtui::EmbedSession &session,
+		const std::string &soundProvider);
 
 // Phase 13 (Qt-native OSD): run `system` (+ optional `software`) rendering into
 // the QWindow carried by `target`, using a Qt-native OSD window + OpenGL context

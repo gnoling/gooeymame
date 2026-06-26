@@ -94,6 +94,12 @@ public:
 			const QString &renderer = QString(), const QString &bgfxBackend = QString(),
 			const QString &shader = QString());
 
+	// CLI passthrough (`./mame <args>`): run the command line through the
+	// Qt-native OSD on a worker thread, with the browser never shown.  The render
+	// window is created lazily only if the run needs video, so headless commands
+	// (-listxml, …) open no window.  Closing the game window quits the app.
+	void runCliPassthrough(const std::vector<std::string> &args);
+
 protected:
 	void closeEvent(QCloseEvent *event) override;
 	void changeEvent(QEvent *event) override;
@@ -138,6 +144,11 @@ private:
 	void launchSystem(const QString &system, const QString &software);
 	// Render into a QWindow via the Qt-native OSD (OpenGL or BGFX), no SDL.
 	void launchEmbeddedNativeGl(const QString &label, const QString &system, const QString &software);
+	// GUI-thread surface factory for CLI passthrough: create + show a top-level
+	// render window and block until it is exposed.  Invoked from the worker via a
+	// blocking-queued call inside qt_osd_interface::video_init().  Returns false
+	// if the surface never became exposed.
+	bool createCliRenderWindow(osd::qtui::QtEmbedTarget *target);
 	void setNativePlacement(int placement);   // central (full) vs pane (beside list)
 	void setNativeRenderer(int renderer);     // OpenGL vs BGFX for the Qt-native window
 	void setBgfxBackend(int backend);         // Auto/OpenGL/Vulkan for the BGFX renderer

@@ -151,51 +151,11 @@ void qtui_init_process()
 }
 
 
-int qtui_run_args(std::vector<std::string> &args)
+std::vector<std::string> qtui_command_line(int argc, char **argv)
 {
-	int res = 0;
-
-	// MAME assumes the "C" locale: its option/ini parsing and number
-	// formatting break under a UTF-8 locale (parse_ini_file() spins
-	// indefinitely on plugin.ini).  A command-line MAME process never
-	// changes the locale, but constructing a QApplication calls
-	// setlocale(LC_ALL, "") and switches the whole process to the user's
-	// locale.  Force "C" for the duration of the emulator run and restore
-	// the previous locale afterwards so the Qt GUI is unaffected.
-	std::string const saved_locale = std::setlocale(LC_ALL, nullptr);
-	std::setlocale(LC_ALL, "C");
-
-#ifdef SDLMAME_UNIX
-	sdl_entered_debugger = 0;
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
-	FcInit();
-#endif
-#endif
-
-	{
-		sdl_options options;
-		sdl_osd_interface osd(options);
-		osd.register_options();
-		res = emulator_info::start_frontend(options, osd, args);
-	}
-
-#ifdef SDLMAME_UNIX
-#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
-	if (!sdl_entered_debugger)
-		FcFini();
-#endif
-#endif
-
-	std::setlocale(LC_ALL, saved_locale.c_str());
-
-	return res;
-}
-
-
-int qtui_run_emulation(int argc, char **argv)
-{
-	std::vector<std::string> args = osd_get_command_line(argc, argv);
-	return qtui_run_args(args);
+	// Wrap osd_get_command_line so qtmain.cpp (Qt-only, no MAME core headers) can
+	// obtain a properly-decoded argument vector (UTF-8/wide-aware on Windows).
+	return osd_get_command_line(argc, argv);
 }
 
 
@@ -1132,6 +1092,16 @@ public:
 
 	virtual bool video_init() override
 	{
+		// CLI passthrough: the GUI thread hasn't pre-created a render surface, so
+		// ask it to now (blocks until the QWindow is shown + exposed).  Only reached
+		// for invocations that actually run video — headless commands (-listxml,
+		// -validate, …) return before video_init(), so they create no window.
+		if (!m_target.window && m_target.create_window)
+		{
+			if (!m_target.create_window())
+				return false;
+		}
+
 		// Populate the bits of video_config the renderer/window read (replacing
 		// the SDL OSD's private extract_video_config()).
 		video_config.windowed = 1;
@@ -1250,6 +1220,85 @@ int qtui_run_embedded_native(
 	args.push_back("qt");
 	// Non-SDL sound/font/joystick so the Qt-native OSD initializes zero SDL.
 	// (-sound auto would pick SDL since it registers first.)
+	args.push_back("-sound");
+	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
+	args.push_back("-uifontprovider");
+	args.push_back("none");
+	args.push_back("-joystickprovider");
+	args.push_back("none");
+
+	{
+		sdl_options options;
+		qt_osd_interface osd(options, *target, session);
+		osd.register_options();
+		res = emulator_info::start_frontend(options, osd, args);
+	}
+
+	session.running.store(false);
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcFini();
+#endif
+#endif
+
+#ifdef SDLMAME_UNIX
+	if (cloc)
+	{
+		uselocale(prev);
+		freelocale(cloc);
+	}
+#elif defined(_WIN32)
+	std::setlocale(LC_ALL, win_prev_locale.c_str());
+#endif
+
+	return res;
+}
+
+
+int qtui_run_args_native(
+		std::vector<std::string> &args,
+		osd::qtui::QtEmbedTarget *target,
+		osd::qtui::EmbedSession &session,
+		const std::string &soundProvider)
+{
+	int res = 0;
+
+	// CLI passthrough through the Qt-native OSD.  Runs on a dedicated worker
+	// thread (the Qt event loop owns the main thread), so force the "C" locale
+	// per-thread — the MAME ini/number parsers require it while the GUI thread
+	// keeps the user's locale.  See qtui_run_embedded_native().
+#ifdef SDLMAME_UNIX
+	locale_t const cloc = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+	locale_t const prev = cloc ? uselocale(cloc) : (locale_t)0;
+#elif defined(_WIN32)
+	_configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+	std::string const win_prev_locale = std::setlocale(LC_ALL, nullptr);
+	std::setlocale(LC_ALL, "C");
+#endif
+
+#ifdef SDLMAME_UNIX
+#if (!defined(SDLMAME_MACOSX)) && (!defined(SDLMAME_HAIKU)) && (!defined(SDLMAME_EMSCRIPTEN)) && (!defined(SDLMAME_ANDROID))
+	FcInit();
+#endif
+#endif
+
+	// Append the providers the Qt-native OSD requires, so they take precedence
+	// over anything in the user's args/inis.  Harmless for headless commands
+	// (-listxml, -validate, …) — those return before any window/video is created.
+	// The render window itself is created lazily by qt_osd_interface::video_init()
+	// via target->create_window (set by the GUI side), so a headless run opens no
+	// window at all.
+	args.push_back("-video");
+	args.push_back("opengl");
+	args.push_back("-keyboardprovider");
+	args.push_back("qt");
+	args.push_back("-mouseprovider");
+	args.push_back("qt");
+	args.push_back("-lightgunprovider");
+	args.push_back("qt");
+	args.push_back("-monitorprovider");
+	args.push_back("qt");
 	args.push_back("-sound");
 	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
 	args.push_back("-uifontprovider");

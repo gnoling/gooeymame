@@ -18,6 +18,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 
 class QWindow;
 
@@ -35,6 +36,15 @@ struct QtEmbedTarget
 	QWindow            *window = nullptr;
 	std::atomic<int>    width{ 0 };
 	std::atomic<int>    height{ 0 };
+
+	// Optional lazy surface factory (CLI passthrough).  When `window` is null and
+	// this is set, the OSD calls it from the worker thread at video_init() time to
+	// have the GUI thread create + show the render window and fill in `window` +
+	// the size atomics; it blocks until that completes and returns false on
+	// failure.  Left null when the GUI pre-creates the window (GUI/--gooey path),
+	// so headless invocations (e.g. -listxml, which never reach video_init) create
+	// no window at all.  Qt-free: a std::function with no Qt types in its signature.
+	std::function<bool()> create_window;
 };
 
 } // namespace osd::qtui

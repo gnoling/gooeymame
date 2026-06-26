@@ -3245,6 +3245,104 @@ void MainWindow::startStandaloneEmbedded(const QString &system, const QString &s
 	QTimer::singleShot(0, this, [this, system, software] { launchSystem(system, software); });
 }
 
+void MainWindow::runCliPassthrough(const std::vector<std::string> &args)
+{
+	// The browser is never shown; exiting the run quits the app (honoured by
+	// onEmbeddedFinished via m_standaloneEmbed).
+	m_standaloneEmbed = true;
+
+	// First bare (non-option) token after the program name is the system, used
+	// for the window title when the run opens a window.
+	for (std::size_t i = 1; i < args.size(); ++i)
+	{
+		if (!args[i].empty() && args[i][0] != '-')
+		{
+			m_runningSystem = QString::fromStdString(args[i]);
+			break;
+		}
+	}
+
+	m_embedSession = std::make_unique<EmbedSession>();
+	m_nativeGlTarget = std::make_unique<osd::qtui::QtEmbedTarget>();
+	osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
+
+	// Lazy surface factory: the OSD calls this from the worker thread inside
+	// video_init() only if the run needs video.  Hop to the GUI thread (blocking)
+	// to create + show the window, so headless commands open nothing.
+	target->create_window = [this, target]() -> bool {
+		bool ok = false;
+		QMetaObject::invokeMethod(this, [this, target, &ok] { ok = createCliRenderWindow(target); },
+				Qt::BlockingQueuedConnection);
+		return ok;
+	};
+
+	std::string const sound = soundProviderName(m_soundProvider).toStdString();
+	std::vector<std::string> argv = args;
+	EmbedSession *const session = m_embedSession.get();
+	m_embedThread = std::thread([this, argv, target, session, sound]() mutable {
+		int const code = qtui_run_args_native(argv, target, *session, sound);
+		QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
+	});
+}
+
+bool MainWindow::createCliRenderWindow(osd::qtui::QtEmbedTarget *target)
+{
+	if (!target)
+		return false;
+
+	// Capture desktop monitor geometry on the GUI thread for the Qt-native
+	// monitor module (which initialises on the worker thread and can't touch
+	// QScreen there).
+	{
+		std::vector<osd::qtui::QtMonitorRect> mons;
+		const QScreen *const primary = QGuiApplication::primaryScreen();
+		for (QScreen *const sc : QGuiApplication::screens())
+		{
+			QRect const g = sc->geometry();
+			mons.push_back({ g.x(), g.y(), g.width(), g.height(), sc == primary });
+		}
+		osd::qtui::qtui_set_monitors(std::move(mons));
+	}
+
+	QSurfaceFormat fmt;
+	fmt.setRenderableType(QSurfaceFormat::OpenGL);
+	fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
+	fmt.setVersion(2, 1);
+	fmt.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+	fmt.setSwapInterval(1);
+
+	// A bare top-level QWindow (no container): the browser isn't shown, so the
+	// game renders in its own window.  onEmbeddedFinished's top-level-fallback
+	// branch tears it down (m_nativeGlContainer stays null).
+	m_nativeGlWindow = new QWindow();
+	m_nativeGlWindow->setSurfaceType(QSurface::OpenGLSurface);
+	m_nativeGlWindow->setFormat(fmt);
+	m_nativeGlWindow->setTitle(m_runningSystem.isEmpty()
+			? QStringLiteral("GooeyMAME")
+			: QStringLiteral("GooeyMAME — %1").arg(m_runningSystem));
+	m_nativeGlWindow->resize(640, 480);
+	m_nativeGlWindow->installEventFilter(this);   // input / resize / close
+	m_nativeGlWindow->setCursor(Qt::BlankCursor);
+
+	m_nativeGlTarget->window = m_nativeGlWindow;
+
+	m_nativeGlWindow->show();
+	m_nativeGlWindow->requestActivate();
+
+	// Prime the input bus (assume focus; the window is being shown + activated).
+	osd::qtui::QtInputBus::instance().clear();
+	osd::qtui::QtInputBus::instance().setFocused(true);
+
+	// The worker's GL context will makeCurrent() against this window, so it must
+	// be exposed (native surface created) first.  We are inside a blocking-queued
+	// call (the main exec() loop is parked), so pump events here until it exposes.
+	for (int i = 0; i < 300 && !m_nativeGlWindow->isExposed(); ++i)
+		QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 10);
+
+	updateNativeGlSize();
+	return m_nativeGlWindow->isExposed();
+}
+
 void MainWindow::launchSystem(const QString &system, const QString &software)
 {
 	if (embedRunning())
