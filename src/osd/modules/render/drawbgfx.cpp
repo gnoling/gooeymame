@@ -37,19 +37,23 @@
 
 // OSD
 #include "modules/lib/osdobj_common.h"
-#include "window.h"
-
 #if defined(OSD_QT_GL)
-// qtui build: a render window may be Qt-native and supply its own platform
-// handles through this (Qt-free) provider hook
+// qtui build: render windows are Qt-native (qt_window_info pulls in Qt); keep
+// this TU Qt-free by using only the OSD window base + the Qt-free provider hook.
+#include "modules/osdwindow.h"
 #include "qtglprovider.h"
 #include "qtbgfxchains.h"
+#else
+#include "window.h"
 #endif
 
 #include <bx/math.h>
 #include <bx/readerwriter.h>
 
-#if defined(SDLMAME_WIN32) || defined(OSD_WINDOWS)
+#if defined(OSD_QT_GL)
+// no platform windowing headers needed: the native handles come from the Qt
+// provider (qtglprovider.h) above
+#elif defined(SDLMAME_WIN32) || defined(OSD_WINDOWS)
 // standard windows headers
 #include <windows.h>
 #if defined(SDLMAME_WIN32) && !defined(SDLMAME_SDL3)
@@ -452,27 +456,31 @@ bool video_bgfx::set_platform_data(bgfx::PlatformData &platform_data, osd_window
 {
 #if defined(OSD_QT_GL)
 	// Qt-native render window: get the platform handles directly from the
-	// QWindow (no SDL), via the Qt-free provider hook.
-	if (auto const *const prov = dynamic_cast<osd::qtui::qt_native_handle_provider const *>(&window))
+	// QWindow (no SDL), via the Qt-free provider hook.  In the qtui build every
+	// window is Qt-native, so this is the entire implementation (no SDL path).
+	auto const *const prov = dynamic_cast<osd::qtui::qt_native_handle_provider const *>(&window);
+	if (!prov)
 	{
-		void *ndt = nullptr, *nwh = nullptr;
-		bool wayland = false;
-		if (!prov->native_handles(ndt, nwh, wayland))
-		{
-			osd_printf_error("BGFX: failed to resolve Qt native window handles\n");
-			return false;
-		}
-		platform_data.ndt = ndt;
-		platform_data.nwh = nwh;
-		if (wayland)
-			platform_data.type = bgfx::NativeWindowHandleType::Wayland;
-		platform_data.context = nullptr;
-		platform_data.backBuffer = nullptr;
-		platform_data.backBufferDS = nullptr;
-		bgfx::setPlatformData(platform_data);
-		return true;
+		osd_printf_error("BGFX: render window has no Qt native-handle provider\n");
+		return false;
 	}
-#endif
+	void *ndt = nullptr, *nwh = nullptr;
+	bool wayland = false;
+	if (!prov->native_handles(ndt, nwh, wayland))
+	{
+		osd_printf_error("BGFX: failed to resolve Qt native window handles\n");
+		return false;
+	}
+	platform_data.ndt = ndt;
+	platform_data.nwh = nwh;
+	if (wayland)
+		platform_data.type = bgfx::NativeWindowHandleType::Wayland;
+	platform_data.context = nullptr;
+	platform_data.backBuffer = nullptr;
+	platform_data.backBufferDS = nullptr;
+	bgfx::setPlatformData(platform_data);
+	return true;
+#else
 #if defined(OSD_WINDOWS)
 	platform_data.ndt = nullptr;
 	platform_data.nwh = dynamic_cast<win_window_info const &>(window).platform_window();
@@ -541,6 +549,7 @@ bool video_bgfx::set_platform_data(bgfx::PlatformData &platform_data, osd_window
 	bgfx::setPlatformData(platform_data);
 
 	return true;
+#endif // defined(OSD_QT_GL)
 }
 #endif
 
@@ -741,6 +750,11 @@ int renderer_bgfx::create()
 		m_framebuffer = m_targets->create_backbuffer(dynamic_cast<win_window_info &>(window()).platform_window(), s_width[window().index()], s_height[window().index()]);
 #elif defined(OSD_MAC)
 		m_framebuffer = m_targets->create_backbuffer(GetOSWindow(dynamic_cast<mac_window_info &>(window()).platform_window()), s_width[window().index()], s_height[window().index()]);
+#elif defined(OSD_QT_GL)
+		// qtui uses a single screen; secondary windows are never created.
+		m_targets.reset();
+		m_textures.reset();
+		return -1;
 #else
 		auto const [winhdl, success] = sdlNativeWindowHandle(dynamic_cast<sdl_window_info &>(window()).platform_window());
 		if (!success)
@@ -1442,6 +1456,8 @@ bool renderer_bgfx::update_dimensions()
 			m_framebuffer = m_targets->create_backbuffer(dynamic_cast<win_window_info &>(window()).platform_window(), width, height);
 #elif defined(OSD_MAC)
 			m_framebuffer = m_targets->create_backbuffer(GetOSWindow(dynamic_cast<mac_window_info &>(window()).platform_window()), width, height);
+#elif defined(OSD_QT_GL)
+			// qtui is single-screen; this secondary-window path is unreachable.
 #else
 			m_framebuffer = m_targets->create_backbuffer(sdlNativeWindowHandle(dynamic_cast<sdl_window_info &>(window()).platform_window()).first, width, height);
 #endif

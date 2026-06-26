@@ -7,7 +7,8 @@
 
 #include "font_module.h"
 
-#if defined(SDLMAME_UNIX) && !defined(SDLMAME_MACOSX) && !defined(SDLMAME_HAIKU) && !defined(SDLMAME_ANDROID) && !defined(SDLMAME_SDL3)
+// OSD_QT_GL (the qtui build) links no SDL/SDL_ttf, so stub this module there.
+#if defined(SDLMAME_UNIX) && !defined(SDLMAME_MACOSX) && !defined(SDLMAME_HAIKU) && !defined(SDLMAME_ANDROID) && !defined(SDLMAME_SDL3) && !defined(OSD_QT_GL)
 
 #include "corestr.h"
 #include "emucore.h"

@@ -109,47 +109,18 @@ function maintargetosdoptions(_target,_subtarget)
 		}
 	end
 
+	-- fontconfig (the Qt-native OSD links no SDL/SDL2_ttf — fonts come from the
+	-- built-in bitmap provider + fontconfig).
 	if BASE_TARGETOS=="unix" and _OPTIONS["targetos"]~="macosx" and _OPTIONS["targetos"]~="android" and _OPTIONS["targetos"]~="asmjs" then
-		links {
-			"SDL2_ttf",
-		}
 		local str = backtick(pkgconfigcmd() .. " --libs fontconfig")
 		addlibfromstring(str)
 		addoptionsfromstring(str)
 	end
 
 	if _OPTIONS["targetos"]=="windows" then
-		if _OPTIONS["USE_LIBSDL"]~="1" then
-			configuration { "mingw*"}
-				links {
-					"SDL2main",
-					"SDL2",
-					"imm32",
-					"version",
-				}
-			configuration { "vs*" }
-				links {
-					"SDL2",
-					"imm32",
-					"version",
-				}
-			configuration { }
-		else
-			local str = backtick(sdlconfigcmd() .. " --libs | sed 's/ -lSDLmain//'")
-			addlibfromstring(str)
-			addoptionsfromstring(str)
-		end
-		configuration { "x32", "vs*" }
-			libdirs {
-				path.join(_OPTIONS["SDL_INSTALL_ROOT"],"lib","x86")
-			}
-		configuration { "x64", "vs*" }
-			libdirs {
-				path.join(_OPTIONS["SDL_INSTALL_ROOT"],"lib","x64")
-			}
-		configuration { }
-
 		links {
+			"imm32",
+			"version",
 			"dinput8",
 			"psapi",
 		}
@@ -467,19 +438,12 @@ project ("osd_" .. _OPTIONS["osd"])
 	}
 
 	files {
-		-- SDL OSD emulation backend (note: sdlmain.cpp is intentionally
-		-- omitted -- qtmain.cpp provides the single program entry point)
+		-- Shared OSD window base (osd_window / video_config global lives in the
+		-- Qt-native OSD, emulator.cpp).  No src/osd/sdl/*.cpp: the qtui OSD is
+		-- the Qt-native backend (qt_osd_interface : osd_common_t), zero SDL.
 		MAME_DIR .. "src/osd/osdepend.h",
 		MAME_DIR .. "src/osd/modules/osdwindow.cpp",
 		MAME_DIR .. "src/osd/modules/osdwindow.h",
-		MAME_DIR .. "src/osd/sdl/osdsdl.cpp",
-		MAME_DIR .. "src/osd/sdl/osdsdl.h",
-		MAME_DIR .. "src/osd/sdl/sdlopts.cpp",
-		MAME_DIR .. "src/osd/sdl/sdlopts.h",
-		MAME_DIR .. "src/osd/sdl/sdlprefix.h",
-		MAME_DIR .. "src/osd/sdl/video.cpp",
-		MAME_DIR .. "src/osd/sdl/window.cpp",
-		MAME_DIR .. "src/osd/sdl/window.h",
 
 		-- Qt front-end
 		MAME_DIR .. "src/osd/qtui/qtmain.cpp",

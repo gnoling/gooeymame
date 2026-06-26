@@ -96,9 +96,28 @@
 //  sdl_entered_debugger is normally defined in sdlmain.cpp, which we do
 //  not compile (qtmain.cpp supplies the program entry point instead).  The
 //  Qt debugger module references it, so define it here.
+//
+//  video_config is the global the shared renderers/window code read (declared
+//  extern in modules/osdwindow.h); each OSD defines it in its own video.cpp.
+//  The qtui OSD doesn't compile src/osd/sdl/video.cpp, so define it here.
 //============================================================
 
 int sdl_entered_debugger;
+
+osd_video_config video_config;
+
+// OSD-provided free functions normally defined in the SDL OSD (sdlopts.cpp /
+// window.cpp), which the qtui build no longer compiles.  The frontend
+// (ui.cpp / miscmenu.cpp / luaengine.cpp) references them, so supply them here.
+void osd_setup_osd_specific_emu_options(emu_options &opts)
+{
+	opts.add_entries(osd_options::s_option_entries);
+}
+
+void osd_set_aggressive_input_focus(bool aggressive_focus)
+{
+	// no-op: the Qt-native OSD manages input focus through the render window
+}
 
 
 //============================================================

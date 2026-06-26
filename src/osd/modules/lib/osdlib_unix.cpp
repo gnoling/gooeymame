@@ -12,10 +12,14 @@
 #include "osdcore.h"
 #include "osdlib.h"
 
+// OSD_QT_GL (the qtui build) links no SDL and only uses the (stubbed) clipboard
+// helpers below, so it needs no SDL headers.
+#if !defined(OSD_QT_GL)
 #ifdef SDLMAME_SDL3
 #include <SDL3/SDL.h>
 #else
 #include <SDL2/SDL.h>
+#endif
 #endif
 
 #include <csignal>
@@ -139,7 +143,9 @@ std::pair<std::error_condition, unsigned> osd_get_cache_line_size() noexcept
 }
 
 
-#ifdef SDLMAME_ANDROID
+// OSD_QT_GL (the qtui build) links no SDL; the Qt front-end manages the GUI
+// clipboard itself, so stub these like the Android build.
+#if defined(SDLMAME_ANDROID) || defined(OSD_QT_GL)
 std::string osd_get_clipboard_text() noexcept
 {
 	return std::string();

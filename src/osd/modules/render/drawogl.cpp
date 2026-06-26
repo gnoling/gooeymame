@@ -19,7 +19,16 @@
 #if USE_OPENGL
 
 // will be picked up from specific OSD implementation
+#if defined(OSD_QT_GL)
+// qtui build: the render windows are Qt-native (qt_window_info), whose header
+// pulls in Qt; this TU must stay Qt-free, so use only the OSD window base here
+// (the concrete window supplies its GL context via the Qt-free provider hook).
+// HashT is normally provided by the per-OSD window.h (sdl/window.h).
+typedef uintptr_t HashT;
+#include "modules/osdwindow.h"
+#else
 #include "window.h"
+#endif
 
 // OSD common headers
 #include "modules/lib/osdlib.h"
@@ -34,14 +43,17 @@ typedef uint64_t HashT;
 #elif defined(OSD_MAC)
 #define GL_SILENCE_DEPRECATION (1)
 #include "osdmac.h"
+#elif defined(OSD_QT_GL)
+// qtui build: the GL context is supplied by the Qt-native window through the
+// (Qt-free) provider hook below — no SDL.
 #else
 #include "osdsdl.h"
 #include "sdlglcontext.h"
 #endif
 
 #if defined(OSD_QT_GL)
-// qtui build: a render window may be SDL-backed or Qt-native; the latter
-// supplies its own GL context through this (Qt-free) provider hook
+// qtui build: the Qt-native render window supplies its own GL context through
+// this (Qt-free) provider hook
 #include "qtglprovider.h"
 #endif
 
@@ -51,7 +63,7 @@ typedef uint64_t HashT;
 #include "render.h"
 
 
-#if !defined(OSD_WINDOWS) && !defined(OSD_MAC)
+#if !defined(OSD_WINDOWS) && !defined(OSD_MAC) && !defined(OSD_QT_GL)
 
 // standard SDL headers
 #define TOBEMIGRATED 1
@@ -61,7 +73,7 @@ typedef uint64_t HashT;
 #include <SDL2/SDL.h>
 #endif
 
-#endif // !defined(OSD_WINDOWS && !defined(OSD_MAC)
+#endif // !defined(OSD_WINDOWS) && !defined(OSD_MAC) && !defined(OSD_QT_GL)
 
 
 // standard C headers
@@ -759,14 +771,16 @@ int renderer_ogl::create()
 {
 	// create renderer
 #if defined(OSD_QT_GL)
-	// in the qtui build a window may be Qt-native (provides its own GL context)
-	// or SDL-backed; prefer the Qt provider when present
-	if (auto *const provider = dynamic_cast<osd::qtui::qt_gl_context_provider *>(&window()))
+	// qtui build: every render window is Qt-native and supplies its own GL
+	// context through the Qt-free provider hook (no SDL fallback).
+	auto *const provider = dynamic_cast<osd::qtui::qt_gl_context_provider *>(&window());
+	if (!provider)
 	{
-		m_gl_context.reset(provider->make_gl_context());
+		osd_printf_error("Creating OpenGL context failed: window has no Qt GL provider\n");
+		return 1;
 	}
-	else
-#endif
+	m_gl_context.reset(provider->make_gl_context());
+#else
 	{
 #if defined(OSD_WINDOWS)
 	m_gl_context.reset(new win_gl_context(dynamic_cast<win_window_info &>(window()).platform_window()));
@@ -777,6 +791,7 @@ int renderer_ogl::create()
 	m_gl_context.reset(new sdl_gl_context(dynamic_cast<sdl_window_info &>(window()).platform_window()));
 #endif
 	}
+#endif
 	if (!*m_gl_context)
 	{
 		char const *const msg = m_gl_context->last_error_message();
