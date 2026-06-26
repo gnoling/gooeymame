@@ -1253,71 +1253,6 @@ private:
 	EmbedController m_ctrl;
 };
 
-
-// Append the bundled relative asset dirs as SECONDARY search paths to the
-// configured multipath options, so the data shipped alongside the executable is
-// found regardless of where the user's mame.ini points the primary path.  The
-// motivating case is BGFX: the chain mask/LUT art lives under artwork/bgfx/...,
-// loaded via artpath — if the user's artpath is their own EXTRAs dir, the
-// bundled art (and the shader effect) is silently lost.  We resolve each
-// option's effective value through the ini hierarchy, then pass
-// "<resolved>;<relative>" on the command line (which replaces the ini value, so
-// we include the resolved value to keep the user's own directories).  Relative
-// paths resolve against the working directory MAME is launched from (the repo
-// root on Linux, the dist folder on Windows) — exactly the "secondary relative
-// search path" fix applied by hand before.
-void qtui_append_bundled_paths(std::vector<std::string> &args, const game_driver *driver)
-{
-	static const struct { const char *opt; const char *rel; } kBundled[] = {
-		{ OPTION_ARTPATH,       "artwork" },
-		{ OPTION_CTRLRPATH,     "ctrlr" },
-		{ OPTION_CHEATPATH,     "cheat" },
-		{ OPTION_CROSSHAIRPATH, "crosshair" },
-		{ OPTION_PLUGINSPATH,   "plugins" },
-		{ OPTION_HASHPATH,      "hash" },
-	};
-
-	core_guard guard;   // serialise core access + force the "C" locale for the parse
-	try
-	{
-		qt_options probe;
-		std::ostringstream errors;
-		mame_options::parse_standard_inis(probe, errors, driver);
-		for (auto const &b : kBundled)
-		{
-			std::string value = probe.value(b.opt);
-
-			// already searched?  (compare each ';'-separated token)
-			bool present = false;
-			for (std::size_t start = 0; start <= value.size(); )
-			{
-				std::size_t const sep = value.find(';', start);
-				std::size_t const end = (sep == std::string::npos) ? value.size() : sep;
-				if (value.compare(start, end - start, b.rel) == 0)
-				{
-					present = true;
-					break;
-				}
-				if (sep == std::string::npos)
-					break;
-				start = sep + 1;
-			}
-
-			if (!present)
-			{
-				if (!value.empty())
-					value += ';';
-				value += b.rel;
-			}
-			args.push_back(std::string("-") + b.opt);
-			args.push_back(std::move(value));
-		}
-	}
-	catch (...)
-	{
-	}
-}
-
 } // anonymous namespace
 
 
@@ -1394,12 +1329,6 @@ int qtui_run_embedded_native(
 	args.push_back("-joystickprovider");
 	args.push_back("none");
 
-	// Also search the bundled relative asset dirs (BGFX chain art, hash, …).
-	{
-		int const idx = driver_list::find(system.c_str());
-		qtui_append_bundled_paths(args, (idx >= 0) ? &driver_list::driver(idx) : nullptr);
-	}
-
 	{
 		qt_options options;
 		qt_osd_interface osd(options, *target, session);
@@ -1474,24 +1403,6 @@ int qtui_run_args_native(
 	args.push_back("none");
 	args.push_back("-joystickprovider");
 	args.push_back("none");
-
-	// When this invocation actually runs a system, also search the bundled
-	// relative asset dirs (BGFX chain art, hash, …).  Skipped for headless
-	// commands (no runnable driver) so they aren't perturbed.
-	{
-		const game_driver *driver = nullptr;
-		for (std::size_t i = 1; i < args.size() && !driver; ++i)
-		{
-			if (!args[i].empty() && args[i][0] != '-')
-			{
-				int const idx = driver_list::find(args[i].c_str());
-				if (idx >= 0)
-					driver = &driver_list::driver(idx);
-			}
-		}
-		if (driver)
-			qtui_append_bundled_paths(args, driver);
-	}
 
 	{
 		qt_options options;
