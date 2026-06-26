@@ -69,6 +69,9 @@ enum class EmbedCommand
 	InputCaptureCancel,// abandon an in-progress capture
 	InputSetDefault,  // ival = input index — restore the input to its default binding
 	InputSetNone,     // ival = input index — clear the input's binding to none
+	SetEffectParam,   // mask = chain (0xffff=default), value = effect entry, ival = param id, dval = value
+	ResetEffectParam, // mask = chain, value = effect entry, ival = param id — restore param to default
+	ResetEffect,      // mask = chain, value = effect entry — reset the whole effect to defaults
 	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
 	SetShaderChain,   // ival = BGFX effect/chain index for screen 0 (Qt-native BGFX renderer)
 	Exit
@@ -239,6 +242,38 @@ struct EmbedCapture
 	std::string prompt;            // partial sequence captured so far ("" = nothing yet)
 	bool        finished = false;  // capture completed this frame (UI: refresh + close)
 	bool        cancelled = false; // capture was abandoned
+};
+
+// One parameter of an audio effect (a mode/toggle, a discrete choice, or a
+// continuous numeric).  The worker holds the effect-type-specific knowledge and
+// publishes these descriptors so the GUI can render a generic editor; `id` is
+// the command key the worker switches on to apply a change to the right setter.
+struct EmbedEffectParam
+{
+	enum Kind { Toggle, Choice, Numeric };
+	int         id = 0;             // effect-type-specific param id (worker switch key)
+	int         kind = Numeric;
+	std::string group;             // sub-heading ("" = top-level) e.g. "High-pass Filter"
+	std::string label;             // param name, e.g. "Cutoff frequency"
+	std::string text;              // MAME-formatted current value, e.g. "1000 Hz", "+3 dB"
+	double      value = 0.0;       // raw value (Toggle 0/1, Choice index, Numeric raw)
+	double      minv = 0.0;        // Numeric: range + step for the slider
+	double      maxv = 1.0;
+	double      step = 0.01;
+	bool        isDefault = true;  // value is inherited from the default (deemphasized)
+	std::vector<std::string> choices;  // Toggle: {off,on} labels; Choice: option labels
+};
+
+// One audio effect instance in a speaker's (or the default) effect chain.
+struct EmbedEffect
+{
+	int         chain = 0;          // chain index; 0xffff = the default chain (command key)
+	std::string chainTag;           // speaker tag, or "" for the default chain
+	bool        chainDefault = false;
+	int         index = 0;          // entry index within the chain (command key)
+	int         type = 0;           // audio_effect type enum (FILTER/COMPRESSOR/REVERB/EQ)
+	std::string typeName;           // "Filter", "Compressor", …
+	std::vector<EmbedEffectParam> params;
 };
 
 // Capability flags describing what the running machine actually supports, so the
@@ -509,6 +544,21 @@ public:
 	}
 	unsigned inputMapGeneration() const { return m_inputMapGen.load(std::memory_order_relaxed); }
 
+	// Audio effect chains (published at init + after each change).  The
+	// generation counter lets the dialog refresh after edits/resets/presets.
+	void publishAudioEffects(std::vector<EmbedEffect> list)
+	{
+		std::lock_guard<std::mutex> lk(m_effectMutex);
+		m_effects = std::move(list);
+		m_effectsGen.fetch_add(1, std::memory_order_relaxed);
+	}
+	std::vector<EmbedEffect> audioEffectsSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_effectMutex);
+		return m_effects;
+	}
+	unsigned audioEffectsGeneration() const { return m_effectsGen.load(std::memory_order_relaxed); }
+
 	// Live input-capture state (published each frame while capturing).
 	void publishCapture(EmbedCapture c)
 	{
@@ -580,6 +630,10 @@ private:
 
 	mutable std::mutex m_captureMutex;
 	EmbedCapture m_capture;
+
+	mutable std::mutex m_effectMutex;
+	std::vector<EmbedEffect> m_effects;
+	std::atomic<unsigned> m_effectsGen{0};
 };
 
 } // namespace osd::qtui

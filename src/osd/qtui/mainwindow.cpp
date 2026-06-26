@@ -12,6 +12,7 @@
 #include "auditmanager.h"
 #include "emulator.h"
 #include "inputmapdialog.h"
+#include "audioeffectsdialog.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
 #include "familytreemodel.h"
@@ -2004,6 +2005,25 @@ void MainWindow::rebuildAudioMenu(QMenu *menu)
 	}
 	if (!any)
 		menu->addAction(tr("(this machine has no volume controls)"))->setEnabled(false);
+
+	// DSP effect chains (filter / compressor / EQ / reverb) — opens the editor.
+	if (!m_embedSession->audioEffectsSnapshot().empty())
+	{
+		menu->addSeparator();
+		connect(menu->addAction(tr("Audio &Effects…")), &QAction::triggered, this,
+				[this] { showAudioEffectsDialog(); });
+	}
+}
+
+void MainWindow::showAudioEffectsDialog()
+{
+	if (!m_embedSession)
+		return;
+	if (!m_audioEffectsDialog)
+		m_audioEffectsDialog = new osd::qtui::AudioEffectsDialog(m_embedSession.get(), this);
+	m_audioEffectsDialog->show();
+	m_audioEffectsDialog->raise();
+	m_audioEffectsDialog->activateWindow();
 }
 
 void MainWindow::showInputMapDialog()
@@ -3583,6 +3603,12 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 		m_inputMapDialog->close();
 		m_inputMapDialog->deleteLater();
 		m_inputMapDialog = nullptr;
+	}
+	if (m_audioEffectsDialog)
+	{
+		m_audioEffectsDialog->close();
+		m_audioEffectsDialog->deleteLater();
+		m_audioEffectsDialog = nullptr;
 	}
 
 	// Join the in-process emulation thread and tear down its bridge (no-op for

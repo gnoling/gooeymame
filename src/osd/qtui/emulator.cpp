@@ -50,6 +50,12 @@
 #include "ui/slider.h"     // slider_state + SLIDER_NOCHANGE (live adjustments)
 #include "iptseqpoll.h"    // input_sequence_poller (interactive input remapping)
 #include "bookkeeping.h"   // bookkeeping_manager (coin counters, tickets)
+#include "speaker.h"       // speaker_device (effect chain tags)
+#include "audio_effects/aeffect.h"        // audio_effect base + effect_names
+#include "audio_effects/filter.h"         // audio_effect_filter
+#include "audio_effects/compressor.h"     // audio_effect_compressor
+#include "audio_effects/eq.h"             // audio_effect_eq
+#include "audio_effects/reverb.h"         // audio_effect_reverb
 
 #include "drivenum.h"
 #include "rendlay.h"   // layout_view visibility toggles (bezel/artwork)
@@ -346,6 +352,7 @@ public:
 				refresh_crosshairs();
 				refresh_cheats();
 				refresh_inputmap();
+				refresh_audio_effects();
 			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
@@ -652,6 +659,15 @@ private:
 			break;
 		case EmbedCommand::InputSetNone:
 			set_input_default_or_none(a.ival, false);
+			break;
+		case EmbedCommand::SetEffectParam:
+			apply_effect_param(int(a.mask), int(a.value), a.ival, a.dval);
+			break;
+		case EmbedCommand::ResetEffectParam:
+			reset_effect_param(int(a.mask), int(a.value), a.ival);
+			break;
+		case EmbedCommand::ResetEffect:
+			reset_effect(int(a.mask), int(a.value));
 			break;
 		case EmbedCommand::RefocusInput:
 			// No-op: this was the SDL foreign-window (-attach_window) focus/grab
@@ -1361,6 +1377,409 @@ private:
 			seq.reset();   // none
 		apply_seq(index, seq);
 		refresh_inputmap();
+	}
+
+	//---- Audio effect chains (per-speaker + default DSP) -------------------
+	// Per-effect-type parameter ids (the SetEffectParam command key).  Values
+	// are interpreted only after the effect type is known, so the small ranges
+	// may overlap between types.  EQ ids are computed: 0 = mode, otherwise
+	// id = 1 + band*4 + {0 shelf, 1 freq, 2 Q, 3 gain}.
+	enum { FP_HP_ACTIVE, FP_HP_F, FP_HP_Q, FP_LP_ACTIVE, FP_LP_F, FP_LP_Q };
+	enum { CP_MODE, CP_THRESHOLD, CP_RATIO, CP_ATTACK, CP_RELEASE, CP_IN_GAIN, CP_OUT_GAIN,
+		CP_CONVEXITY, CP_LINK, CP_FEEDBACK, CP_INERTIA, CP_INERTIA_DECAY, CP_CEILING };
+	enum { RP_MODE, RP_PRESET, RP_DRY, RP_WIDTH, RP_ERS, RP_ETAP, RP_EDAMP, RP_EL, RP_E2L,
+		RP_LRS, RP_LDAMP, RP_LPDELAY, RP_LDIFF, RP_LWANDER, RP_LDECAY, RP_LSPIN, RP_LL };
+
+	// formatters mirroring the MAME ui/audio_effect_* menus
+	static std::string fmt_db(double v)     { return util::string_format("%1$+g dB", v); }
+	static std::string fmt_hz(double v)     { return util::string_format("%1$d Hz", u32(v + 0.5)); }
+	static std::string fmt_2dec(double v)   { return util::string_format("%1$.2f", v); }
+	static std::string fmt_ms0(double v)    { return util::string_format("%1$.0f ms", v); }
+	static std::string fmt_ms1(double v)    { return util::string_format("%1$.1f ms", v); }
+	static std::string fmt_pct(double v)    { return util::string_format("%1$d%%", u32(v)); }
+	static std::string fmt_ratio(double v)  { return (v > 0) ? util::string_format("%1$g:1", v) : std::string("Infinity:1"); }
+	static std::string fmt_release(double v){ return (v < 0) ? std::string("Infinite") : fmt_ms0(v); }
+	static std::string fmt_decay(double v)  { return util::string_format("%1$.2f s", v); }
+	static std::string fmt_spin(double v)   { return util::string_format("%1$.2f Hz", v); }
+	static std::string fmt_filt_f(double v) { return (v <= 20) ? std::string("DC removal") : fmt_hz(v); }
+
+	static void addToggle(std::vector<osd::qtui::EmbedEffectParam> &v, int id, std::string group,
+			std::string label, bool on, bool isset)
+	{
+		osd::qtui::EmbedEffectParam p;
+		p.id = id; p.kind = osd::qtui::EmbedEffectParam::Toggle;
+		p.group = std::move(group); p.label = std::move(label);
+		p.value = on ? 1 : 0; p.isDefault = !isset;
+		p.choices = { "Bypass", "Active" };
+		p.text = on ? "Active" : "Bypass";
+		v.push_back(std::move(p));
+	}
+	static void addChoice(std::vector<osd::qtui::EmbedEffectParam> &v, int id, std::string group,
+			std::string label, int idx, bool isset, std::vector<std::string> choices)
+	{
+		osd::qtui::EmbedEffectParam p;
+		p.id = id; p.kind = osd::qtui::EmbedEffectParam::Choice;
+		p.group = std::move(group); p.label = std::move(label);
+		p.value = idx; p.isDefault = !isset; p.choices = std::move(choices);
+		p.text = (idx >= 0 && idx < int(p.choices.size())) ? p.choices[idx] : std::string();
+		v.push_back(std::move(p));
+	}
+	static void addNum(std::vector<osd::qtui::EmbedEffectParam> &v, int id, std::string group,
+			std::string label, double val, double mn, double mx, double step, bool isset,
+			std::string text)
+	{
+		osd::qtui::EmbedEffectParam p;
+		p.id = id; p.kind = osd::qtui::EmbedEffectParam::Numeric;
+		p.group = std::move(group); p.label = std::move(label);
+		p.value = val; p.minv = mn; p.maxv = mx; p.step = step;
+		p.isDefault = !isset; p.text = std::move(text);
+		v.push_back(std::move(p));
+	}
+
+	void build_effect_params(audio_effect *eff, std::vector<osd::qtui::EmbedEffectParam> &out)
+	{
+		switch (eff->type())
+		{
+		case audio_effect::FILTER:
+		{
+			auto *f = static_cast<audio_effect_filter *>(eff);
+			addToggle(out, FP_HP_ACTIVE, "High-pass", "Mode", f->highpass_active(), f->isset_highpass_active());
+			addNum(out, FP_HP_F, "High-pass", "Cutoff frequency", f->fh(), 20, 5000, 1, f->isset_fh(), fmt_filt_f(f->fh()));
+			addNum(out, FP_HP_Q, "High-pass", "Q factor", f->qh(), 0.1, 10.0, 0.01, f->isset_qh(), fmt_2dec(f->qh()));
+			addToggle(out, FP_LP_ACTIVE, "Low-pass", "Mode", f->lowpass_active(), f->isset_lowpass_active());
+			addNum(out, FP_LP_F, "Low-pass", "Cutoff frequency", f->fl(), 100, 20000, 1, f->isset_fl(), fmt_hz(f->fl()));
+			addNum(out, FP_LP_Q, "Low-pass", "Q factor", f->ql(), 0.1, 10.0, 0.01, f->isset_ql(), fmt_2dec(f->ql()));
+			break;
+		}
+		case audio_effect::COMPRESSOR:
+		{
+			auto *c = static_cast<audio_effect_compressor *>(eff);
+			addToggle(out, CP_MODE, "", "Mode", c->mode() != 0, c->isset_mode());
+			addNum(out, CP_THRESHOLD, "", "Threshold", c->threshold(), -60, 6, 0.5, c->isset_threshold(), fmt_db(c->threshold()));
+			addNum(out, CP_RATIO, "", "Ratio", c->ratio(), 1, 30, 0.1, c->isset_ratio(), fmt_ratio(c->ratio()));
+			addNum(out, CP_ATTACK, "", "Attack", c->attack(), 0, 300, 1, c->isset_attack(), fmt_ms0(c->attack()));
+			addNum(out, CP_RELEASE, "", "Release", c->release(), 0, 1000, 1, c->isset_release(), fmt_release(c->release()));
+			addNum(out, CP_IN_GAIN, "", "Input gain", c->input_gain(), -12, 24, 0.5, c->isset_input_gain(), fmt_db(c->input_gain()));
+			addNum(out, CP_OUT_GAIN, "", "Output gain", c->output_gain(), -12, 24, 0.5, c->isset_output_gain(), fmt_db(c->output_gain()));
+			addNum(out, CP_CONVEXITY, "Advanced", "Convexity", c->convexity(), -2, 2, 0.01, c->isset_convexity(), fmt_2dec(c->convexity()));
+			addNum(out, CP_LINK, "Advanced", "Channel link", c->channel_link(), 0, 1, 0.01, c->isset_channel_link(), fmt_2dec(c->channel_link()));
+			addNum(out, CP_FEEDBACK, "Advanced", "Feedback", c->feedback(), 0, 1, 0.01, c->isset_feedback(), fmt_2dec(c->feedback()));
+			addNum(out, CP_INERTIA, "Advanced", "Inertia", c->inertia(), -1, 0.3, 0.01, c->isset_inertia(), fmt_2dec(c->inertia()));
+			addNum(out, CP_INERTIA_DECAY, "Advanced", "Inertia decay", c->inertia_decay(), 0.8, 0.96, 0.01, c->isset_inertia_decay(), fmt_2dec(c->inertia_decay()));
+			addNum(out, CP_CEILING, "Advanced", "Ceiling", c->ceiling(), 0.3, 3, 0.01, c->isset_ceiling(), fmt_2dec(c->ceiling()));
+			break;
+		}
+		case audio_effect::EQ:
+		{
+			auto *q = static_cast<audio_effect_eq *>(eff);
+			static const u32 fmin[5] = { 20, 100, 100, 100, 500 };
+			static const u32 fmax[5] = { 2000, 10000, 10000, 10000, 16000 };
+			static const char *const bandName[5] =
+				{ "Low Band", "Low Mid Band", "Mid Band", "High Mid Band", "High Band" };
+			addToggle(out, 0, "", "Mode", q->mode() != 0, q->isset_mode());
+			for (u32 b = 0; b < audio_effect_eq::BANDS; ++b)
+			{
+				int const base = 1 + b * 4;
+				bool const shelfBand = (b == 0 || b == 4);
+				bool const shelf = (b == 0) ? q->low_shelf() : (b == 4) ? q->high_shelf() : false;
+				if (shelfBand)
+				{
+					osd::qtui::EmbedEffectParam p;
+					p.id = base + 0; p.kind = osd::qtui::EmbedEffectParam::Toggle;
+					p.group = bandName[b]; p.label = "Mode";
+					p.value = shelf ? 1 : 0;
+					p.isDefault = !(b == 0 ? q->isset_low_shelf() : q->isset_high_shelf());
+					p.choices = { "Peak", "Shelf" };
+					p.text = shelf ? "Shelf" : "Peak";
+					out.push_back(std::move(p));
+				}
+				addNum(out, base + 1, bandName[b], "Frequency", q->f(b), fmin[b], fmax[b], 1, q->isset_f(b), fmt_hz(q->f(b)));
+				if (!(shelfBand && shelf))   // shelf bands hide Q
+					addNum(out, base + 2, bandName[b], "Q factor", q->q(b), 0.1, 10.0, 0.01, q->isset_q(b), fmt_2dec(q->q(b)));
+				addNum(out, base + 3, bandName[b], "Gain", q->db(b), -12, 12, 0.1, q->isset_db(b), fmt_db(q->db(b)));
+			}
+			break;
+		}
+		case audio_effect::REVERB:
+		{
+			auto *r = static_cast<audio_effect_reverb *>(eff);
+			std::vector<std::string> presets;
+			for (u32 i = 0; i < audio_effect_reverb::preset_count(); ++i)
+				presets.emplace_back(audio_effect_reverb::preset_name(i));
+			std::vector<std::string> taps;
+			for (u32 i = 0; i < audio_effect_reverb::early_tap_setup_count(); ++i)
+				taps.emplace_back(audio_effect_reverb::early_tap_setup_name(i));
+			u32 const curPreset = r->find_current_preset();
+			addToggle(out, RP_MODE, "", "Mode", r->mode() != 0, r->isset_mode());
+			addChoice(out, RP_PRESET, "", "Preset", int(curPreset), curPreset == r->default_preset(), presets);
+			addNum(out, RP_DRY, "", "Dry level", r->dry_level(), 0, 100, 1, r->isset_dry_level(), fmt_pct(r->dry_level()));
+			addNum(out, RP_WIDTH, "", "Stereo width", r->stereo_width(), 0, 100, 1, r->isset_stereo_width(), fmt_pct(r->stereo_width()));
+			addNum(out, RP_ERS, "Early Reflections", "Room size", r->early_room_size(), 0, 100, 1, r->isset_early_room_size(), fmt_pct(r->early_room_size()));
+			addChoice(out, RP_ETAP, "Early Reflections", "Tap setup", int(r->early_tap_setup()), r->isset_early_tap_setup(), taps);
+			addNum(out, RP_EDAMP, "Early Reflections", "Damping", r->early_damping(), 100, 16000, 1, r->isset_early_damping(), fmt_hz(r->early_damping()));
+			addNum(out, RP_EL, "Early Reflections", "Level", r->early_level(), 0, 100, 1, r->isset_early_level(), fmt_pct(r->early_level()));
+			addNum(out, RP_E2L, "Early Reflections", "Send to Late", r->early_to_late_level(), 0, 100, 1, r->isset_early_to_late_level(), fmt_pct(r->early_to_late_level()));
+			addNum(out, RP_LRS, "Late Reflections", "Room size", r->late_room_size(), 0, 100, 1, r->isset_late_room_size(), fmt_pct(r->late_room_size()));
+			addNum(out, RP_LDAMP, "Late Reflections", "Damping", r->late_damping(), 100, 16000, 1, r->isset_late_damping(), fmt_hz(r->late_damping()));
+			addNum(out, RP_LPDELAY, "Late Reflections", "Pre-delay", r->late_predelay(), 0, 200, 0.1, r->isset_late_predelay(), fmt_ms1(r->late_predelay()));
+			addNum(out, RP_LDIFF, "Late Reflections", "Diffusion", r->late_diffusion(), 0, 100, 1, r->isset_late_diffusion(), fmt_pct(r->late_diffusion()));
+			addNum(out, RP_LWANDER, "Late Reflections", "Wander", r->late_wander(), 0, 100, 1, r->isset_late_wander(), fmt_pct(r->late_wander()));
+			addNum(out, RP_LDECAY, "Late Reflections", "Decay", r->late_global_decay(), 0.1, 30, 0.01, r->isset_late_global_decay(), fmt_decay(r->late_global_decay()));
+			addNum(out, RP_LSPIN, "Late Reflections", "Spin", r->late_spin(), 0, 5, 0.01, r->isset_late_spin(), fmt_spin(r->late_spin()));
+			addNum(out, RP_LL, "Late Reflections", "Level", r->late_level(), 0, 100, 1, r->isset_late_level(), fmt_pct(r->late_level()));
+			break;
+		}
+		}
+	}
+
+	audio_effect *effect_at(int chain, int entry) const
+	{
+		if (!m_machine)
+			return nullptr;
+		auto &snd = m_machine->sound();
+		std::vector<audio_effect *> chainv;
+		if (chain == 0xffff)
+			chainv = snd.default_effect_chain();
+		else if (chain >= 0 && chain < int(snd.effect_chains()))
+			chainv = snd.effect_chain(chain);
+		if (entry >= 0 && entry < int(chainv.size()))
+			return chainv[entry];
+		return nullptr;
+	}
+
+	void refresh_audio_effects()
+	{
+		std::vector<osd::qtui::EmbedEffect> out;
+		if (m_machine && !m_machine->sound().no_sound())
+		{
+			auto &snd = m_machine->sound();
+			auto build_chain = [&] (int chainId, const std::string &tag, bool isDefault)
+			{
+				std::vector<audio_effect *> chainv =
+						isDefault ? snd.default_effect_chain() : snd.effect_chain(chainId);
+				for (int e = 0; e < int(chainv.size()); ++e)
+				{
+					osd::qtui::EmbedEffect ef;
+					ef.chain = isDefault ? 0xffff : chainId;
+					ef.chainTag = tag;
+					ef.chainDefault = isDefault;
+					ef.index = e;
+					ef.type = chainv[e]->type();
+					ef.typeName = audio_effect::effect_names[ef.type];
+					build_effect_params(chainv[e], ef.params);
+					out.push_back(std::move(ef));
+				}
+			};
+			for (int c = 0; c < int(snd.effect_chains()); ++c)
+				build_chain(c, snd.effect_chain_tag(c), false);
+			build_chain(0, std::string(), true);   // the default chain
+		}
+		m_session.publishAudioEffects(std::move(out));
+	}
+
+	void apply_effect_param(int chain, int entry, int paramId, double value)
+	{
+		audio_effect *eff = effect_at(chain, entry);
+		if (!eff)
+			return;
+		switch (eff->type())
+		{
+		case audio_effect::FILTER:
+		{
+			auto *f = static_cast<audio_effect_filter *>(eff);
+			switch (paramId)
+			{
+			case FP_HP_ACTIVE: f->set_highpass_active(value != 0); break;
+			case FP_HP_F:      f->set_fh(u32(value + 0.5)); break;
+			case FP_HP_Q:      f->set_qh(float(value)); break;
+			case FP_LP_ACTIVE: f->set_lowpass_active(value != 0); break;
+			case FP_LP_F:      f->set_fl(u32(value + 0.5)); break;
+			case FP_LP_Q:      f->set_ql(float(value)); break;
+			}
+			break;
+		}
+		case audio_effect::COMPRESSOR:
+		{
+			auto *c = static_cast<audio_effect_compressor *>(eff);
+			switch (paramId)
+			{
+			case CP_MODE:          c->set_mode(u32(value)); break;
+			case CP_THRESHOLD:     c->set_threshold(float(value)); break;
+			case CP_RATIO:         c->set_ratio(float(value)); break;
+			case CP_ATTACK:        c->set_attack(float(value)); break;
+			case CP_RELEASE:       c->set_release(float(value)); break;
+			case CP_IN_GAIN:       c->set_input_gain(float(value)); break;
+			case CP_OUT_GAIN:      c->set_output_gain(float(value)); break;
+			case CP_CONVEXITY:     c->set_convexity(float(value)); break;
+			case CP_LINK:          c->set_channel_link(float(value)); break;
+			case CP_FEEDBACK:      c->set_feedback(float(value)); break;
+			case CP_INERTIA:       c->set_inertia(float(value)); break;
+			case CP_INERTIA_DECAY: c->set_inertia_decay(float(value)); break;
+			case CP_CEILING:       c->set_ceiling(float(value)); break;
+			}
+			break;
+		}
+		case audio_effect::EQ:
+		{
+			auto *q = static_cast<audio_effect_eq *>(eff);
+			if (paramId == 0)
+			{
+				q->set_mode(u32(value));
+			}
+			else
+			{
+				int const b = (paramId - 1) / 4;
+				int const sub = (paramId - 1) % 4;
+				switch (sub)
+				{
+				case 0: (b == 0) ? q->set_low_shelf(value != 0) : q->set_high_shelf(value != 0); break;
+				case 1: q->set_f(b, u32(value + 0.5)); break;
+				case 2: q->set_q(b, float(value)); break;
+				case 3: q->set_db(b, float(value)); break;
+				}
+			}
+			break;
+		}
+		case audio_effect::REVERB:
+		{
+			auto *r = static_cast<audio_effect_reverb *>(eff);
+			switch (paramId)
+			{
+			case RP_MODE:    r->set_mode(u32(value)); break;
+			case RP_PRESET:  r->load_preset(u32(value)); break;
+			case RP_DRY:     r->set_dry_level(value); break;
+			case RP_WIDTH:   r->set_stereo_width(value); break;
+			case RP_ERS:     r->set_early_room_size(value); break;
+			case RP_ETAP:    r->set_early_tap_setup(u32(value)); break;
+			case RP_EDAMP:   r->set_early_damping(value); break;
+			case RP_EL:      r->set_early_level(value); break;
+			case RP_E2L:     r->set_early_to_late_level(value); break;
+			case RP_LRS:     r->set_late_room_size(value); break;
+			case RP_LDAMP:   r->set_late_damping(value); break;
+			case RP_LPDELAY: r->set_late_predelay(value); break;
+			case RP_LDIFF:   r->set_late_diffusion(value); break;
+			case RP_LWANDER: r->set_late_wander(value); break;
+			case RP_LDECAY:  r->set_late_global_decay(float(value)); break;
+			case RP_LSPIN:   r->set_late_spin(value); break;
+			case RP_LL:      r->set_late_level(value); break;
+			}
+			break;
+		}
+		}
+		if (chain == 0xffff)
+			m_machine->sound().default_effect_changed(entry);
+		refresh_audio_effects();
+	}
+
+	void reset_effect_param(int chain, int entry, int paramId)
+	{
+		audio_effect *eff = effect_at(chain, entry);
+		if (!eff)
+			return;
+		switch (eff->type())
+		{
+		case audio_effect::FILTER:
+		{
+			auto *f = static_cast<audio_effect_filter *>(eff);
+			switch (paramId)
+			{
+			case FP_HP_ACTIVE: f->reset_highpass_active(); break;
+			case FP_HP_F:      f->reset_fh(); break;
+			case FP_HP_Q:      f->reset_qh(); break;
+			case FP_LP_ACTIVE: f->reset_lowpass_active(); break;
+			case FP_LP_F:      f->reset_fl(); break;
+			case FP_LP_Q:      f->reset_ql(); break;
+			}
+			break;
+		}
+		case audio_effect::COMPRESSOR:
+		{
+			auto *c = static_cast<audio_effect_compressor *>(eff);
+			switch (paramId)
+			{
+			case CP_MODE:          c->reset_mode(); break;
+			case CP_THRESHOLD:     c->reset_threshold(); break;
+			case CP_RATIO:         c->reset_ratio(); break;
+			case CP_ATTACK:        c->reset_attack(); break;
+			case CP_RELEASE:       c->reset_release(); break;
+			case CP_IN_GAIN:       c->reset_input_gain(); break;
+			case CP_OUT_GAIN:      c->reset_output_gain(); break;
+			case CP_CONVEXITY:     c->reset_convexity(); break;
+			case CP_LINK:          c->reset_channel_link(); break;
+			case CP_FEEDBACK:      c->reset_feedback(); break;
+			case CP_INERTIA:       c->reset_inertia(); break;
+			case CP_INERTIA_DECAY: c->reset_inertia_decay(); break;
+			case CP_CEILING:       c->reset_ceiling(); break;
+			}
+			break;
+		}
+		case audio_effect::EQ:
+		{
+			auto *q = static_cast<audio_effect_eq *>(eff);
+			if (paramId == 0)
+			{
+				q->reset_mode();
+			}
+			else
+			{
+				int const b = (paramId - 1) / 4;
+				int const sub = (paramId - 1) % 4;
+				switch (sub)
+				{
+				case 0: (b == 0) ? q->reset_low_shelf() : q->reset_high_shelf(); break;
+				case 1: q->reset_f(b); break;
+				case 2: q->reset_q(b); break;
+				case 3: q->reset_db(b); break;
+				}
+			}
+			break;
+		}
+		case audio_effect::REVERB:
+		{
+			auto *r = static_cast<audio_effect_reverb *>(eff);
+			switch (paramId)
+			{
+			case RP_MODE:    r->reset_mode(); break;
+			case RP_PRESET:  r->load_preset(r->default_preset()); break;
+			case RP_DRY:     r->reset_dry_level(); break;
+			case RP_WIDTH:   r->reset_stereo_width(); break;
+			case RP_ERS:     r->reset_early_room_size(); break;
+			case RP_ETAP:    r->reset_early_tap_setup(); break;
+			case RP_EDAMP:   r->reset_early_damping(); break;
+			case RP_EL:      r->reset_early_level(); break;
+			case RP_E2L:     r->reset_early_to_late_level(); break;
+			case RP_LRS:     r->reset_late_room_size(); break;
+			case RP_LDAMP:   r->reset_late_damping(); break;
+			case RP_LPDELAY: r->reset_late_predelay(); break;
+			case RP_LDIFF:   r->reset_late_diffusion(); break;
+			case RP_LWANDER: r->reset_late_wander(); break;
+			case RP_LDECAY:  r->reset_late_global_decay(); break;
+			case RP_LSPIN:   r->reset_late_spin(); break;
+			case RP_LL:      r->reset_late_level(); break;
+			}
+			break;
+		}
+		}
+		if (chain == 0xffff)
+			m_machine->sound().default_effect_changed(entry);
+		refresh_audio_effects();
+	}
+
+	void reset_effect(int chain, int entry)
+	{
+		audio_effect *eff = effect_at(chain, entry);
+		if (!eff)
+			return;
+		switch (eff->type())
+		{
+		case audio_effect::FILTER:     static_cast<audio_effect_filter *>(eff)->reset_all(); break;
+		case audio_effect::COMPRESSOR: static_cast<audio_effect_compressor *>(eff)->reset_all(); break;
+		case audio_effect::EQ:         static_cast<audio_effect_eq *>(eff)->reset_all(); break;
+		case audio_effect::REVERB:     static_cast<audio_effect_reverb *>(eff)->reset_all(); break;
+		}
+		if (chain == 0xffff)
+			m_machine->sound().default_effect_changed(entry);
+		refresh_audio_effects();
 	}
 
 	osd::qtui::EmbedSession &m_session;
