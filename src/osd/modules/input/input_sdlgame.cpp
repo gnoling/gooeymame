@@ -29,16 +29,20 @@
 #include "input_module.h"
 #include "modules/osdmodule.h"
 
+#include "assignmenthelper.h"   // joystick_assignment_helper (default-assignment builders)
 #include "input_common.h"
 
 #include "interface/inputcode.h"
 #include "interface/inputdev.h"
+#include "interface/inputseq.h"   // input_seq (assignment_vector element)
 #include "modules/lib/osdobj_common.h"
 
-#include "osdcore.h"   // osd_printf_*
+#include "inpttype.h"   // IPT_* ioport types
+#include "osdcore.h"    // osd_printf_*
 
 #include <SDL2/SDL.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -62,7 +66,10 @@ const sdlgame_axis_map s_axes[] = {
 	{ SDL_CONTROLLER_AXIS_TRIGGERRIGHT, ITEM_ID_SLIDER2, "RT",  true  },
 };
 
-// face/shoulder/stick/menu buttons → ITEM_ID_BUTTON1.. (in this order)
+// numbered buttons → ITEM_ID_BUTTON1.. (these auto-map to IPT_BUTTON1.. via
+// MAME's generic joystick defaults).  Start/Back get the dedicated ITEM_ID_START
+// / ITEM_ID_SELECT ids, and the d-pad gets hat ids — both handled in configure()
+// so MAME's per-device default assignments hook them to the right input types.
 struct sdlgame_button_map { SDL_GameControllerButton sdl; char const *name; };
 const sdlgame_button_map s_buttons[] = {
 	{ SDL_CONTROLLER_BUTTON_A,             "A" },
@@ -71,11 +78,9 @@ const sdlgame_button_map s_buttons[] = {
 	{ SDL_CONTROLLER_BUTTON_Y,             "Y" },
 	{ SDL_CONTROLLER_BUTTON_LEFTSHOULDER,  "LB" },
 	{ SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, "RB" },
-	{ SDL_CONTROLLER_BUTTON_BACK,          "Back" },
-	{ SDL_CONTROLLER_BUTTON_START,         "Start" },
-	{ SDL_CONTROLLER_BUTTON_GUIDE,         "Guide" },
 	{ SDL_CONTROLLER_BUTTON_LEFTSTICK,     "LSB" },
 	{ SDL_CONTROLLER_BUTTON_RIGHTSTICK,    "RSB" },
+	{ SDL_CONTROLLER_BUTTON_GUIDE,         "Guide" },
 };
 
 // d-pad → hat items
@@ -92,7 +97,7 @@ const sdlgame_hat_map s_hats[] = {
 //  sdlgame_device
 //============================================================
 
-class sdlgame_device : public device_info
+class sdlgame_device : public device_info, protected joystick_assignment_helper
 {
 public:
 	sdlgame_device(
@@ -156,10 +161,9 @@ public:
 			s32 const n = normalize_absolute_axis(v, -32'767, 32'767);
 			m_state.axes[a.sdl] = a.trigger ? -n : n;   // MAME wants negative for triggers
 		}
-		for (auto const &b : s_buttons)
-			m_state.buttons[b.sdl] = SDL_GameControllerGetButton(m_ctrl, b.sdl) ? 0x80 : 0x00;
-		for (auto const &h : s_hats)
-			m_state.buttons[h.sdl] = SDL_GameControllerGetButton(m_ctrl, h.sdl) ? 0x80 : 0x00;
+		// read every controller button (configure() decides which become items)
+		for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++)
+			m_state.buttons[b] = SDL_GameControllerGetButton(m_ctrl, SDL_GameControllerButton(b)) ? 0x80 : 0x00;
 	}
 
 	virtual void reset() override
@@ -169,15 +173,80 @@ public:
 
 	virtual void configure(input_device &device) override
 	{
+		// analog axes (sticks + triggers)
+		input_item_id axisitem[SDL_CONTROLLER_AXIS_MAX];
+		std::fill(std::begin(axisitem), std::end(axisitem), ITEM_ID_INVALID);
 		for (auto const &a : s_axes)
+		{
 			device.add_item(a.name, std::string_view(), a.item, generic_axis_get_state<s32>, &m_state.axes[a.sdl]);
+			axisitem[a.sdl] = a.item;
+		}
 
-		input_item_id button_item = ITEM_ID_BUTTON1;
+		// numbered buttons (auto-map to IPT_BUTTON1..)
+		input_item_id buttonitem[SDL_CONTROLLER_BUTTON_MAX];
+		std::fill(std::begin(buttonitem), std::end(buttonitem), ITEM_ID_INVALID);
+		input_item_id next = ITEM_ID_BUTTON1;
 		for (auto const &b : s_buttons)
-			device.add_item(b.name, std::string_view(), button_item++, generic_button_get_state<s32>, &m_state.buttons[b.sdl]);
+		{
+			device.add_item(b.name, std::string_view(), next, generic_button_get_state<s32>, &m_state.buttons[b.sdl]);
+			buttonitem[b.sdl] = next;
+			next = input_item_id(int(next) + 1);
+		}
 
+		// Start / Select get dedicated ids → hook to IPT_START / IPT_SELECT
+		device.add_item("Start", std::string_view(), ITEM_ID_START, generic_button_get_state<s32>, &m_state.buttons[SDL_CONTROLLER_BUTTON_START]);
+		buttonitem[SDL_CONTROLLER_BUTTON_START] = ITEM_ID_START;
+		device.add_item("Select", std::string_view(), ITEM_ID_SELECT, generic_button_get_state<s32>, &m_state.buttons[SDL_CONTROLLER_BUTTON_BACK]);
+		buttonitem[SDL_CONTROLLER_BUTTON_BACK] = ITEM_ID_SELECT;
+
+		// d-pad → hat switches
 		for (auto const &h : s_hats)
+		{
 			device.add_item(h.name, std::string_view(), h.item, generic_button_get_state<s32>, &m_state.buttons[h.sdl]);
+			buttonitem[h.sdl] = h.item;
+		}
+
+		// ---- default control assignments (so games auto-map sensibly) ----
+		input_device::assignment_vector assignments;
+
+		// primary movement: left stick + d-pad → joystick directions, UI navigation
+		// and the common analog controls (AD_STICK_X/Y, paddle, dial, …)
+		input_item_id diraxis[2][2];
+		choose_primary_stick(
+				diraxis,
+				axisitem[SDL_CONTROLLER_AXIS_LEFTX], axisitem[SDL_CONTROLLER_AXIS_LEFTY],
+				axisitem[SDL_CONTROLLER_AXIS_RIGHTX], axisitem[SDL_CONTROLLER_AXIS_RIGHTY]);
+		add_directional_assignments(
+				assignments,
+				diraxis[0][0], diraxis[0][1],
+				buttonitem[SDL_CONTROLLER_BUTTON_DPAD_LEFT], buttonitem[SDL_CONTROLLER_BUTTON_DPAD_RIGHT],
+				buttonitem[SDL_CONTROLLER_BUTTON_DPAD_UP], buttonitem[SDL_CONTROLLER_BUTTON_DPAD_DOWN]);
+
+		// dual-stick games: both analog sticks (or d-pad + face-button diamond)
+		add_twin_stick_assignments(
+				assignments,
+				axisitem[SDL_CONTROLLER_AXIS_LEFTX], axisitem[SDL_CONTROLLER_AXIS_LEFTY],
+				axisitem[SDL_CONTROLLER_AXIS_RIGHTX], axisitem[SDL_CONTROLLER_AXIS_RIGHTY],
+				buttonitem[SDL_CONTROLLER_BUTTON_DPAD_LEFT], buttonitem[SDL_CONTROLLER_BUTTON_DPAD_RIGHT],
+				buttonitem[SDL_CONTROLLER_BUTTON_DPAD_UP], buttonitem[SDL_CONTROLLER_BUTTON_DPAD_DOWN],
+				buttonitem[SDL_CONTROLLER_BUTTON_X], buttonitem[SDL_CONTROLLER_BUTTON_B],
+				buttonitem[SDL_CONTROLLER_BUTTON_Y], buttonitem[SDL_CONTROLLER_BUTTON_A]);
+
+		// analog throttle on the right stick; driving pedals on the triggers
+		// (accelerate = right trigger, brake = left trigger), shoulders as fallback
+		add_assignment(assignments, IPT_AD_STICK_Z, SEQ_TYPE_STANDARD, ITEM_CLASS_ABSOLUTE, ITEM_MODIFIER_NONE, { axisitem[SDL_CONTROLLER_AXIS_RIGHTY] });
+		if (!add_assignment(assignments, IPT_PEDAL,  SEQ_TYPE_STANDARD, ITEM_CLASS_ABSOLUTE, ITEM_MODIFIER_NEG, { axisitem[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] }))
+			add_button_assignment(assignments, IPT_PEDAL,  { buttonitem[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER] });
+		if (!add_assignment(assignments, IPT_PEDAL2, SEQ_TYPE_STANDARD, ITEM_CLASS_ABSOLUTE, ITEM_MODIFIER_NEG, { axisitem[SDL_CONTROLLER_AXIS_TRIGGERLEFT] }))
+			add_button_assignment(assignments, IPT_PEDAL2, { buttonitem[SDL_CONTROLLER_BUTTON_LEFTSHOULDER] });
+
+		// fixed-function buttons (Start, Select; Guide opens the menu; A confirms)
+		add_button_assignment(assignments, IPT_START,     { ITEM_ID_START });
+		add_button_assignment(assignments, IPT_SELECT,    { ITEM_ID_SELECT });
+		add_button_assignment(assignments, IPT_UI_MENU,   { buttonitem[SDL_CONTROLLER_BUTTON_GUIDE] });
+		add_button_assignment(assignments, IPT_UI_SELECT, { buttonitem[SDL_CONTROLLER_BUTTON_A] });
+
+		device.set_default_assignments(std::move(assignments));
 	}
 
 private:
