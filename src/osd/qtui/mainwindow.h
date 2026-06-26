@@ -137,8 +137,8 @@ private:
 	// which unlocks the shader chains).
 	enum NativeRenderer { RendererOpenGL = 0, RendererBgfx = 1 };
 
-	// Non-SDL audio backend for the Qt-native OSD.
-	enum SoundProvider { SoundPulse = 0, SoundPipewire = 1, SoundPortaudio = 2, SoundNone = 3 };
+	// Non-SDL audio backend for the Qt-native OSD: an index into the platform's
+	// kSoundProviders table (mainwindow.cpp), 0 = the platform default.
 
 	// Launch routing: all play goes through the Qt-native OSD.
 	void launchSystem(const QString &system, const QString &software);
@@ -285,7 +285,7 @@ private:
 	QString m_pendingShaderChain;                  // CLI --shader: applied once the BGFX chains publish
 	int m_nativeRenderer = RendererOpenGL;         // OpenGL vs BGFX for the Qt-native window
 	int m_bgfxBackend = 0;                          // 0=auto, 1=opengl, 2=vulkan (BGFX backend)
-	int m_soundProvider = SoundPulse;               // non-SDL audio backend
+	int m_soundProvider = 0;                        // index into kSoundProviders
 	QActionGroup *m_nativePlacementGroup = nullptr;
 	QActionGroup *m_nativeRendererGroup = nullptr;
 	QActionGroup *m_bgfxBackendGroup = nullptr;

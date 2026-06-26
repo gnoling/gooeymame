@@ -106,7 +106,9 @@ Rz          Rudder
 // lib/util
 #include "util/corestr.h"
 
-#ifdef SDLMAME_WIN32
+#if defined(OSD_QT_GL)
+#include "qtglprovider.h"   // qt_native_handle_provider (Qt-free, no SDL)
+#elif defined(SDLMAME_WIN32)
 #ifdef SDLMAME_SDL3
 #include <SDL3/SDL.h>
 #else
@@ -1260,6 +1262,9 @@ std::pair<Microsoft::WRL::ComPtr<IDirectInputDevice8>, LPCDIDATAFORMAT> dinput_a
 #if defined(OSD_WINDOWS)
 	auto const &window = dynamic_cast<win_window_info &>(*osd_common_t::window_list().front());
 	bool const standalone_window = !window.attached_mode();
+#elif defined(OSD_QT_GL)
+	// Qt-native window (no SDL): always a standalone window.
+	bool const standalone_window = true;
 #elif defined(SDLMAME_WIN32)
 	auto const &window = dynamic_cast<sdl_window_info &>(*osd_common_t::window_list().front());
 	bool const standalone_window = true;
@@ -1274,6 +1279,21 @@ std::pair<Microsoft::WRL::ComPtr<IDirectInputDevice8>, LPCDIDATAFORMAT> dinput_a
 	{
 #if defined(OSD_WINDOWS)
 		window_handle = window.platform_window();
+#elif defined(OSD_QT_GL)
+		// Qt-native window (no SDL): HWND via the Qt-free provider hook.
+		window_handle = nullptr;
+		if (!osd_common_t::window_list().empty())
+		{
+			if (auto const *const prov = dynamic_cast<osd::qtui::qt_native_handle_provider const *>(osd_common_t::window_list().front().get()))
+			{
+				void *ndt = nullptr, *nwh = nullptr;
+				bool wl = false;
+				if (prov->native_handles(ndt, nwh, wl))
+					window_handle = static_cast<HWND>(nwh);
+			}
+		}
+		if (!window_handle)
+			return std::make_pair(nullptr, nullptr);
 #elif defined(SDLMAME_WIN32)
 		auto const sdlwindow = window.platform_window();
 #if SDL_VERSION_ATLEAST(3, 0, 0)

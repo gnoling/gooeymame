@@ -217,6 +217,35 @@ QList<int> captionIds(int mask)
 	return ids;
 }
 
+// Per-platform Qt-native audio backends: {menu label, MAME -sound provider}.
+// The first entry is the default.  (The chosen index is persisted in QSettings;
+// it's consistent per platform since a user runs one OS.)  The Qt-native OSD
+// links no SDL, so the SDL sound module is never offered here.
+struct SoundProviderInfo { const char *label; const char *prov; };
+#if defined(_WIN32)
+const SoundProviderInfo kSoundProviders[] = {
+	{ "WASAPI",        "wasapi" },
+	{ "XAudio2",       "xaudio2" },
+	{ "DirectSound",   "dsound" },
+	{ "PortAudio",     "portaudio" },
+	{ "None (silent)", "none" },
+};
+#elif defined(__APPLE__)
+const SoundProviderInfo kSoundProviders[] = {
+	{ "CoreAudio",     "coreaudio" },
+	{ "PortAudio",     "portaudio" },
+	{ "None (silent)", "none" },
+};
+#else
+const SoundProviderInfo kSoundProviders[] = {
+	{ "PulseAudio",    "pulse" },
+	{ "PipeWire",      "pipewire" },
+	{ "PortAudio",     "portaudio" },
+	{ "None (silent)", "none" },
+};
+#endif
+constexpr int kSoundProviderCount = int(sizeof(kSoundProviders) / sizeof(kSoundProviders[0]));
+
 } // anonymous namespace
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -757,7 +786,7 @@ void MainWindow::restoreSettings()
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
 	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
 	setBgfxBackend(settings.value(QStringLiteral("play/bgfxBackend"), 0).toInt());
-	setSoundProvider(settings.value(QStringLiteral("play/soundProvider"), int(SoundPulse)).toInt());
+	setSoundProvider(settings.value(QStringLiteral("play/soundProvider"), 0).toInt());
 
 	// Restore per-pane grid view state (group already ended, so use full keys).
 	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
@@ -1024,22 +1053,17 @@ void MainWindow::createMenus()
 		connect(act, &QAction::triggered, this, [this, b = choice.backend] { setBgfxBackend(b); });
 	}
 
-	// Audio backend for the Qt-native OSD (non-SDL).
+	// Audio backend for the Qt-native OSD (non-SDL); the choices are the audio
+	// providers available on this platform (kSoundProviders).
 	QMenu *soundMenu = viewMenu->addMenu(tr("Qt-native &Audio"));
 	m_soundProviderGroup = new QActionGroup(this);
-	struct { const char *label; int prov; } const sounds[] = {
-		{ "PulseAudio", SoundPulse },
-		{ "PipeWire", SoundPipewire },
-		{ "PortAudio", SoundPortaudio },
-		{ "None (silent)", SoundNone },
-	};
-	for (const auto &choice : sounds)
+	for (int i = 0; i < kSoundProviderCount; ++i)
 	{
-		QAction *act = soundMenu->addAction(tr(choice.label));
+		QAction *act = soundMenu->addAction(tr(kSoundProviders[i].label));
 		act->setCheckable(true);
-		act->setData(choice.prov);
+		act->setData(i);
 		m_soundProviderGroup->addAction(act);
-		connect(act, &QAction::triggered, this, [this, p = choice.prov] { setSoundProvider(p); });
+		connect(act, &QAction::triggered, this, [this, i] { setSoundProvider(i); });
 	}
 
 	// Machine-list filters: shared QActions used by both the View ▸ Filters
@@ -3208,22 +3232,18 @@ void MainWindow::setBgfxBackend(int backend)
 				act->setChecked(true);
 }
 
-// 0=pulse, 1=pipewire, 2=portaudio, 3=none
+// Index into the platform's kSoundProviders table → the MAME -sound value.
 static QString soundProviderName(int provider)
 {
-	switch (provider)
-	{
-	case 1:  return QStringLiteral("pipewire");
-	case 2:  return QStringLiteral("portaudio");
-	case 3:  return QStringLiteral("none");
-	default: return QStringLiteral("pulse");
-	}
+	if (provider < 0 || provider >= kSoundProviderCount)
+		provider = 0;
+	return QString::fromLatin1(kSoundProviders[provider].prov);
 }
 
 void MainWindow::setSoundProvider(int provider)
 {
-	if (provider < 0 || provider > 3)
-		provider = SoundPulse;
+	if (provider < 0 || provider >= kSoundProviderCount)
+		provider = 0;
 	m_soundProvider = provider;
 	QSettings().setValue(QStringLiteral("play/soundProvider"), provider);
 	if (m_soundProviderGroup)
