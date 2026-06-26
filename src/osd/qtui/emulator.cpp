@@ -125,10 +125,12 @@ void osd_set_aggressive_input_focus(bool aggressive_focus)
 //============================================================
 //  Clipboard
 //
-//  osd_get/set_clipboard_text are normally provided by osdlib_unix.cpp via SDL;
-//  the qtui build has no SDL, so define them here backed by a Qt-free hook that
-//  the front-end (mainwindow.cpp) populates with QClipboard access (marshalled
-//  to the GUI thread).  Until the hook is set (or off the qtui GUI), they no-op.
+//  On unix the SDL OSD provided osd_get/set_clipboard_text (osdlib_unix.cpp via
+//  SDL); the qtui build has no SDL, so define them here backed by a Qt-free hook
+//  the front-end (mainwindow.cpp) fills with QClipboard access (marshalled to
+//  the GUI thread).  On Windows osdlib_win32.cpp already provides a Win32 (SDL-
+//  free) clipboard, so we must NOT redefine the osd_* functions there — only the
+//  hook setter is compiled (harmlessly unused).
 //============================================================
 
 namespace {
@@ -146,6 +148,7 @@ void qtui_set_clipboard_hooks(
 	g_clipboard_set = std::move(set_text);
 }
 
+#ifndef _WIN32
 std::string osd_get_clipboard_text() noexcept
 {
 	try
@@ -181,6 +184,7 @@ std::error_condition osd_set_clipboard_text(std::string_view text) noexcept
 	}
 	return std::errc::io_error;
 }
+#endif // !_WIN32
 
 
 //============================================================

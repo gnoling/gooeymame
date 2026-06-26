@@ -113,6 +113,14 @@ bool qt_window_info::native_handles(void *&ndt, void *&nwh, bool &wayland) const
 	wayland = false;
 
 	QString const plat = QGuiApplication::platformName();
+#ifdef _WIN32
+	if (plat == QLatin1String("windows"))
+	{
+		// Windows: ndt = nullptr, nwh = HWND.  QWindow::winId() returns the HWND.
+		nwh = reinterpret_cast<void *>(std::uintptr_t(w->winId()));
+		return nwh != nullptr;
+	}
+#else
 	if (plat == QLatin1String("xcb"))
 	{
 		// X11: ndt = Display*, nwh = X11 Window (from winId()).
@@ -121,6 +129,7 @@ bool qt_window_info::native_handles(void *&ndt, void *&nwh, bool &wayland) const
 		nwh = reinterpret_cast<void *>(std::uintptr_t(w->winId()));
 		return ndt && nwh;
 	}
+#endif
 
 	// Wayland and others: not wired yet (BGFX needs wl_display/wl_surface).
 	return false;
