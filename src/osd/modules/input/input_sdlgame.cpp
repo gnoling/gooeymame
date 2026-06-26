@@ -209,6 +209,21 @@ public:
 		// ---- default control assignments (so games auto-map sensibly) ----
 		input_device::assignment_vector assignments;
 
+		// gameplay buttons → IPT_BUTTON1.. (face = 1-4, shoulders = 5-6, stick
+		// clicks = 7-8).  These must be assigned explicitly: a device that provides
+		// default assignments does NOT fall back to MAME's generic JOYCODE button
+		// defaults.  The Guide/PS button is the menu button, not a gameplay button.
+		{
+			int bc = 0;
+			for (auto const &b : s_buttons)
+			{
+				if (b.sdl == SDL_CONTROLLER_BUTTON_GUIDE)
+					continue;
+				add_button_assignment(assignments, ioport_type(IPT_BUTTON1 + bc), { buttonitem[b.sdl] });
+				++bc;
+			}
+		}
+
 		// primary movement: left stick + d-pad → joystick directions, UI navigation
 		// and the common analog controls (AD_STICK_X/Y, paddle, dial, …)
 		input_item_id diraxis[2][2];
