@@ -36,6 +36,11 @@ struct QtEmbedTarget
 	QWindow            *window = nullptr;
 	std::atomic<int>    width{ 0 };
 	std::atomic<int>    height{ 0 };
+	// Set true by the GUI thread when the QWindow first becomes exposed (its
+	// native surface exists).  The worker waits on this before binding a GL/BGFX
+	// context to the window — used by the lazy CLI-passthrough path, where the
+	// window is created mid-video_init() instead of pre-exposed by the GUI.
+	std::atomic<bool>   exposed{ false };
 
 	// Optional lazy surface factory (CLI passthrough).  When `window` is null and
 	// this is set, the OSD calls it from the worker thread at video_init() time to

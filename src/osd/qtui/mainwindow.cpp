@@ -477,7 +477,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 		case QEvent::Resize:
 		case QEvent::Expose:
 			if (m_nativeGlTarget)
+			{
 				updateNativeGlSize();
+				// Signal the worker (CLI lazy path) that the native surface now
+				// exists, so it may bind its GL/BGFX context.
+				if (m_nativeGlWindow->isExposed())
+					m_nativeGlTarget->exposed.store(true, std::memory_order_release);
+			}
 			break;
 		// Feed keyboard input to the Qt-native input module via the bus.
 		case QEvent::KeyPress:
@@ -3333,14 +3339,12 @@ bool MainWindow::createCliRenderWindow(osd::qtui::QtEmbedTarget *target)
 	osd::qtui::QtInputBus::instance().clear();
 	osd::qtui::QtInputBus::instance().setFocused(true);
 
-	// The worker's GL context will makeCurrent() against this window, so it must
-	// be exposed (native surface created) first.  We are inside a blocking-queued
-	// call (the main exec() loop is parked), so pump events here until it exposes.
-	for (int i = 0; i < 300 && !m_nativeGlWindow->isExposed(); ++i)
-		QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 10);
-
 	updateNativeGlSize();
-	return m_nativeGlWindow->isExposed();
+	// Return immediately: this runs in a blocking-queued call from the worker, so
+	// we must NOT spin the event loop here (the surface exposes only once the main
+	// exec() loop resumes).  The worker waits on target->exposed, which the
+	// eventFilter sets when the QWindow's Expose event arrives.
+	return true;
 }
 
 void MainWindow::launchSystem(const QString &system, const QString &software)

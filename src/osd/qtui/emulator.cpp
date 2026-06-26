@@ -60,6 +60,7 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>     // SEEK_SET / SEEK_CUR (cassette seek)
 #include <cstring>
 #include <filesystem>
@@ -67,6 +68,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 
 #include "osdepend.h"
@@ -1120,13 +1122,23 @@ public:
 	virtual bool video_init() override
 	{
 		// CLI passthrough: the GUI thread hasn't pre-created a render surface, so
-		// ask it to now (blocks until the QWindow is shown + exposed).  Only reached
-		// for invocations that actually run video — headless commands (-listxml,
-		// -validate, …) return before video_init(), so they create no window.
+		// ask it to now (creates + shows the QWindow on the GUI thread).  Only
+		// reached for invocations that actually run video — headless commands
+		// (-listxml, -validate, …) return before video_init(), so they create no
+		// window.  create_window() returns once the window is shown; we then wait
+		// (off the GUI thread, so its event loop runs freely and delivers the
+		// expose) for the native surface to exist before binding a GL/BGFX context.
 		if (!m_target.window && m_target.create_window)
 		{
 			if (!m_target.create_window())
 				return false;
+			for (int i = 0; i < 500 && !m_target.exposed.load(std::memory_order_acquire); ++i)
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			if (!m_target.exposed.load(std::memory_order_acquire))
+			{
+				osd_printf_error("qtui: render window was never exposed\n");
+				return false;
+			}
 		}
 
 		// Populate the bits of video_config the renderer/window read (replacing
