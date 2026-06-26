@@ -34,6 +34,16 @@ void qtui_init_process();
 // keeps clear of MAME core headers) can build the vector for CLI passthrough.
 std::vector<std::string> qtui_command_line(int argc, char **argv);
 
+// Install the clipboard accessors backing osd_get/set_clipboard_text (used by
+// the in-game natural-keyboard Paste, etc.).  The qtui build has no SDL, so the
+// front-end provides QClipboard-backed implementations here.  Both callbacks
+// may be invoked from the emulation worker thread, so the implementation must
+// marshal to the GUI thread itself.  get_text returns the clipboard text (or
+// ""); set_text returns true on success.
+void qtui_set_clipboard_hooks(
+		std::function<std::string ()> get_text,
+		std::function<bool (const std::string &)> set_text);
+
 // Run a command-line invocation (CLI passthrough) through the Qt-native OSD on
 // the CALLING thread (intended for a worker thread; the Qt event loop owns the
 // main thread).  `args` is the full argument vector (args[0] = program name);

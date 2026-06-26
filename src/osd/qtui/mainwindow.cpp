@@ -37,9 +37,11 @@
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
 #include <QtGui/QActionGroup>
+#include <QtGui/QClipboard>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPalette>
+#include <QtCore/QThread>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QtGui/QStyleHints>
 #endif
@@ -227,6 +229,34 @@ MainWindow::MainWindow(QWidget *parent) :
 	createWidgets();
 
 	updateStatusCount();
+
+	// Back osd_get/set_clipboard_text (in-game natural-keyboard Paste, etc.) with
+	// Qt's QClipboard.  These run on the emulation worker thread, but QClipboard
+	// is GUI-thread-only, so marshal there (directly if already on it).
+	qtui_set_clipboard_hooks(
+			[this] () -> std::string {
+				std::string result;
+				auto read = [&result] {
+					if (const QClipboard *const cb = QGuiApplication::clipboard())
+						result = cb->text().toStdString();
+				};
+				if (QThread::currentThread() == this->thread())
+					read();
+				else
+					QMetaObject::invokeMethod(this, read, Qt::BlockingQueuedConnection);
+				return result;
+			},
+			[this] (const std::string &text) -> bool {
+				auto write = [text] {
+					if (QClipboard *const cb = QGuiApplication::clipboard())
+						cb->setText(QString::fromStdString(text));
+				};
+				if (QThread::currentThread() == this->thread())
+					write();
+				else
+					QMetaObject::invokeMethod(this, write, Qt::BlockingQueuedConnection);
+				return true;
+			});
 
 	// Audit progress widgets live permanently in the status bar, hidden until
 	// an audit runs.

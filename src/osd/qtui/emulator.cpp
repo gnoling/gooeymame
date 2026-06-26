@@ -123,6 +123,67 @@ void osd_set_aggressive_input_focus(bool aggressive_focus)
 
 
 //============================================================
+//  Clipboard
+//
+//  osd_get/set_clipboard_text are normally provided by osdlib_unix.cpp via SDL;
+//  the qtui build has no SDL, so define them here backed by a Qt-free hook that
+//  the front-end (mainwindow.cpp) populates with QClipboard access (marshalled
+//  to the GUI thread).  Until the hook is set (or off the qtui GUI), they no-op.
+//============================================================
+
+namespace {
+std::mutex g_clipboard_mutex;
+std::function<std::string ()> g_clipboard_get;
+std::function<bool (const std::string &)> g_clipboard_set;
+}
+
+void qtui_set_clipboard_hooks(
+		std::function<std::string ()> get_text,
+		std::function<bool (const std::string &)> set_text)
+{
+	std::lock_guard<std::mutex> lock(g_clipboard_mutex);
+	g_clipboard_get = std::move(get_text);
+	g_clipboard_set = std::move(set_text);
+}
+
+std::string osd_get_clipboard_text() noexcept
+{
+	try
+	{
+		std::function<std::string ()> fn;
+		{
+			std::lock_guard<std::mutex> lock(g_clipboard_mutex);
+			fn = g_clipboard_get;
+		}
+		if (fn)
+			return fn();
+	}
+	catch (...)
+	{
+	}
+	return std::string();
+}
+
+std::error_condition osd_set_clipboard_text(std::string_view text) noexcept
+{
+	try
+	{
+		std::function<bool (const std::string &)> fn;
+		{
+			std::lock_guard<std::mutex> lock(g_clipboard_mutex);
+			fn = g_clipboard_set;
+		}
+		if (fn && fn(std::string(text)))
+			return std::error_condition();
+	}
+	catch (...)
+	{
+	}
+	return std::errc::io_error;
+}
+
+
+//============================================================
 //  Core serialisation
 //
 //  Building machine configurations (software enumeration, ROM auditing) is

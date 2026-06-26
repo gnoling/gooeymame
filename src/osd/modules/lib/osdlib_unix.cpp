@@ -143,9 +143,10 @@ std::pair<std::error_condition, unsigned> osd_get_cache_line_size() noexcept
 }
 
 
-// OSD_QT_GL (the qtui build) links no SDL; the Qt front-end manages the GUI
-// clipboard itself, so stub these like the Android build.
-#if defined(SDLMAME_ANDROID) || defined(OSD_QT_GL)
+#if defined(OSD_QT_GL)
+// The qtui build links no SDL and defines osd_get/set_clipboard_text in
+// src/osd/qtui/emulator.cpp, backed by Qt's QClipboard — nothing to define here.
+#elif defined(SDLMAME_ANDROID)
 std::string osd_get_clipboard_text() noexcept
 {
 	return std::string();
