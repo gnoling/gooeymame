@@ -13,6 +13,7 @@
 #include "emulator.h"
 #include "inputmapdialog.h"
 #include "audioeffectsdialog.h"
+#include "pluginmenudialog.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
 #include "familytreemodel.h"
@@ -1346,6 +1347,11 @@ void MainWindow::addInGameMenus(QMenuBar *bar)
 	info->addSeparator();
 	connect(info->addAction(tr("&History…")), &QAction::triggered, this,
 			[this] { showRunningHistory(); });
+
+	// Plugin Options: interactive Lua plugin menus (autofire, cheat finder, …),
+	// shown only when a plugin registered a menu.
+	QAction *plugins = relevant(info->addAction(tr("&Plugin Options…")), CapPlugins);
+	connect(plugins, &QAction::triggered, this, [this] { showPluginMenuDialog(); });
 }
 
 void MainWindow::rebuildMediaMenu(QMenu *menu)
@@ -2037,6 +2043,17 @@ void MainWindow::showInputMapDialog()
 	m_inputMapDialog->activateWindow();
 }
 
+void MainWindow::showPluginMenuDialog()
+{
+	if (!m_embedSession)
+		return;
+	if (!m_pluginMenuDialog)
+		m_pluginMenuDialog = new osd::qtui::PluginMenuDialog(m_embedSession.get(), this);
+	m_pluginMenuDialog->show();
+	m_pluginMenuDialog->raise();
+	m_pluginMenuDialog->activateWindow();
+}
+
 void MainWindow::showInfoText(const QString &title, const QString &text)
 {
 	QWidget *const owner = this;
@@ -2198,6 +2215,7 @@ void MainWindow::applyMenuRelevance(const EmbedCaps &caps)
 		case CapNaturalKeyboard: return caps.hasNaturalKeyboard;
 		case CapCheat:           return caps.cheatEnabled;
 		case CapInput:           return caps.hasNaturalKeyboard || caps.hasCrosshair;
+		case CapPlugins:         return caps.hasPlugins;
 		}
 		return true;
 	};
@@ -3609,6 +3627,12 @@ void MainWindow::onEmbeddedFinished(int exitCode)
 		m_audioEffectsDialog->close();
 		m_audioEffectsDialog->deleteLater();
 		m_audioEffectsDialog = nullptr;
+	}
+	if (m_pluginMenuDialog)
+	{
+		m_pluginMenuDialog->close();
+		m_pluginMenuDialog->deleteLater();
+		m_pluginMenuDialog = nullptr;
 	}
 
 	// Join the in-process emulation thread and tear down its bridge (no-op for

@@ -59,6 +59,7 @@ class GridView;
 class InfoLoader;
 class InputMapDialog;
 class AudioEffectsDialog;
+class PluginMenuDialog;
 class RepresentativeProxy;
 class SoftwareLoader;
 class SoftwareModel;
@@ -166,7 +167,7 @@ private:
 	// Capability keys for show/hide relevance gating (see applyMenuRelevance).
 	enum CapKey { CapDips, CapConfigs, CapBios, CapSlots, CapImages, CapTape,
 			CapNetwork, CapBarcode, CapCrosshair, CapSound, CapNaturalKeyboard,
-			CapCheat, CapInput /* natural keyboard OR crosshair */ };
+			CapCheat, CapInput /* natural keyboard OR crosshair */, CapPlugins };
 	void buildMachineMenu();
 	void addInGameMenus(QMenuBar *bar);          // add the in-game top-level menus to a bar (main + detached window)
 	void rebuildMediaMenu(QMenu *menu);          // (re)populate the Media submenu from the live image snapshot
@@ -184,6 +185,7 @@ private:
 	void showInfoText(const QString &title, const QString &text); // shared read-only Info dialog
 	void showInputMapDialog();                                    // in-game input remapping dialog
 	void showAudioEffectsDialog();                                // in-game audio effects editor
+	void showPluginMenuDialog();                                  // in-game Plugin Options menu
 	void showRunningHistory();                   // load + show the running game's history (async)
 	void applyMenuRelevance(const EmbedCaps &caps); // hide menus/submenus the running machine lacks
 	void setEmbedFullscreen(bool on);            // GUI-level fullscreen of the embedded game surface
@@ -311,6 +313,7 @@ private:
 	QDialog *m_infoDialog = nullptr;                // shared read-only Info dialog
 	osd::qtui::InputMapDialog *m_inputMapDialog = nullptr;  // in-game input remapping dialog
 	osd::qtui::AudioEffectsDialog *m_audioEffectsDialog = nullptr;  // in-game audio effects editor
+	osd::qtui::PluginMenuDialog *m_pluginMenuDialog = nullptr;  // in-game Plugin Options menu
 	QPlainTextEdit *m_infoTextView = nullptr;       // its text area
 	InfoLoader *m_embedInfoLoader = nullptr;        // async loader for the running game's History
 	quint64 m_embedInfoEpoch = 0;                   // discards stale History results

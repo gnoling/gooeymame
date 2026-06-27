@@ -44,6 +44,7 @@
 #include "imagedev/cassette.h"   // cassette_image_device (Tape Control menu)
 #include "machine/bcreader.h"    // barcode_reader_device (Barcode Reader menu)
 #include "cheat.h"         // cheat_manager / cheat_entry (Cheat menu)
+#include "luaengine.h"     // lua_engine get_menu/menu_populate/menu_callback (Plugin Options)
 #include "ui/ui.h"
 #include "ui/info.h"       // machine_info::game_info_string()/warnings_string()
 #include "ui/menuitem.h"   // ui::menu_item (slider list entries)
@@ -306,6 +307,11 @@ public:
 	// the keyboard nor the controller is ever polled, so the poller sees nothing.
 	bool capture_active() const { return m_seqPoll != nullptr; }
 
+	// True while an open plugin menu is polling for raw input (a "nokeys" overlay,
+	// e.g. autofire's Hotkey capture).  Like capture_active(), the OSD reports
+	// focus so device polling continues while the plugin dialog holds focus.
+	bool plugin_polling_active() const { return !m_pluginMenu.empty() && m_pluginState.nokeys; }
+
 	void init(running_machine &machine)
 	{
 		m_machine = &machine;
@@ -353,6 +359,7 @@ public:
 				refresh_cheats();
 				refresh_inputmap();
 				refresh_audio_effects();
+				refresh_plugin_menus();
 			}
 			// Re-publish the image snapshot a couple of times a second so the
 			// Media menu reflects reality: software/carts mount AFTER osd init(),
@@ -377,6 +384,10 @@ public:
 					refresh_cheats(); // reflects changes via MAME's own cheat menu
 				}
 			}
+			// A plugin menu that requested "idle" (e.g. cheatfind during a scan)
+			// expects a callback with no key each frame so it can advance and
+			// refresh its own contents; re-populate when it asks us to.
+			poll_plugin_idle();
 		}
 	}
 
@@ -648,6 +659,15 @@ private:
 				refresh_cheats();
 			}
 			break;
+		case EmbedCommand::PluginMenuOpen:
+			open_plugin_menu(a.sval);
+			break;
+		case EmbedCommand::PluginMenuEvent:
+			plugin_menu_event(a.ival, a.sval2);
+			break;
+		case EmbedCommand::PluginMenuClose:
+			close_plugin_menu();
+			break;
 		case EmbedCommand::InputCaptureStart:
 			start_capture(a.ival, a.value != 0);
 			break;
@@ -871,6 +891,8 @@ private:
 		c.hasNaturalKeyboard = (m_machine->natkeyboard().keyboard_count() != 0);
 		c.hasCrosshair = m_machine->crosshair().get_usage();
 		c.cheatEnabled = m_machine->options().cheat();
+		if (lua_engine *const lua = mame_machine_manager::instance()->lua())
+			c.hasPlugins = !lua->get_menu().empty();
 
 		// Device-presence flags (mirror menu_main::populate's conditions).
 		c.hasTape = (cassette_device_enumerator(m_machine->root_device()).first() != nullptr);
@@ -1173,6 +1195,154 @@ private:
 			out.entries.push_back(std::move(e));
 		}
 		m_session.publishCheats(std::move(out));
+	}
+
+	//------------------------------------------------------------------
+	//  Plugin Options (Lua-driven menus; mirrors ui/pluginopt.cpp)
+	//------------------------------------------------------------------
+
+	// Publish the static list of plugin menu names (once, at init).  Empty when
+	// no plugin registered a menu — the GUI hides the action in that case.
+	void refresh_plugin_menus()
+	{
+		lua_engine *const lua = mame_machine_manager::instance()->lua();
+		if (!lua)
+			return;
+		m_pluginState = osd::qtui::EmbedPluginState();
+		m_pluginState.menus = lua->get_menu();
+		m_pluginMenu.clear();
+		m_pluginNeedIdle = false;
+		m_session.publishPluginMenu(m_pluginState);
+	}
+
+	// Re-run the active menu's populate() callback and publish the item list.
+	void populate_plugin_menu()
+	{
+		lua_engine *const lua = mame_machine_manager::instance()->lua();
+		if (!lua || m_pluginMenu.empty())
+			return;
+
+		std::vector<std::tuple<std::string, std::string, std::string>> list;
+		std::string flags;
+		std::optional<long> const sel = lua->menu_populate(m_pluginMenu, list, flags);
+
+		m_pluginState.active = true;
+		m_pluginState.activeName = m_pluginMenu;
+		m_pluginState.items.clear();
+		for (auto &entry : list)
+		{
+			osd::qtui::EmbedPluginItem it;
+			it.text = std::get<0>(entry);
+			it.subtext = std::get<1>(entry);
+			if (it.text == "---")
+			{
+				it.separator = true;
+			}
+			else
+			{
+				// space-separated per-item flags (see menu_plugin_opt::populate)
+				std::string_view tf = std::get<2>(entry);
+				for (std::size_t s = tf.find_first_not_of(' '); s != std::string_view::npos; )
+				{
+					tf.remove_prefix(s);
+					auto const e = tf.find(' ');
+					std::string_view const flag = tf.substr(0, e);
+					tf.remove_prefix(flag.length());
+					s = tf.find_first_not_of(' ');
+					if (flag == "off")            it.disabled = true;
+					else if (flag == "l")         it.leftArrow = true;
+					else if (flag == "r")         it.rightArrow = true;
+					else if (flag == "lr")        it.leftArrow = it.rightArrow = true;
+					else if (flag == "invert")    it.invert = true;
+					else if (flag == "heading")   { it.heading = true; it.disabled = true; }
+				}
+			}
+			m_pluginState.items.push_back(std::move(it));
+		}
+		m_pluginState.selection = sel ? int(*sel) : 0;
+
+		// menu-wide flags: we only care about "nokeys" (suppress char entry) and
+		// "idle" (poll a no-key callback each frame).
+		m_pluginNeedIdle = false;
+		m_pluginState.nokeys = false;
+		std::string_view mf = flags;
+		for (std::size_t s = mf.find_first_not_of(' '); s != std::string_view::npos; )
+		{
+			mf.remove_prefix(s);
+			auto const e = mf.find(' ');
+			std::string_view const flag = mf.substr(0, e);
+			mf.remove_prefix(flag.length());
+			s = mf.find_first_not_of(' ');
+			if (flag == "nokeys")    { m_pluginState.nokeys = true; m_pluginNeedIdle = true; }
+			else if (flag == "idle") m_pluginNeedIdle = true;
+		}
+
+		m_session.publishPluginMenu(m_pluginState);
+	}
+
+	void open_plugin_menu(const std::string &name)
+	{
+		m_pluginMenu = name;
+		m_pluginLastIndex = 0;
+		populate_plugin_menu();
+	}
+
+	void close_plugin_menu()
+	{
+		m_pluginMenu.clear();
+		m_pluginNeedIdle = false;
+		m_pluginState.active = false;
+		m_pluginState.activeName.clear();
+		m_pluginState.items.clear();
+		m_pluginState.selection = 0;
+		m_pluginState.nokeys = false;
+		m_session.publishPluginMenu(m_pluginState);
+	}
+
+	// Forward a navigation/edit event to the active menu's callback.  "back" at
+	// the menu's own root (callback declines to repopulate) closes the menu.
+	void plugin_menu_event(int index, const std::string &key)
+	{
+		lua_engine *const lua = mame_machine_manager::instance()->lua();
+		if (!lua || m_pluginMenu.empty())
+			return;
+
+		// Remember the item the user acted on: an "idle" poller (e.g. autofire's
+		// Hotkey capture) needs the callback driven against the SAME item index,
+		// because the plugin routes the idle event by index and only the original
+		// content row reaches the polling branch.  populate() often returns a nil
+		// selection while polling, so we can't rely on m_pluginState.selection.
+		m_pluginLastIndex = index;
+
+		auto const result = lua->menu_callback(m_pluginMenu, index, key);
+		if (result.second)
+			m_pluginState.selection = m_pluginLastIndex = int(uintptr_t(*result.second));
+
+		if (key == "back" && !result.first)
+		{
+			close_plugin_menu();
+			return;
+		}
+		if (result.first)
+			populate_plugin_menu();           // contents changed — re-read them
+		else
+			m_session.publishPluginMenu(m_pluginState); // just the selection moved
+	}
+
+	// Drive an "idle" plugin menu (cheatfind scans, autofire hotkey capture, …)
+	// one step per frame against the last item the user acted on.
+	void poll_plugin_idle()
+	{
+		if (m_pluginMenu.empty() || !m_pluginNeedIdle)
+			return;
+		lua_engine *const lua = mame_machine_manager::instance()->lua();
+		if (!lua)
+			return;
+		auto const result = lua->menu_callback(m_pluginMenu, m_pluginLastIndex, "");
+		if (result.second)
+			m_pluginState.selection = m_pluginLastIndex = int(uintptr_t(*result.second));
+		if (result.first)
+			populate_plugin_menu();
 	}
 
 	//------------------------------------------------------------------
@@ -1791,6 +1961,12 @@ private:
 	std::vector<InputTarget> m_inputTargets;
 	std::unique_ptr<input_sequence_poller> m_seqPoll;
 	int m_captureIndex = -1;
+
+	// plugin options
+	std::string m_pluginMenu;       // active plugin menu name ("" = none open)
+	bool m_pluginNeedIdle = false;  // active menu wants a no-key callback each frame
+	int m_pluginLastIndex = 0;      // last item index acted on (drives idle pollers)
+	osd::qtui::EmbedPluginState m_pluginState;
 };
 
 
@@ -1835,11 +2011,13 @@ public:
 	virtual void check_osd_inputs() override { }
 
 	// Focus comes from the Qt render window (the bus); gates input polling.
-	// Force focus while an input-remap capture is active so device polling keeps
-	// running even though the remap dialog holds the keyboard focus.
+	// Force focus while an input-remap capture OR a plugin-menu input poller (e.g.
+	// the autofire Hotkey assignment) is active, so device polling keeps running
+	// even though the remap/plugin dialog holds the keyboard focus.
 	virtual bool has_focus() const override
 	{
-		return osd::qtui::QtInputBus::instance().focused() || m_ctrl.capture_active();
+		return osd::qtui::QtInputBus::instance().focused()
+				|| m_ctrl.capture_active() || m_ctrl.plugin_polling_active();
 	}
 
 	virtual bool video_init() override

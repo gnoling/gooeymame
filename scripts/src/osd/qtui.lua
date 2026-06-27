@@ -448,12 +448,16 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/modules/render",
 		MAME_DIR .. "3rdparty",
 		MAME_DIR .. "3rdparty/zlib",
+		MAME_DIR .. "3rdparty/sol2",   -- luaengine.h (Plugin Options menu) pulls in sol/sol.hpp
 		MAME_DIR .. "src/osd/sdl",
 		MAME_DIR .. "src/osd/qtui",
 		MAME_DIR .. "src/frontend",
 		MAME_DIR .. "src/frontend/mame",
 		MAME_DIR .. "generated/mame",
 		MAME_DIR .. "generated/mame/" .. _OPTIONS["subtarget"],
+	}
+	includedirs {
+		ext_includedir("lua"),   -- sol/sol.hpp -> lua.h (Plugin Options menu)
 	}
 
 	files {
@@ -492,6 +496,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/inputmapdialog.h",
 		MAME_DIR .. "src/osd/qtui/audioeffectsdialog.cpp",
 		MAME_DIR .. "src/osd/qtui/audioeffectsdialog.h",
+		MAME_DIR .. "src/osd/qtui/pluginmenudialog.cpp",
+		MAME_DIR .. "src/osd/qtui/pluginmenudialog.h",
 		MAME_DIR .. "src/osd/qtui/frontendpaths.cpp",
 		MAME_DIR .. "src/osd/qtui/frontendpaths.h",
 		MAME_DIR .. "src/osd/qtui/artworkpanel.cpp",
@@ -553,6 +559,7 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp",
 		GEN_DIR .. "osd/qtui/inputmapdialog.moc.cpp",
 		GEN_DIR .. "osd/qtui/audioeffectsdialog.moc.cpp",
+		GEN_DIR .. "osd/qtui/pluginmenudialog.moc.cpp",
 		GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp",
 		GEN_DIR .. "osd/qtui/artloader.moc.cpp",
 		GEN_DIR .. "osd/qtui/infoloader.moc.cpp",
@@ -584,6 +591,7 @@ project ("osd_" .. _OPTIONS["osd"])
 		{ MAME_DIR .. "src/osd/qtui/optionsdialog.h", GEN_DIR .. "osd/qtui/optionsdialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/inputmapdialog.h", GEN_DIR .. "osd/qtui/inputmapdialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/audioeffectsdialog.h", GEN_DIR .. "osd/qtui/audioeffectsdialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		{ MAME_DIR .. "src/osd/qtui/pluginmenudialog.h", GEN_DIR .. "osd/qtui/pluginmenudialog.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/artworkpanel.h", GEN_DIR .. "osd/qtui/artworkpanel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/artloader.h", GEN_DIR .. "osd/qtui/artloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/infoloader.h", GEN_DIR .. "osd/qtui/infoloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },

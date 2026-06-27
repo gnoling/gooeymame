@@ -74,6 +74,9 @@ enum class EmbedCommand
 	ResetEffect,      // mask = chain, value = effect entry — reset the whole effect to defaults
 	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
 	SetShaderChain,   // ival = BGFX effect/chain index for screen 0 (Qt-native BGFX renderer)
+	PluginMenuOpen,   // sval = plugin menu name — enter that Lua plugin menu
+	PluginMenuEvent,  // ival = 1-based item index, sval2 = event key ("select"/"left"/"right"/"back"/"clear"/<unichar>)
+	PluginMenuClose,  // leave the active plugin menu
 	Exit
 };
 
@@ -211,6 +214,32 @@ struct EmbedCrosshair
 	int mode = 2;          // 0 off / 1 on / 2 auto (CROSSHAIR_VISIBILITY_*)
 };
 
+// One row of a Lua plugin menu (mirrors ui/pluginopt.cpp's item-flag parsing).
+struct EmbedPluginItem
+{
+	std::string text;          // primary label
+	std::string subtext;       // value / secondary text (right column)
+	bool        separator = false; // a "---" divider (not selectable)
+	bool        heading = false;   // section heading (not selectable)
+	bool        disabled = false;  // greyed, not selectable ("off" flag)
+	bool        leftArrow = false; // adjustable left ("l"/"lr" flag)
+	bool        rightArrow = false;// adjustable right ("r"/"lr" flag)
+	bool        invert = false;    // de-emphasised ("invert" flag)
+};
+
+// Snapshot of the plugin-menu subsystem: the static list of available plugin
+// menus plus, when one is open, its current item list and selection.  Built on
+// the worker thread from mame_machine_manager::instance()->lua().
+struct EmbedPluginState
+{
+	std::vector<std::string>     menus;       // available plugin menu names (static per run)
+	bool                         active = false;   // a plugin menu is currently open
+	std::string                  activeName;  // its name (matches an entry in menus)
+	std::vector<EmbedPluginItem> items;       // current populate() result
+	int                          selection = 0;    // 1-based suggested selection (0 = none)
+	bool                         nokeys = false;   // menu suppresses key entry
+};
+
 // The cheat list (global enable + per-entry description/state).
 struct EmbedCheat
 {
@@ -296,6 +325,7 @@ struct EmbedCaps
 	bool hasNaturalKeyboard = false; // natural-keyboard capable (Paste / Emulated-Natural)
 	bool cheatEnabled = false;       // -cheat active
 	bool multiView = false;          // more than one render view
+	bool hasPlugins = false;         // any plugin registered an interactive menu
 	std::string swList;              // running software-list short name ("" if none)
 	std::string swShort;             // running software item short name ("" if none)
 
@@ -306,7 +336,8 @@ struct EmbedCaps
 			&& hasNetwork == o.hasNetwork && hasBarcode == o.hasBarcode
 			&& hasCrosshair == o.hasCrosshair && hasSound == o.hasSound
 			&& hasNaturalKeyboard == o.hasNaturalKeyboard && cheatEnabled == o.cheatEnabled
-			&& multiView == o.multiView && swList == o.swList && swShort == o.swShort;
+			&& multiView == o.multiView && hasPlugins == o.hasPlugins
+			&& swList == o.swList && swShort == o.swShort;
 	}
 	bool operator!=(const EmbedCaps &o) const { return !(*this == o); }
 };
@@ -559,6 +590,21 @@ public:
 	}
 	unsigned audioEffectsGeneration() const { return m_effectsGen.load(std::memory_order_relaxed); }
 
+	// Plugin-menu state (the static menu list at init; the open menu's items as
+	// the user navigates).  The generation counter lets the dialog refresh.
+	void publishPluginMenu(EmbedPluginState s)
+	{
+		std::lock_guard<std::mutex> lk(m_pluginMutex);
+		m_plugin = std::move(s);
+		m_pluginGen.fetch_add(1, std::memory_order_relaxed);
+	}
+	EmbedPluginState pluginMenuSnapshot() const
+	{
+		std::lock_guard<std::mutex> lk(m_pluginMutex);
+		return m_plugin;
+	}
+	unsigned pluginMenuGeneration() const { return m_pluginGen.load(std::memory_order_relaxed); }
+
 	// Live input-capture state (published each frame while capturing).
 	void publishCapture(EmbedCapture c)
 	{
@@ -634,6 +680,10 @@ private:
 	mutable std::mutex m_effectMutex;
 	std::vector<EmbedEffect> m_effects;
 	std::atomic<unsigned> m_effectsGen{0};
+
+	mutable std::mutex m_pluginMutex;
+	EmbedPluginState m_plugin;
+	std::atomic<unsigned> m_pluginGen{0};
 };
 
 } // namespace osd::qtui
