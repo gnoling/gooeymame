@@ -171,10 +171,53 @@ static void applyColorSchemeName(const QString &scheme)
 		g_defaultPalette = QApplication::palette();
 		g_defaultPaletteCaptured = true;
 	}
-	if (scheme.compare(QLatin1String("dark"), Qt::CaseInsensitive) == 0)
+	bool const dark = scheme.compare(QLatin1String("dark"), Qt::CaseInsensitive) == 0;
+
+	// Some native styles (the Windows and macOS families) ignore QPalette, so the
+	// dark palette below would have no visible effect under them.  When dark is
+	// requested while such a style is active, pair it with Fusion (which honours
+	// QPalette) and restore the user's chosen style when leaving dark.  Styles
+	// that already honour the palette (Fusion, Breeze, …) are left untouched, so
+	// this is a no-op on a typical Linux desktop.  (Qt 6.8+ uses setColorScheme.)
+	static bool s_styleForcedForDark = false;
+	auto const styleIgnoresPalette = [](const QString &n) {
+		static char const *const kIgnore[] = {
+			"windows", "windowsvista", "windowsxp", "windows11", "macos", "macintosh" };
+		for (char const *const s : kIgnore)
+			if (n.compare(QLatin1String(s), Qt::CaseInsensitive) == 0)
+				return true;
+		return false;
+	};
+
+	if (dark)
+	{
+		QStyle *const cur = QApplication::style();
+		if (cur && styleIgnoresPalette(cur->name()))
+		{
+			if (QStyle *const fusion = QStyleFactory::create(QStringLiteral("Fusion")))
+			{
+				QApplication::setStyle(fusion);   // takes ownership
+				s_styleForcedForDark = true;
+			}
+		}
 		QApplication::setPalette(darkPalette());
+	}
 	else
+	{
+		if (s_styleForcedForDark)
+		{
+			// Restore the user's explicit style (or the recorded platform default).
+			// NB: don't call applyPersistedStyle() here — it would re-capture the
+			// (currently Fusion) style as the default.
+			s_styleForcedForDark = false;
+			QString const saved = QSettings().value(QStringLiteral("appearance/style")).toString();
+			QString const target = saved.isEmpty() ? defaultStyleName() : saved;
+			if (!target.isEmpty())
+				if (QStyle *const s = QStyleFactory::create(target))
+					QApplication::setStyle(s);
+		}
 		QApplication::setPalette(g_defaultPalette);   // light/system share the baseline
+	}
 #endif
 }
 
@@ -385,8 +428,25 @@ MainWindow::MainWindow(QWidget *parent) :
 	restoreSettings();
 }
 
+// Read the ROM/hash search-path options that determine availability, joined
+// into one string for cheap before/after comparison around the Options dialog.
+static QString romSearchPathFingerprint()
+{
+	QString fp;
+	for (const auto &group : qtui_read_options())
+		for (const auto &opt : group.options)
+			if (opt.name == "rompath" || opt.name == "hashpath")
+				fp += QString::fromStdString(opt.name) + '=' +
+						QString::fromStdString(opt.value) + '\n';
+	return fp;
+}
+
 void MainWindow::openOptions()
 {
+	// Capture the ROM/hash paths before editing so we can tell whether the saved
+	// changes actually affect ROM availability (and thus invalidate the caches).
+	QString const pathsBefore = romSearchPathFingerprint();
+
 	OptionsDialog dialog(this);
 	if (dialog.exec() == QDialog::Accepted)
 	{
@@ -398,10 +458,25 @@ void MainWindow::openOptions()
 		applySoftwareThumbSource();
 		// Art-view image scaling may have changed.
 		m_artwork->reloadScaling();
-		// Path changes can affect availability; suggest a re-audit.
-		statusBar()->showMessage(
-				tr("Options saved. Use Tools ▸ Refresh ROM Availability to re-scan."),
-				6000);
+
+		// If the ROM/hash search paths changed, the cached machine + software
+		// availability is stale — invalidate and re-audit automatically (the same
+		// path as Tools ▸ Refresh ROM Availability) instead of asking the user to.
+		if (romSearchPathFingerprint() != pathsBefore
+				&& m_audit && !m_audit->isRunning()
+				&& m_softwareAudit && !m_softwareAudit->isRunning())
+		{
+			clearSoftwareCache();
+			if (m_auditAct)
+				m_auditAct->setEnabled(false);
+			m_audit->startAudit();
+			statusBar()->showMessage(
+					tr("ROM paths changed — re-scanning availability…"), 6000);
+		}
+		else
+		{
+			statusBar()->showMessage(tr("Options saved."), 4000);
+		}
 	}
 }
 

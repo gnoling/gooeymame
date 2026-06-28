@@ -7,15 +7,20 @@
 --
 --   Rules for building the cross-platform Qt front-end ("qtui") OSD.
 --
---   qtui is MAMEUI re-imagined as a portable Qt GUI.  It is built as an
---   integrated OSD target just like winui: a single executable that, when
---   invoked with a system on the command line, behaves exactly like SDLMAME
---   (it reuses the SDL OSD as its emulation backend), and when invoked with
---   no arguments shows the Qt browser front-end.  Launching a machine from
---   the GUI runs it in-process via emulator_info::start_frontend().
+--   qtui (branded "GooeyMAME") is MAMEUI re-imagined as a portable Qt GUI.
+--   It is built as an integrated OSD target just like winui: a single
+--   executable that shows the Qt browser front-end when invoked with no
+--   arguments and runs a machine when given one on the command line.  A
+--   launched machine runs in-process on a worker thread and renders into a
+--   QWindow embedded in the GUI.
 --
---   Modeled on sdl.lua -- the qtui OSD *is* the SDL OSD plus a Qt front-end
---   layer and a branching entry point (qtmain.cpp instead of sdlmain.cpp).
+--   The qtui OSD is a **Qt-native backend** (`qt_osd_interface : osd_common_t`,
+--   Phase 13/13f): MAME renders into a QWindow via OpenGL/BGFX and takes
+--   keyboard/mouse/lightgun/text input from Qt events -- there is NO SDL video,
+--   window, sound, or font.  The one remaining SDL tie is on Linux only: the
+--   SDL game-controller joystick module (input_sdlgame.cpp), kept by choice as
+--   the gamepad provider (gamecontroller only, no SDL video/window).  Windows
+--   is fully SDL-free (native winhybrid/xinput/dinput gamepads).
 ---------------------------------------------------------------------------
 
 dofile("modules.lua")
