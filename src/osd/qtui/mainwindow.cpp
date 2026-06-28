@@ -16,6 +16,7 @@
 #include "pluginmenudialog.h"
 #include "qtinput.h"          // Qt-native input bus (Phase 13b)
 #include "qtmonitors.h"       // Qt-native monitor snapshot (Phase 13c)
+#include "threadutil.h"       // low-priority background worker threads
 #include "familytreemodel.h"
 #include "foldertree.h"
 #include "frontendpaths.h"
@@ -37,6 +38,7 @@
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QEvent>
 #include <QtCore/QStandardPaths>
+#include <QtCore/QTextStream>
 #include <QtCore/QTimer>
 #include <QtGui/QAction>
 #include <QtGui/QActionGroup>
@@ -404,6 +406,13 @@ MainWindow::MainWindow(QWidget *parent) :
 		m_progressBar->setRange(0, total);
 		m_progressBar->setValue(audited);
 		statusBar()->showMessage(tr("Auditing software… %1 of %2").arg(audited).arg(total));
+		// Persist incrementally so a long sweep (or a cancel/quit partway) keeps
+		// what it has — the full software audit can take a very long time.
+		if (audited - m_softwareAvailSavedAt >= 250)
+		{
+			m_softwareAvailSavedAt = audited;
+			saveSoftwareCache();
+		}
 	});
 	connect(m_softwareAudit, &SoftwareAuditManager::finished, this, [this] {
 		m_progressBar->setVisible(false);
@@ -425,6 +434,7 @@ MainWindow::MainWindow(QWidget *parent) :
 	}
 
 	loadSoftwareCache();
+	loadScreenlessCache();
 	restoreSettings();
 }
 
@@ -833,6 +843,52 @@ void MainWindow::clearSoftwareCache()
 {
 	m_softwareAvail.clear();
 	QFile::remove(softwareCachePath());
+}
+
+QString MainWindow::screenlessCachePath() const
+{
+	QString const dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+	QDir().mkpath(dir);
+	return dir + QStringLiteral("/screenless.cache");
+}
+
+void MainWindow::loadScreenlessCache()
+{
+	QFile file(screenlessCachePath());
+	if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+		return;
+
+	QTextStream in(&file);
+	// First line: a stamp = system count when the cache was written.  If the
+	// build's system set changed, ignore the (possibly stale) cache and re-scan.
+	QString const stamp = in.readLine();
+	if (stamp.toInt() != m_model->rowCount())
+		return;
+
+	std::vector<std::pair<std::string, bool>> results;
+	while (!in.atEnd())
+	{
+		QString const line = in.readLine();
+		int const sep = line.lastIndexOf(QLatin1Char(' '));
+		if (sep <= 0)
+			continue;
+		results.emplace_back(line.left(sep).toStdString(), line.mid(sep + 1).toInt() != 0);
+	}
+	if (!results.empty())
+		m_model->applyScreenlessBatch(results);   // marks hasScreenlessData()
+}
+
+void MainWindow::saveScreenlessCache(const std::vector<std::pair<std::string, bool>> &results) const
+{
+	QFile file(screenlessCachePath());
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+		return;
+
+	QTextStream out(&file);
+	out << m_model->rowCount() << QLatin1Char('\n');
+	for (const auto &entry : results)
+		out << QString::fromStdString(entry.first) << QLatin1Char(' ')
+			<< (entry.second ? 1 : 0) << QLatin1Char('\n');
 }
 
 void MainWindow::restoreSettings()
@@ -1281,6 +1337,7 @@ void MainWindow::createMenus()
 		{
 			m_softwareAuditAct->setEnabled(false);
 			m_auditAct->setEnabled(false);
+			m_softwareAvailSavedAt = 0;
 			m_softwareAudit->startAudit();
 		}
 	});
@@ -3191,6 +3248,7 @@ void MainWindow::startScreenlessScan()
 
 	m_screenlessCancel.store(false, std::memory_order_relaxed);
 	m_screenlessThread = std::thread([this] {
+		osd::qtui::lower_current_thread_priority();
 		auto results = std::make_shared<std::vector<std::pair<std::string, bool>>>();
 		qtui_scan_screenless(
 				[&results](const std::string &name, bool screenless) {
@@ -3214,6 +3272,7 @@ void MainWindow::applyScreenlessResults(const std::vector<std::pair<std::string,
 		return;   // cancelled (app shutting down)
 
 	m_model->applyScreenlessBatch(results);
+	saveScreenlessCache(results);   // persist so the scan never repeats on this build
 	// Re-filter now that the verdicts exist, in case the filter is on.
 	if (m_actHideScreenless && m_actHideScreenless->isChecked())
 		invalidateMachineViews();

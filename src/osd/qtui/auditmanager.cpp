@@ -10,6 +10,7 @@
 
 #include "emulator.h"
 #include "gamelistmodel.h"
+#include "threadutil.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -113,6 +114,7 @@ void AuditManager::startAudit()
 	m_flushTimer->start();
 
 	m_thread = std::thread([this] {
+		osd::qtui::lower_current_thread_priority();
 		qtui_audit_all(
 				[this] (const std::string &name, int status) {
 					std::lock_guard<std::mutex> lk(m_mutex);

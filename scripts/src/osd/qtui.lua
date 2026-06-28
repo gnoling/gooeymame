@@ -516,6 +516,8 @@ project ("osd_" .. _OPTIONS["osd"])
 		MAME_DIR .. "src/osd/qtui/iconloader.cpp",
 		MAME_DIR .. "src/osd/qtui/thumbnailloader.cpp",
 		MAME_DIR .. "src/osd/qtui/thumbnailloader.h",
+		MAME_DIR .. "src/osd/qtui/threadutil.cpp",
+		MAME_DIR .. "src/osd/qtui/threadutil.h",
 		MAME_DIR .. "src/osd/qtui/gridview.cpp",
 		MAME_DIR .. "src/osd/qtui/gridview.h",
 		MAME_DIR .. "src/osd/qtui/regions.cpp",

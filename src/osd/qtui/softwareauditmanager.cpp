@@ -9,6 +9,7 @@
 #include "softwareauditmanager.h"
 
 #include "emulator.h"
+#include "threadutil.h"
 
 #include <QtCore/QTimer>
 
@@ -64,6 +65,7 @@ void SoftwareAuditManager::startAudit()
 	m_flushTimer->start();
 
 	m_thread = std::thread([this] {
+		osd::qtui::lower_current_thread_priority();
 		qtui_audit_all_software(
 				[this] (const std::string &system, const std::vector<int> &availability, bool hasSoftware) {
 					QVector<int> avail;

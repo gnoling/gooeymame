@@ -244,6 +244,14 @@ private:
 	void saveSoftwareCache() const;
 	void clearSoftwareCache();
 
+	// Persisted screenless verdicts (system short name -> has-no-screen).  The
+	// scan is expensive, and the result only changes with the MAME build, so it
+	// is cached to disk and reloaded at startup (stamped with the system count
+	// to invalidate across builds that add/remove systems).
+	QString screenlessCachePath() const;
+	void loadScreenlessCache();
+	void saveScreenlessCache(const std::vector<std::pair<std::string, bool>> &results) const;
+
 	// Short name of the currently selected system, or empty if none.
 	QString selectedSystem() const;
 
@@ -381,6 +389,7 @@ private:
 	QPushButton *m_cancelAuditButton = nullptr;
 
 	QHash<QString, QVector<int>> m_softwareAvail;   // system -> availability
+	int m_softwareAvailSavedAt = 0;                 // audited-count at last incremental cache save
 	QString m_softwareLoadSystem;                   // system of the active load
 
 	// Software selection to restore once its list loads after a session restore
