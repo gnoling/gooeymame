@@ -54,7 +54,8 @@ int qtui_run_args_native(
 		std::vector<std::string> &args,
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
-		const std::string &soundProvider);
+		const std::string &soundProvider,
+		const std::string &joystickProvider); // "" = per-platform default (winhybrid/sdlgame)
 
 // Phase 13 (Qt-native OSD): run `system` (+ optional `software`) rendering into
 // the QWindow carried by `target`, using a Qt-native OSD window + OpenGL context
@@ -67,8 +68,9 @@ int qtui_run_embedded_native(
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
 		bool useBgfx,
-		const std::string &bgfxBackend,    // "" / "auto" = let BGFX choose
-		const std::string &soundProvider); // non-SDL audio: pulse/pipewire/portaudio/none
+		const std::string &bgfxBackend,     // "" / "auto" = let BGFX choose
+		const std::string &soundProvider,   // non-SDL audio: pulse/pipewire/portaudio/none
+		const std::string &joystickProvider); // "" = per-platform default (winhybrid/sdlgame)
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

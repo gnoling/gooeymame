@@ -689,12 +689,6 @@ private:
 		case EmbedCommand::ResetEffect:
 			reset_effect(int(a.mask), int(a.value));
 			break;
-		case EmbedCommand::RefocusInput:
-			// No-op: this was the SDL foreign-window (-attach_window) focus/grab
-			// dance for the SDL embed path.  The Qt-native window gets focus from
-			// Qt directly (the input bus), so nothing is needed here.  (The SDL
-			// embed path that relied on this is being retired.)
-			break;
 		case EmbedCommand::Exit:
 			m.schedule_exit();
 			break;
@@ -2099,7 +2093,8 @@ int qtui_run_embedded_native(
 		osd::qtui::EmbedSession &session,
 		bool useBgfx,
 		const std::string &bgfxBackend,
-		const std::string &soundProvider)
+		const std::string &soundProvider,
+		const std::string &joystickProvider)
 {
 	int res = 0;
 
@@ -2163,13 +2158,17 @@ int qtui_run_embedded_native(
 	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
 	args.push_back("-uifontprovider");
 	args.push_back("none");
-	// Gamepads (hybrid, like upstream MAME): native winhybrid on Windows, the
-	// SDL game-controller module on Linux (input_sdlgame.cpp).
+	// Gamepads: the View ▸ Qt-native Gamepad selection (joystickProvider) when set,
+	// else the per-platform default — native winhybrid (XInput + DirectInput) on
+	// Windows, the SDL game-controller module on Linux (input_sdlgame.cpp).
 	args.push_back("-joystickprovider");
+	if (!joystickProvider.empty())
+		args.push_back(joystickProvider);
+	else
 #if defined(_WIN32)
-	args.push_back("winhybrid");
+		args.push_back("winhybrid");
 #else
-	args.push_back("sdlgame");
+		args.push_back("sdlgame");
 #endif
 
 	{
@@ -2203,7 +2202,8 @@ int qtui_run_args_native(
 		std::vector<std::string> &args,
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
-		const std::string &soundProvider)
+		const std::string &soundProvider,
+		const std::string &joystickProvider)
 {
 	int res = 0;
 
@@ -2244,13 +2244,17 @@ int qtui_run_args_native(
 	args.push_back(soundProvider.empty() ? std::string("pulse") : soundProvider);
 	args.push_back("-uifontprovider");
 	args.push_back("none");
-	// Gamepads (hybrid, like upstream MAME): native winhybrid on Windows, the
-	// SDL game-controller module on Linux (input_sdlgame.cpp).
+	// Gamepads: the View ▸ Qt-native Gamepad selection (joystickProvider) when set,
+	// else the per-platform default — native winhybrid (XInput + DirectInput) on
+	// Windows, the SDL game-controller module on Linux (input_sdlgame.cpp).
 	args.push_back("-joystickprovider");
+	if (!joystickProvider.empty())
+		args.push_back(joystickProvider);
+	else
 #if defined(_WIN32)
-	args.push_back("winhybrid");
+		args.push_back("winhybrid");
 #else
-	args.push_back("sdlgame");
+		args.push_back("sdlgame");
 #endif
 
 	{

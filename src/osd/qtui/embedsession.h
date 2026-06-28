@@ -72,7 +72,6 @@ enum class EmbedCommand
 	SetEffectParam,   // mask = chain (0xffff=default), value = effect entry, ival = param id, dval = value
 	ResetEffectParam, // mask = chain, value = effect entry, ival = param id — restore param to default
 	ResetEffect,      // mask = chain, value = effect entry — reset the whole effect to defaults
-	RefocusInput,     // re-assert SDL/X input focus + pointer grab on the attached window (alt-tab return)
 	SetShaderChain,   // ival = BGFX effect/chain index for screen 0 (Qt-native BGFX renderer)
 	PluginMenuOpen,   // sval = plugin menu name — enter that Lua plugin menu
 	PluginMenuEvent,  // ival = 1-based item index, sval2 = event key ("select"/"left"/"right"/"back"/"clear"/<unichar>)

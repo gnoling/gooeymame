@@ -249,6 +249,28 @@ const SoundProviderInfo kSoundProviders[] = {
 #endif
 constexpr int kSoundProviderCount = int(sizeof(kSoundProviders) / sizeof(kSoundProviders[0]));
 
+// Per-platform Qt-native gamepad backends: {menu label, MAME -joystickprovider}.
+// The first entry is the default (persisted in QSettings).  Keyboard/mouse/lightgun
+// come from the Qt providers; only the joystick provider is offered here.  On
+// Windows winhybrid = XInput (Xbox-class pads) + DirectInput (everything else);
+// pure xinput is window-independent and exists as a fallback.  On Linux the SDL
+// game-controller module (gamecontroller only, no SDL video) is the joystick path.
+struct JoystickProviderInfo { const char *label; const char *prov; };
+#if defined(_WIN32)
+const JoystickProviderInfo kJoystickProviders[] = {
+	{ "Hybrid (XInput + DirectInput)", "winhybrid" },
+	{ "XInput only",                   "xinput" },
+	{ "DirectInput only",              "dinput" },
+	{ "None",                          "none" },
+};
+#else
+const JoystickProviderInfo kJoystickProviders[] = {
+	{ "SDL Game Controller", "sdlgame" },
+	{ "None",                "none" },
+};
+#endif
+constexpr int kJoystickProviderCount = int(sizeof(kJoystickProviders) / sizeof(kJoystickProviders[0]));
+
 } // anonymous namespace
 
 MainWindow::MainWindow(QWidget *parent) :
@@ -790,6 +812,7 @@ void MainWindow::restoreSettings()
 	setNativeRenderer(settings.value(QStringLiteral("play/nativeRenderer"), int(RendererOpenGL)).toInt());
 	setBgfxBackend(settings.value(QStringLiteral("play/bgfxBackend"), 0).toInt());
 	setSoundProvider(settings.value(QStringLiteral("play/soundProvider"), 0).toInt());
+	setJoystickProvider(settings.value(QStringLiteral("play/joystickProvider"), 0).toInt());
 
 	// Restore per-pane grid view state (group already ended, so use full keys).
 	m_gridSize->setValue(settings.value(QStringLiteral("view/machineThumb"), 128).toInt());
@@ -1067,6 +1090,19 @@ void MainWindow::createMenus()
 		act->setData(i);
 		m_soundProviderGroup->addAction(act);
 		connect(act, &QAction::triggered, this, [this, i] { setSoundProvider(i); });
+	}
+
+	// Gamepad backend for the Qt-native OSD; the choices are the joystick
+	// providers available on this platform (kJoystickProviders).
+	QMenu *padMenu = viewMenu->addMenu(tr("Qt-native &Gamepad"));
+	m_joystickProviderGroup = new QActionGroup(this);
+	for (int i = 0; i < kJoystickProviderCount; ++i)
+	{
+		QAction *act = padMenu->addAction(tr(kJoystickProviders[i].label));
+		act->setCheckable(true);
+		act->setData(i);
+		m_joystickProviderGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, i] { setJoystickProvider(i); });
 	}
 
 	// Machine-list filters: shared QActions used by both the View ▸ Filters
@@ -3310,6 +3346,26 @@ void MainWindow::setSoundProvider(int provider)
 				act->setChecked(true);
 }
 
+// Index into the platform's kJoystickProviders table → the MAME -joystickprovider value.
+static QString joystickProviderName(int provider)
+{
+	if (provider < 0 || provider >= kJoystickProviderCount)
+		provider = 0;
+	return QString::fromLatin1(kJoystickProviders[provider].prov);
+}
+
+void MainWindow::setJoystickProvider(int provider)
+{
+	if (provider < 0 || provider >= kJoystickProviderCount)
+		provider = 0;
+	m_joystickProvider = provider;
+	QSettings().setValue(QStringLiteral("play/joystickProvider"), provider);
+	if (m_joystickProviderGroup)
+		for (QAction *act : m_joystickProviderGroup->actions())
+			if (act->data().toInt() == provider)
+				act->setChecked(true);
+}
+
 void MainWindow::returnFromEmbed()
 {
 	// Restore the browser after a Qt-native run: leave fullscreen first (restores
@@ -3391,10 +3447,11 @@ void MainWindow::runCliPassthrough(const std::vector<std::string> &args)
 	};
 
 	std::string const sound = soundProviderName(m_soundProvider).toStdString();
+	std::string const joystick = joystickProviderName(m_joystickProvider).toStdString();
 	std::vector<std::string> argv = args;
 	EmbedSession *const session = m_embedSession.get();
-	m_embedThread = std::thread([this, argv, target, session, sound]() mutable {
-		int const code = qtui_run_args_native(argv, target, *session, sound);
+	m_embedThread = std::thread([this, argv, target, session, sound, joystick]() mutable {
+		int const code = qtui_run_args_native(argv, target, *session, sound, joystick);
 		QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 	});
 }
@@ -3505,6 +3562,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 			|| qEnvironmentVariableIsSet("GOOEY_QT_BGFX");
 	std::string const bgfxBackend = bgfxBackendName(m_bgfxBackend).toStdString();
 	std::string const soundProvider = soundProviderName(m_soundProvider).toStdString();
+	std::string const joystickProvider = joystickProviderName(m_joystickProvider).toStdString();
 
 	// Capture desktop monitor geometry on the GUI thread for the Qt-native
 	// monitor module (which initialises on the worker thread and can't touch
@@ -3585,7 +3643,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// spawning the emulation thread.
 	auto *const attempts = new int(0);
 	auto spawnPtr = std::make_shared<std::function<void()>>();
-	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend, soundProvider]() {
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend, soundProvider, joystickProvider]() {
 		if (!m_nativeGlWindow || !m_nativeGlTarget)
 		{
 			delete attempts;
@@ -3605,8 +3663,8 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
 		if (!session || !target)
 			return;
-		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend, soundProvider] {
-			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend, soundProvider);
+		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend, soundProvider, joystickProvider] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend, soundProvider, joystickProvider);
 			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 		});
 	};

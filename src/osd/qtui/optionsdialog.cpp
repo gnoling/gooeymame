@@ -167,12 +167,18 @@ const OptionChoices kOptionChoices[] =
 {
 	{ "video",            "auto,opengl,bgfx,accel,soft,none" },
 	{ "bgfx_backend",     "auto,opengl,gles,vulkan,metal,d3d9,d3d11,d3d12" },
-	{ "sound",            "auto,sdl,portaudio,pipewire,none" },
-	{ "keyboardprovider", "auto,sdl,x11,none" },
-	{ "mouseprovider",    "auto,sdl,x11,none" },
-	{ "lightgunprovider", "auto,sdl,x11,none" },
-	{ "joystickprovider", "auto,sdl,sdlgame,none" },
-	{ "monitorprovider",  "auto,sdl,x11" },
+	// The Qt-native OSD links no SDL: keyboard/mouse/lightgun/monitor come from
+	// the "qt" provider and sound from a platform backend, so the old sdl/x11
+	// choices are dropped here.  These combos are editable, so platform-specific
+	// values not listed (e.g. coreaudio) can still be typed.  The Qt-native launch
+	// also force-overrides these for play (see emulator.cpp); the joystick provider
+	// is chosen via View ▸ Qt-native Gamepad.
+	{ "sound",            "auto,pulse,pipewire,portaudio,wasapi,xaudio2,dsound,coreaudio,none" },
+	{ "keyboardprovider", "auto,qt,none" },
+	{ "mouseprovider",    "auto,qt,none" },
+	{ "lightgunprovider", "auto,qt,none" },
+	{ "joystickprovider", "auto,winhybrid,xinput,dinput,sdlgame,none" },
+	{ "monitorprovider",  "auto,qt" },
 	{ "debugger",         "auto,none,qt,gdbstub,imgui" },
 	{ "output",           "auto,none,console,network" },
 	{ "uimodekey",        "auto" },

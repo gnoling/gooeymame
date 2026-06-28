@@ -156,6 +156,7 @@ private:
 	void setNativeRenderer(int renderer);     // OpenGL vs BGFX for the Qt-native window
 	void setBgfxBackend(int backend);         // Auto/OpenGL/Vulkan for the BGFX renderer
 	void setSoundProvider(int provider);      // non-SDL audio for the Qt-native OSD
+	void setJoystickProvider(int provider);   // gamepad backend for the Qt-native OSD
 	void updateNativeGlSize();   // publish the QWindow's device-pixel size to the worker
 	// Stop a running embedded game without quitting.
 	void stopEmbedded();
@@ -292,10 +293,12 @@ private:
 	int m_nativeRenderer = RendererOpenGL;         // OpenGL vs BGFX for the Qt-native window
 	int m_bgfxBackend = 0;                          // 0=auto, 1=opengl, 2=vulkan (BGFX backend)
 	int m_soundProvider = 0;                        // index into kSoundProviders
+	int m_joystickProvider = 0;                     // index into kJoystickProviders
 	QActionGroup *m_nativePlacementGroup = nullptr;
 	QActionGroup *m_nativeRendererGroup = nullptr;
 	QActionGroup *m_bgfxBackendGroup = nullptr;
 	QActionGroup *m_soundProviderGroup = nullptr;
+	QActionGroup *m_joystickProviderGroup = nullptr;
 	QList<QMenu *> m_machineMenus;                  // in-game top-level menus (both bars), shown only while embedded
 	QList<QAction *> m_machineActions;              // all control actions (both bars), for enable/disable
 	std::vector<std::pair<QAction *, int>> m_relevanceActions; // (menu/submenu action, CapKey) hidden when the machine lacks it
