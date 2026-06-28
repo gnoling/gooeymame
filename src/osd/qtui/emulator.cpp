@@ -59,6 +59,7 @@
 #include "audio_effects/reverb.h"         // audio_effect_reverb
 
 #include "drivenum.h"
+#include "screen.h"   // screen_device_enumerator (screenless detection)
 #include "rendlay.h"   // layout_view visibility toggles (bezel/artwork)
 #include "softlist_dev.h"
 #include "softlist.h"
@@ -3110,5 +3111,51 @@ void qtui_audit_all_software(
 		// Reported for every system (even those without software) so the
 		// caller's progress can reach the total.
 		on_system(name, availability, has_software);
+	}
+}
+
+void qtui_scan_screenless(
+		const std::function<void (const std::string &, bool)> &progress,
+		const std::atomic<bool> &cancel)
+{
+	// One options set / enumerator for the whole sweep; the enumerator caches
+	// machine configurations as it advances.
+	qt_options options;
+	{
+		core_guard guard;
+		std::ostringstream errors;
+		mame_options::parse_standard_inis(options, errors);
+	}
+
+	driver_enumerator drivlist(options);
+
+	while (!cancel.load(std::memory_order_relaxed))
+	{
+		std::string name;
+		bool screenless = false;
+
+		{
+			// Hold the core only for the per-driver work, releasing between
+			// systems so other on-demand core access stays responsive.
+			core_guard guard;
+			if (!drivlist.next())
+				break;
+
+			name = drivlist.driver().name;
+			try
+			{
+				// config() instantiates (and caches) the driver's device tree.
+				machine_config const &config = *drivlist.config();
+				screenless = (screen_device_enumerator(config.root_device()).first() == nullptr);
+			}
+			catch (...)
+			{
+				// A driver that fails to instantiate has no usable verdict; skip
+				// it (it stays ScreenlessUnknown and is never hidden).
+				continue;
+			}
+		}
+
+		progress(name, screenless);
 	}
 }

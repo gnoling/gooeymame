@@ -80,8 +80,17 @@ public:
 		// canonical region inferred from the description ("" if none)
 		RegionRole,
 		// VersionFlag bitmask (bootleg/hack/prototype)
-		VersionFlagsRole
+		VersionFlagsRole,
+		// true if the system has mechanical parts (MACHINE_MECHANICAL)
+		IsMechanicalRole,
+		// screenless state (one of GameListModel::Screenless); requires a
+		// background scan, so it is ScreenlessUnknown until that completes
+		IsScreenlessRole
 	};
+
+	// Whether a system has any screen device.  Determining this needs a
+	// machine_config, so it is filled in lazily by a background scan.
+	enum Screenless { ScreenlessUnknown = -1, HasScreen = 0, NoScreen = 1 };
 
 	// ROM availability of a system, as determined by the auditor.
 	enum Availability
@@ -115,6 +124,13 @@ public:
 	// Apply a batch of availability results keyed by system short name
 	// (from the auditor or the cache).  Unknown names are ignored.
 	void applyAvailabilityBatch(const QVector<QPair<QString, int>> &results);
+
+	// Apply screenless scan results keyed by system short name (true = no
+	// screen).  Unknown names are ignored.  Marks the model as having a
+	// screenless verdict so IsScreenlessRole returns NoScreen/HasScreen.
+	void applyScreenlessBatch(const std::vector<std::pair<std::string, bool>> &results);
+	// Whether the one-time screenless scan has populated any verdicts.
+	bool hasScreenlessData() const { return m_screenlessScanned; }
 
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
@@ -162,6 +178,11 @@ private:
 
 	// Per-row ROM availability (Availability), default AvailabilityUnknown.
 	std::vector<std::int8_t> m_availability;
+
+	// Per-row screenless verdict (Screenless), default ScreenlessUnknown until
+	// the background scan fills it in.
+	std::vector<std::int8_t> m_screenless;
+	bool m_screenlessScanned = false;
 
 	// Short name -> row, for applying availability results by name.
 	QHash<QString, int> m_nameToRow;

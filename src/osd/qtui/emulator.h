@@ -207,4 +207,12 @@ void qtui_audit_all_software(
 		const std::function<void (const std::string &, const std::vector<int> &, bool)> &on_system,
 		const std::atomic<bool> &cancel);
 
+// Determine which systems are screenless (have no screen device).  Builds each
+// machine configuration — expensive — so it runs once on a worker thread,
+// invoking progress(shortname, screenless) per system.  Aborts promptly when
+// cancel becomes true.  Serialised with the other core sweeps via the core lock.
+void qtui_scan_screenless(
+		const std::function<void (const std::string &, bool)> &progress,
+		const std::atomic<bool> &cancel);
+
 #endif // MAME_OSD_QTUI_EMULATOR_H

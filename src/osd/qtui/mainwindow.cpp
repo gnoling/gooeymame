@@ -913,7 +913,8 @@ void MainWindow::restoreSettings()
 	// then apply once.
 	QAction *const filterActs[] = {
 		m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable,
-		m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes };
+		m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
+		m_actHideMechanical, m_actHideScreenless };
 	for (QAction *act : filterActs)
 		act->blockSignals(true);
 	m_actWorking->setChecked(settings.value(QStringLiteral("filters/working"), false).toBool());
@@ -924,6 +925,8 @@ void MainWindow::restoreSettings()
 	m_actHideBootlegs->setChecked(settings.value(QStringLiteral("filters/hideBootlegs"), false).toBool());
 	m_actHideHacks->setChecked(settings.value(QStringLiteral("filters/hideHacks"), false).toBool());
 	m_actHidePrototypes->setChecked(settings.value(QStringLiteral("filters/hidePrototypes"), false).toBool());
+	m_actHideMechanical->setChecked(settings.value(QStringLiteral("filters/hideMechanical"), false).toBool());
+	m_actHideScreenless->setChecked(settings.value(QStringLiteral("filters/hideScreenless"), false).toBool());
 	for (QAction *act : filterActs)
 		act->blockSignals(false);
 	onStatusFilterChanged();
@@ -969,6 +972,13 @@ MainWindow::~MainWindow()
 		if (m_embedSession)
 			m_embedSession->post({ EmbedCommand::Exit, 0.0, 0, {} });
 		m_embedThread.join();
+	}
+
+	// The screenless scan captures `this`; cancel + join it before we're gone.
+	if (m_screenlessThread.joinable())
+	{
+		m_screenlessCancel.store(true, std::memory_order_relaxed);
+		m_screenlessThread.join();
 	}
 }
 
@@ -1196,12 +1206,15 @@ void MainWindow::createMenus()
 	m_actHideBootlegs = makeFilterAction(tr("Hide bootlegs"), tr("Hide bootleg sets"));
 	m_actHideHacks = makeFilterAction(tr("Hide hacks && homebrew"), tr("Hide hacks and unofficial/homebrew sets"));
 	m_actHidePrototypes = makeFilterAction(tr("Hide prototypes"), tr("Hide prototype/incomplete sets"));
+	m_actHideMechanical = makeFilterAction(tr("Hide mechanical"), tr("Hide mechanical systems (pinball, redemption, slot machines, …)"));
+	m_actHideScreenless = makeFilterAction(tr("Hide screenless"), tr("Hide systems with no screen (scans once in the background the first time)"));
 
 	actionsExclusive(m_actWorking, m_actNotWorking);
 	actionsExclusive(m_actAvailable, m_actUnavailable);
 	for (QAction *act : { m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable })
 		connect(act, &QAction::toggled, this, &MainWindow::onStatusFilterChanged);
-	for (QAction *act : { m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes })
+	for (QAction *act : { m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
+			m_actHideMechanical, m_actHideScreenless })
 		connect(act, &QAction::toggled, this, &MainWindow::onVersionFilterChanged);
 
 	QMenu *filtersMenu = viewMenu->addMenu(tr("&Filters"));
@@ -1214,6 +1227,9 @@ void MainWindow::createMenus()
 	filtersMenu->addAction(m_actHideBootlegs);
 	filtersMenu->addAction(m_actHideHacks);
 	filtersMenu->addAction(m_actHidePrototypes);
+	filtersMenu->addSeparator();
+	filtersMenu->addAction(m_actHideMechanical);
+	filtersMenu->addAction(m_actHideScreenless);
 
 	// Software-list filters (same pattern as the machine list).
 	m_actSwSupported = makeFilterAction(tr("Supported"), tr("Show fully supported software"));
@@ -2435,6 +2451,9 @@ void MainWindow::createWidgets()
 	barFiltersMenu->addAction(m_actHideBootlegs);
 	barFiltersMenu->addAction(m_actHideHacks);
 	barFiltersMenu->addAction(m_actHidePrototypes);
+	barFiltersMenu->addSeparator();
+	barFiltersMenu->addAction(m_actHideMechanical);
+	barFiltersMenu->addAction(m_actHideScreenless);
 	filtersButton->setMenu(barFiltersMenu);
 
 	// Flat grid: every member as a tile (shares the flat proxy + selection).
@@ -3141,6 +3160,8 @@ void MainWindow::onVersionFilterChanged()
 	m_proxy->setHideBootlegs(m_actHideBootlegs->isChecked());
 	m_proxy->setHideHacks(m_actHideHacks->isChecked());
 	m_proxy->setHidePrototypes(m_actHidePrototypes->isChecked());
+	m_proxy->setHideMechanical(m_actHideMechanical->isChecked());
+	m_proxy->setHideScreenless(m_actHideScreenless->isChecked());
 	invalidateMachineViews();
 	syncSoftwarePane();
 
@@ -3149,8 +3170,55 @@ void MainWindow::onVersionFilterChanged()
 	settings.setValue(QStringLiteral("filters/hideBootlegs"), m_actHideBootlegs->isChecked());
 	settings.setValue(QStringLiteral("filters/hideHacks"), m_actHideHacks->isChecked());
 	settings.setValue(QStringLiteral("filters/hidePrototypes"), m_actHidePrototypes->isChecked());
+	settings.setValue(QStringLiteral("filters/hideMechanical"), m_actHideMechanical->isChecked());
+	settings.setValue(QStringLiteral("filters/hideScreenless"), m_actHideScreenless->isChecked());
+
+	// Screenless verdicts need a one-time background scan (build a machine_config
+	// per driver); kick it off the first time the filter is actually enabled.
+	if (m_actHideScreenless->isChecked() && !m_model->hasScreenlessData())
+		startScreenlessScan();
 
 	updateStatusCount();
+}
+
+void MainWindow::startScreenlessScan()
+{
+	if (m_screenlessScanning || m_screenlessThread.joinable() || m_model->hasScreenlessData())
+		return;
+	m_screenlessScanning = true;
+	statusBar()->showMessage(
+			tr("Scanning for screenless systems… (one-time, runs in the background)"));
+
+	m_screenlessCancel.store(false, std::memory_order_relaxed);
+	m_screenlessThread = std::thread([this] {
+		auto results = std::make_shared<std::vector<std::pair<std::string, bool>>>();
+		qtui_scan_screenless(
+				[&results](const std::string &name, bool screenless) {
+					results->emplace_back(name, screenless);
+				},
+				m_screenlessCancel);
+		// Hand the results back to the GUI thread to apply to the model.
+		QMetaObject::invokeMethod(this, [this, results] {
+			applyScreenlessResults(*results);
+		}, Qt::QueuedConnection);
+	});
+}
+
+void MainWindow::applyScreenlessResults(const std::vector<std::pair<std::string, bool>> &results)
+{
+	if (m_screenlessThread.joinable())
+		m_screenlessThread.join();
+	m_screenlessScanning = false;
+
+	if (m_screenlessCancel.load(std::memory_order_relaxed))
+		return;   // cancelled (app shutting down)
+
+	m_model->applyScreenlessBatch(results);
+	// Re-filter now that the verdicts exist, in case the filter is on.
+	if (m_actHideScreenless && m_actHideScreenless->isChecked())
+		invalidateMachineViews();
+	updateStatusCount();
+	statusBar()->showMessage(tr("Screenless scan complete."), 4000);
 }
 
 void MainWindow::onSoftwareFilterChanged()

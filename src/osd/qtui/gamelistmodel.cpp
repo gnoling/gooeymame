@@ -49,6 +49,7 @@ GameListModel::GameListModel(QObject *parent) :
 	}
 
 	m_availability.assign(m_rows.size(), AvailabilityUnknown);
+	m_screenless.assign(m_rows.size(), ScreenlessUnknown);
 
 	m_nameToRow.reserve(int(m_rows.size()));
 	for (int row = 0; row < int(m_rows.size()); row++)
@@ -464,6 +465,12 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 	case VersionFlagsRole:
 		return m_versionFlags.empty() ? 0 : int(m_versionFlags[index.row()]);
 
+	case IsMechanicalRole:
+		return bool(drv.flags & machine_flags::MECHANICAL);
+
+	case IsScreenlessRole:
+		return int(m_screenless.empty() ? ScreenlessUnknown : m_screenless[index.row()]);
+
 	case kThumbnailRole:
 		// Grid thumbnail for the row (lazily loaded for the chosen image set).
 		return thumbnailForRow(index.row());
@@ -576,6 +583,28 @@ void GameListModel::applyAvailabilityBatch(const QVector<QPair<QString, int>> &r
 
 	if (minRow >= 0)
 		emit dataChanged(index(minRow, 0), index(maxRow, COLUMN_COUNT - 1));
+}
+
+void GameListModel::applyScreenlessBatch(const std::vector<std::pair<std::string, bool>> &results)
+{
+	if (m_screenless.size() != m_rows.size())
+		m_screenless.assign(m_rows.size(), ScreenlessUnknown);
+
+	for (const auto &entry : results)
+	{
+		auto it = m_nameToRow.constFind(QString::fromStdString(entry.first));
+		if (it == m_nameToRow.constEnd())
+			continue;
+		m_screenless[it.value()] = entry.second ? NoScreen : HasScreen;
+	}
+	m_screenlessScanned = true;
+
+	// The screenless verdict only affects filtering (IsScreenlessRole), not any
+	// visible column, so a single blanket dataChanged is enough to let proxies
+	// re-evaluate; emit it across all rows for the role.
+	if (!m_rows.empty())
+		emit dataChanged(index(0, 0), index(int(m_rows.size()) - 1, COLUMN_COUNT - 1),
+				{ IsScreenlessRole });
 }
 
 QStringList GameListModel::years() const

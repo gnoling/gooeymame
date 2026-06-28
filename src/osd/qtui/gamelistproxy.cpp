@@ -85,6 +85,22 @@ void GameListProxy::setHidePrototypes(bool hide)
 	invalidateFilter();
 }
 
+void GameListProxy::setHideMechanical(bool hide)
+{
+	if (hide == m_hideMechanical)
+		return;
+	m_hideMechanical = hide;
+	invalidateFilter();
+}
+
+void GameListProxy::setHideScreenless(bool hide)
+{
+	if (hide == m_hideScreenless)
+		return;
+	m_hideScreenless = hide;
+	invalidateFilter();
+}
+
 bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
 	QAbstractItemModel *model = sourceModel();
@@ -141,6 +157,15 @@ bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 		if (m_hidePrototypes && (flags & GameListModel::VersionPrototype))
 			return false;
 	}
+
+	// System-type filters.  Mechanical is a static flag; screenless comes from a
+	// background scan, so only hide rows with a definite NoScreen verdict (rows
+	// still ScreenlessUnknown stay visible until the scan fills them in).
+	if (m_hideMechanical && index.data(GameListModel::IsMechanicalRole).toBool())
+		return false;
+	if (m_hideScreenless
+			&& index.data(GameListModel::IsScreenlessRole).toInt() == GameListModel::NoScreen)
+		return false;
 
 	// Emulation-status modifier (orthogonal to the folder).  OR within the
 	// group; an empty group imposes no constraint.

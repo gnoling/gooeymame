@@ -18,9 +18,12 @@
 #include <QtCore/QVector>
 #include <QtWidgets/QMainWindow>
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class QActionGroup;
@@ -281,6 +284,15 @@ private:
 	bool m_standaloneEmbed = false;   // launched via --gooey: closing the game quits the app
 	std::unique_ptr<EmbedSession> m_embedSession;   // in-process embed command bridge
 	std::thread m_embedThread;                      // runs the in-process emulation
+
+	// One-time background scan that determines which systems are screenless
+	// (builds a machine_config per driver).  Kicked off lazily the first time the
+	// "Hide screenless" filter is enabled.
+	void startScreenlessScan();
+	void applyScreenlessResults(const std::vector<std::pair<std::string, bool>> &results);
+	std::thread m_screenlessThread;
+	std::atomic<bool> m_screenlessCancel{ false };
+	bool m_screenlessScanning = false;
 	// Phase 13 Qt-native OSD: GUI-thread-owned render surface handed to the worker
 	QWindow *m_nativeGlWindow = nullptr;
 	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow (central stack or artwork pane)
@@ -337,6 +349,8 @@ private:
 	QAction *m_actHideBootlegs = nullptr;
 	QAction *m_actHideHacks = nullptr;
 	QAction *m_actHidePrototypes = nullptr;
+	QAction *m_actHideMechanical = nullptr;
+	QAction *m_actHideScreenless = nullptr;
 	// Software-list filters (shared by the software "Filters" button and the
 	// View ▸ Software Filters menu).
 	QAction *m_actSwSupported = nullptr;

@@ -80,6 +80,12 @@ public:
 	void setHideHacks(bool hide);
 	void setHidePrototypes(bool hide);
 
+	// System-type filters: hide mechanical systems (pinball/redemption/etc.) and
+	// hide screenless systems.  Screenless verdicts come from a background scan;
+	// rows with no verdict yet are not hidden.
+	void setHideMechanical(bool hide);
+	void setHideScreenless(bool hide);
+
 protected:
 	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
 	bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
@@ -92,6 +98,8 @@ private:
 	bool m_hideBootlegs = false;
 	bool m_hideHacks = false;
 	bool m_hidePrototypes = false;
+	bool m_hideMechanical = false;
+	bool m_hideScreenless = false;
 };
 
 } // namespace osd::qtui
