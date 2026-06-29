@@ -39,6 +39,7 @@ class QMenu;
 class QMenuBar;
 class QProgressBar;
 class QPushButton;
+class QToolButton;
 class QSlider;
 class QSplitter;
 class QStackedWidget;
@@ -214,6 +215,8 @@ private:
 	void applyPaneVisibility();         // show/hide folders, machine, artwork panes per the toggles
 	void applyIconSize(int size);   // icon size + matching row height
 	void applyIconScaling(bool smooth);   // smooth vs nearest-neighbour icon upscaling
+	void setFoldersCollapsed(bool collapsed);   // collapse/expand the left filter pane (size 0)
+	void configureFolderHandle();               // (re)attach the collapse button to the folders splitter bar
 	void applyStyle(const QString &name);   // set + persist the Qt widget style ("" = default)
 	void applyColorScheme(const QString &scheme);   // set + persist colour scheme ("dark"/"light"/"")
 
@@ -274,6 +277,8 @@ private:
 	CheckableComboBox *m_gridCaption = nullptr;
 	QComboBox *m_viewMode = nullptr;
 	FolderTree *m_folders = nullptr;
+	bool m_foldersCollapsed = false;
+	int m_folderExpandedWidth = 0;              // pane width to restore when re-expanding
 	SoftwareModel *m_softwareModel = nullptr;
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;

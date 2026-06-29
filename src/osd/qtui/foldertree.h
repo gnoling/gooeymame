@@ -38,6 +38,11 @@ public:
 	QString currentPath() const;
 	void selectPath(const QString &path);
 
+	// Persist/restore which top-level sections are expanded (the labels of the
+	// expanded parent nodes), so the tree's section layout survives a restart.
+	QStringList expandedSections() const;
+	void setExpandedSections(const QStringList &labels);
+
 signals:
 	void folderSelected(const FolderFilter &filter);
 
@@ -57,6 +62,10 @@ private:
 	// Union the member sets of an item and all of its descendants, so that
 	// selecting a parent category shows everything beneath it.
 	void collectMembers(const QTreeWidgetItem *item, QSet<QString> &out) const;
+
+	// Recursively drop category nodes none of whose members are present in the
+	// build; returns true if the item should be kept.  `model` is the system set.
+	bool pruneEmpty(QTreeWidgetItem *item, const GameListModel *model);
 
 	// Member sets for category nodes, referenced by index stored on the item.
 	std::vector<QSet<QString>> m_categorySets;

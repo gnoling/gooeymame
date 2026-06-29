@@ -121,6 +121,10 @@ public:
 	QStringList manufacturers() const;
 	QStringList years() const;
 
+	// Whether a system short name is present in this build (used to hide folder
+	// categories whose members aren't in the loaded driver set).
+	bool hasSystem(const QString &shortName) const { return m_nameToRow.contains(shortName); }
+
 	// Apply a batch of availability results keyed by system short name
 	// (from the auditor or the cache).  Unknown names are ignored.
 	void applyAvailabilityBatch(const QVector<QPair<QString, int>> &results);

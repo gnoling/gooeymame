@@ -53,6 +53,7 @@
 #include <QtGui/QCursor>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QResizeEvent>
 #include <QtGui/QScreen>
 #include <QtGui/QSurfaceFormat>
 #include <QtGui/QWheelEvent>
@@ -77,6 +78,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QSplitter>
+#include <QtWidgets/QSplitterHandle>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QWidgetAction>
@@ -87,6 +89,8 @@
 #include <QtWidgets/QTreeView>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+
+#include <functional>
 
 
 namespace osd::qtui {
@@ -229,6 +233,69 @@ void applyPersistedColorScheme()
 }
 
 namespace {
+
+// A splitter handle (the resize bar) carrying a small centred button to
+// collapse/expand the pane on one side, plus double-click-to-toggle — the
+// affordance most apps put on the divider itself.
+class CollapseHandle : public QSplitterHandle
+{
+public:
+	CollapseHandle(Qt::Orientation orientation, QSplitter *parent) :
+		QSplitterHandle(orientation, parent)
+	{
+		// A layout makes the button fill the handle width reliably (independent
+		// of resize timing), centred vertically between two stretches.
+		QVBoxLayout *layout = new QVBoxLayout(this);
+		layout->setContentsMargins(0, 0, 0, 0);
+		layout->setSpacing(0);
+		layout->addStretch();
+		m_button = new QToolButton(this);
+		m_button->setArrowType(Qt::LeftArrow);
+		m_button->setCursor(Qt::ArrowCursor);
+		m_button->setFocusPolicy(Qt::NoFocus);
+		m_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+		m_button->setFixedHeight(54);
+		// Explicit frame so the nub clearly reads as a button on the bar.
+		m_button->setStyleSheet(QStringLiteral(
+				"QToolButton { border: 1px solid palette(mid); border-radius: 3px;"
+				" background: palette(button); }"
+				"QToolButton:hover { background: palette(midlight); }"));
+		m_button->hide();
+		layout->addWidget(m_button);
+		layout->addStretch();
+		connect(m_button, &QToolButton::clicked, this, [this] { if (m_toggle) m_toggle(); });
+	}
+
+	void enableButton(bool on) { m_button->setVisible(on); }
+	void setCollapsed(bool collapsed) { m_button->setArrowType(collapsed ? Qt::RightArrow : Qt::LeftArrow); }
+	void setToggleCallback(std::function<void()> cb) { m_toggle = std::move(cb); }
+
+protected:
+	void mouseDoubleClickEvent(QMouseEvent *event) override
+	{
+		if (m_toggle)
+		{
+			m_toggle();
+			event->accept();
+			return;
+		}
+		QSplitterHandle::mouseDoubleClickEvent(event);
+	}
+
+private:
+	QToolButton *m_button = nullptr;
+	std::function<void()> m_toggle;
+};
+
+// QSplitter whose handles are CollapseHandles.
+class CollapsibleSplitter : public QSplitter
+{
+public:
+	using QSplitter::QSplitter;
+
+protected:
+	QSplitterHandle *createHandle() override { return new CollapseHandle(orientation(), this); }
+};
 
 // Delay between a system selection settling and enumerating its software.
 // Enumeration builds the machine configuration, which is comparatively
@@ -797,6 +864,7 @@ void MainWindow::saveSettings() const
 	settings.setValue(QStringLiteral("softwareHeader"), m_softwareView->horizontalHeader()->saveState());
 	settings.setValue(QStringLiteral("selected"), selectedSystem());
 	settings.setValue(QStringLiteral("folderPath"), m_folders->currentPath());
+	settings.setValue(QStringLiteral("foldersExpanded"), m_folders->expandedSections());
 	settings.setValue(QStringLiteral("search"), m_search->text());
 
 	// Currently selected software item (re-selected when its list reloads).
@@ -932,6 +1000,8 @@ void MainWindow::restoreSettings()
 	bool const iconSmooth = settings.value(QStringLiteral("iconSmoothScaling"), false).toBool();
 	QString const selected = settings.value(QStringLiteral("selected")).toString();
 	QString const folderPath = settings.value(QStringLiteral("folderPath")).toString();
+	bool const haveFoldersExpanded = settings.contains(QStringLiteral("foldersExpanded"));
+	QStringList const foldersExpanded = settings.value(QStringLiteral("foldersExpanded")).toStringList();
 	QString const searchText = settings.value(QStringLiteral("search")).toString();
 	m_pendingSoftwareList = settings.value(QStringLiteral("softwareList")).toString();
 	m_pendingSoftwareName = settings.value(QStringLiteral("softwareName")).toString();
@@ -946,6 +1016,12 @@ void MainWindow::restoreSettings()
 	for (QAction *act : m_iconScalingGroup->actions())
 		if (act->data().toBool() == iconSmooth)
 			act->setChecked(true);
+
+	// Restore the left filter pane's collapsed state (only act if collapsed, so
+	// an expanded pane keeps the splitter sizes just restored above).
+	m_folderExpandedWidth = QSettings().value(QStringLiteral("view/folderWidth"), 0).toInt();
+	if (QSettings().value(QStringLiteral("view/foldersCollapsed"), false).toBool())
+		setFoldersCollapsed(true);
 
 	// Restore the Qt-native play settings (placement / renderer / backend / audio).
 	setNativePlacement(settings.value(QStringLiteral("play/nativePlacement"), int(PlaceCentral)).toInt());
@@ -1015,6 +1091,12 @@ void MainWindow::restoreSettings()
 	for (QAction *act : swActs)
 		act->blockSignals(false);
 	onSoftwareFilterChanged();
+
+	// Restore which filter sections are expanded (skipped on first run so the
+	// default — only Quick Filters expanded — stands).  Done before selectPath,
+	// which re-expands the ancestors of the restored selection.
+	if (haveFoldersExpanded)
+		m_folders->setExpandedSections(foldersExpanded);
 
 	// Restore the search text and selected folder (each applies its filter via
 	// its normal signal) before re-selecting the system under those filters.
@@ -2815,7 +2897,24 @@ void MainWindow::createWidgets()
 	// restoreSettings() drive.  m_rightSplitter (vertical) always carries the
 	// software pane at the bottom; m_splitter (horizontal) is the central one.
 	m_rightSplitter = new QSplitter(Qt::Vertical);
-	m_splitter = new QSplitter(Qt::Horizontal);
+	m_splitter = new CollapsibleSplitter(Qt::Horizontal);
+	m_splitter->setHandleWidth(22);   // room for the collapse button on the bar
+
+	// Keep the collapsed/expanded state in sync when the user drags the bar all
+	// the way shut or back open (not just via the button/double-click).
+	connect(m_splitter, &QSplitter::splitterMoved, this, [this] (int, int) {
+		int const idx = m_splitter->indexOf(m_folders);
+		if (idx < 0)
+			return;
+		bool const collapsedNow = (m_splitter->sizes().value(idx) == 0);
+		if (collapsedNow != m_foldersCollapsed)
+		{
+			m_foldersCollapsed = collapsedNow;
+			configureFolderHandle();
+			QSettings().setValue(QStringLiteral("view/foldersCollapsed"), collapsedNow);
+		}
+	});
+
 	applyMainLayout(m_mainLayout);
 
 	// The browser splitter and the Qt-native game surface share a stack as the
@@ -2882,6 +2981,70 @@ void MainWindow::applyIconScaling(bool smooth)
 	m_model->setIconSmoothScaling(smooth);
 	if (m_softwareModel)
 		m_softwareModel->setIconSmoothScaling(smooth);
+}
+
+void MainWindow::setFoldersCollapsed(bool collapsed)
+{
+	if (!m_splitter)
+		return;
+	int const idx = m_splitter->indexOf(m_folders);
+	if (idx < 0)
+		return;
+
+	QList<int> sizes = m_splitter->sizes();
+	if (idx >= sizes.size())
+		return;
+	int const neighbour = (idx + 1 < sizes.size()) ? idx + 1 : idx - 1;
+
+	if (collapsed)
+	{
+		// Remember the width so re-expanding restores the user's size, then give
+		// the pane's space to its neighbour (the list/centre pane grows).
+		if (sizes[idx] > 0)
+			m_folderExpandedWidth = sizes[idx];
+		if (neighbour >= 0)
+			sizes[neighbour] += sizes[idx];
+		sizes[idx] = 0;
+	}
+	else
+	{
+		int const want = m_folderExpandedWidth > 0 ? m_folderExpandedWidth : 220;
+		if (neighbour >= 0)
+		{
+			int const give = qMin(want, qMax(0, sizes[neighbour] - 80));
+			sizes[neighbour] -= give;
+			sizes[idx] = give;
+		}
+		else
+		{
+			sizes[idx] = want;
+		}
+	}
+	m_splitter->setSizes(sizes);
+
+	m_foldersCollapsed = collapsed;
+	configureFolderHandle();
+	QSettings().setValue(QStringLiteral("view/foldersCollapsed"), collapsed);
+	if (m_folderExpandedWidth > 0)
+		QSettings().setValue(QStringLiteral("view/folderWidth"), m_folderExpandedWidth);
+}
+
+void MainWindow::configureFolderHandle()
+{
+	if (!m_splitter)
+		return;
+	int const idx = m_splitter->indexOf(m_folders);
+	if (idx < 0)
+		return;
+
+	// The resize bar on the folders' content side is the handle at idx + 1.
+	// Every handle of this splitter is a CollapseHandle (see CollapsibleSplitter).
+	auto *handle = static_cast<CollapseHandle *>(m_splitter->handle(idx + 1));
+	if (!handle)
+		return;
+	handle->enableButton(true);
+	handle->setCollapsed(m_foldersCollapsed);
+	handle->setToggleCallback([this] { setFoldersCollapsed(!m_foldersCollapsed); });
 }
 
 void MainWindow::applyStyle(const QString &name)
@@ -3191,6 +3354,10 @@ void MainWindow::applyMainLayout(int layout)
 	m_softwarePane->setVisible(m_softwareModel->rowCount() > 0);
 	m_folders->show();
 	m_systemPane->show();
+
+	// (Re)configure the collapse button on the folders splitter handle, which is
+	// recreated whenever the splitter is reassembled here.
+	configureFolderHandle();
 	m_artwork->show();
 	m_rightSplitter->show();
 

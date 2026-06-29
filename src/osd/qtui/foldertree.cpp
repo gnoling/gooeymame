@@ -46,9 +46,12 @@ FolderTree::FolderTree(GameListModel *model, QWidget *parent) :
 	setHeaderHidden(true);
 	setSelectionMode(QAbstractItemView::SingleSelection);
 
-	QTreeWidgetItem *all = addFolder(nullptr, tr("All Systems"), FolderFilter::All);
-	addFolder(nullptr, tr("Arcade"), FolderFilter::Arcade);
-	addFolder(nullptr, tr("Computers & Consoles"), FolderFilter::Console);
+	// Quick filters grouped under one collapsible section (the parent maps to
+	// "All", like the other section parents).
+	QTreeWidgetItem *quick = addFolder(nullptr, tr("Quick Filters"), FolderFilter::All);
+	QTreeWidgetItem *all = addFolder(quick, tr("All Systems"), FolderFilter::All);
+	addFolder(quick, tr("Arcade"), FolderFilter::Arcade);
+	addFolder(quick, tr("Computers & Consoles"), FolderFilter::Console);
 
 	// Manufacturer subtree.  The parent node itself maps to "All".
 	QTreeWidgetItem *manu = addFolder(nullptr, tr("Manufacturer"), FolderFilter::All);
@@ -63,8 +66,21 @@ FolderTree::FolderTree(GameListModel *model, QWidget *parent) :
 	// Category subtrees from the EXTRAs .ini files.
 	loadCategories();
 
+	// Hide category nodes whose systems aren't present in this build, and drop
+	// any category subtree left empty.
+	for (int i = topLevelItemCount() - 1; i >= 0; --i)
+	{
+		QTreeWidgetItem *root = topLevelItem(i);
+		if (FolderFilter::Kind(root->data(0, KIND_ROLE).toInt()) == FolderFilter::Category
+				&& !pruneEmpty(root, model))
+			delete takeTopLevelItem(i);
+	}
+
 	connect(this, &QTreeWidget::itemSelectionChanged, this, &FolderTree::onItemSelectionChanged);
 
+	// Quick Filters expanded by default; other sections start collapsed (their
+	// persisted state, if any, is applied by setExpandedSections()).
+	quick->setExpanded(true);
 	setCurrentItem(all);
 }
 
@@ -159,6 +175,48 @@ void FolderTree::collectMembers(const QTreeWidgetItem *item, QSet<QString> &out)
 		out.unite(m_categorySets[std::size_t(setIndex)]);
 	for (int i = 0; i < item->childCount(); i++)
 		collectMembers(item->child(i), out);
+}
+
+bool FolderTree::pruneEmpty(QTreeWidgetItem *item, const GameListModel *model)
+{
+	// Prune children first; a parent is kept if any descendant survives.
+	for (int i = item->childCount() - 1; i >= 0; --i)
+	{
+		if (!pruneEmpty(item->child(i), model))
+			delete item->takeChild(i);
+	}
+
+	int const setIndex = item->data(0, SET_ROLE).toInt();
+	if (setIndex >= 0 && setIndex < int(m_categorySets.size()))
+	{
+		for (const QString &name : m_categorySets[std::size_t(setIndex)])
+			if (model->hasSystem(name))
+				return true;
+	}
+	return item->childCount() > 0;
+}
+
+QStringList FolderTree::expandedSections() const
+{
+	QStringList out;
+	for (int i = 0; i < topLevelItemCount(); ++i)
+	{
+		QTreeWidgetItem *item = topLevelItem(i);
+		if (item->childCount() > 0 && item->isExpanded())
+			out << item->text(0);
+	}
+	return out;
+}
+
+void FolderTree::setExpandedSections(const QStringList &labels)
+{
+	QSet<QString> const wanted(labels.begin(), labels.end());
+	for (int i = 0; i < topLevelItemCount(); ++i)
+	{
+		QTreeWidgetItem *item = topLevelItem(i);
+		if (item->childCount() > 0)
+			item->setExpanded(wanted.contains(item->text(0)));
+	}
 }
 
 void FolderTree::onItemSelectionChanged()
