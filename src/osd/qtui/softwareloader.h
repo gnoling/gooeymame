@@ -21,7 +21,9 @@
 #include <QtCore/QVector>
 
 #include <atomic>
+#include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace osd::qtui {
@@ -48,10 +50,23 @@ signals:
 	void availabilityReady(const QVector<int> &availability);
 
 private:
-	void stopWorker();
+	void stopWorker();      // join the current + all retired workers (blocking; shutdown only)
+	void reapFinished();    // join + drop any retired workers that have already exited (non-blocking)
 
+	// The current worker, plus its own cancel/done flags.  Per-worker flags
+	// (rather than one shared member) let a previous load be retired and left
+	// to exit on its own without the caller having to join it — joining a
+	// worker that is parked waiting for the core mutex (held by a running
+	// audit) would otherwise freeze the GUI thread until the audit released it.
 	std::thread m_thread;
-	std::atomic<bool> m_cancel{ false };
+	std::shared_ptr<std::atomic<bool>> m_cancel;
+	std::shared_ptr<std::atomic<bool>> m_done;
+
+	// Workers signalled to cancel but not yet exited (still parked on the core
+	// mutex); each carries its own "done" flag so reapFinished() can join only
+	// the ones that have actually finished.
+	std::vector<std::pair<std::thread, std::shared_ptr<std::atomic<bool>>>> m_retiring;
+
 	std::atomic<unsigned> m_epoch{ 0 };
 };
 
