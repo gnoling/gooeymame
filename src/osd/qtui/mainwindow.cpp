@@ -79,6 +79,7 @@
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QSplitterHandle>
+#include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QWidgetAction>
@@ -295,6 +296,24 @@ public:
 
 protected:
 	QSplitterHandle *createHandle() override { return new CollapseHandle(orientation(), this); }
+};
+
+// Floors a row's height at the view's icon size so that a tree using
+// setUniformRowHeights() — whose uniform height is taken from the first row —
+// doesn't lock to a short height when that first row happens to have no icon.
+class RowHeightDelegate : public QStyledItemDelegate
+{
+public:
+	using QStyledItemDelegate::QStyledItemDelegate;
+
+	QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+	{
+		QSize size = QStyledItemDelegate::sizeHint(option, index);
+		int const minimum = option.decorationSize.height() + 6;   // match the table's row padding
+		if (size.height() < minimum)
+			size.setHeight(minimum);
+		return size;
+	}
 };
 
 // Delay between a system selection settling and enumerating its software.
@@ -2658,6 +2677,7 @@ void MainWindow::createWidgets()
 	m_tree->setSortingEnabled(true);
 	m_tree->setAlternatingRowColors(true);
 	m_tree->setUniformRowHeights(true);
+	m_tree->setItemDelegate(new RowHeightDelegate(m_tree));   // keep uniform height >= icon size
 	m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_tree->sortByColumn(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_tree->header()->setStretchLastSection(true);
@@ -2783,6 +2803,7 @@ void MainWindow::createWidgets()
 	m_softwareTree->sortByColumn(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_softwareTree->setAlternatingRowColors(true);
 	m_softwareTree->setUniformRowHeights(true);
+	m_softwareTree->setItemDelegate(new RowHeightDelegate(m_softwareTree));   // keep uniform height >= icon size
 	m_softwareTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_softwareTree->header()->setStretchLastSection(true);
 	m_softwareTree->setColumnWidth(SoftwareModel::COLUMN_DESCRIPTION, 280);
