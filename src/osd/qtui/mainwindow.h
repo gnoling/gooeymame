@@ -33,6 +33,7 @@ class QDialog;
 class QPlainTextEdit;
 class QEvent;
 class QObject;
+class QLabel;
 class QLineEdit;
 class QMenu;
 class QMenuBar;
@@ -127,6 +128,7 @@ private slots:
 	void onSystemSelectionChanged();
 	void onSoftwareSelectionChanged();
 	void refreshSoftware();
+	void showSoftwareLoadingIndicator();
 	void onSoftwareLoaded(const std::vector<qtui_software_entry> &entries);
 	void onSoftwareAvailabilityReady(const QVector<int> &availability);
 	void onEmbeddedFinished(int exitCode);
@@ -281,6 +283,7 @@ private:
 	FamilyTreeModel *m_swTreeModel = nullptr;
 	TreeFilterProxy *m_swTreeProxy = nullptr;
 	QStackedWidget *m_softwareStack = nullptr;
+	QLabel *m_softwareLoadingLabel = nullptr;   // shown when a slow software load is in flight
 	QWidget *m_softwareGridBar = nullptr;
 	QSlider *m_softwareGridSize = nullptr;
 	QComboBox *m_softwareGridSource = nullptr;
@@ -371,6 +374,8 @@ private:
 	QAction *m_actSwHideHacks = nullptr;
 	QAction *m_actSwHidePrototypes = nullptr;
 	QTimer *m_softwareTimer = nullptr;
+	QTimer *m_softwareLoadingTimer = nullptr;   // delays the "Loading…" indicator so fast loads don't flicker
+	bool m_softwareLoading = false;
 	QAction *m_playAct = nullptr;
 	QAction *m_propertiesAct = nullptr;
 	QAction *m_auditAct = nullptr;

@@ -235,6 +235,10 @@ namespace {
 // expensive, so we debounce rapid keyboard navigation.
 constexpr int SOFTWARE_DEBOUNCE_MS = 200;
 
+// How long a software load may run before the "Loading…" placeholder appears.
+// Fast loads finish well within this, so they never flash the indicator.
+constexpr int SOFTWARE_LOADING_INDICATOR_MS = 200;
+
 
 // Make two checkable actions mutually exclusive (either, or neither).
 void actionsExclusive(QAction *a, QAction *b)
@@ -2766,6 +2770,15 @@ void MainWindow::createWidgets()
 	softwareLayout->addWidget(m_softwareGridBar);
 	softwareLayout->addWidget(m_softwareStack);
 
+	// Placeholder shown in place of the list while a slow software load is in
+	// flight, so a delayed enumeration doesn't look like "this machine has no
+	// software".  Hidden by default; revealed by m_softwareLoadingTimer.
+	m_softwareLoadingLabel = new QLabel(tr("Loading software list…"));
+	m_softwareLoadingLabel->setAlignment(Qt::AlignCenter);
+	m_softwareLoadingLabel->setEnabled(false);   // muted, secondary-text look
+	m_softwareLoadingLabel->setVisible(false);
+	softwareLayout->addWidget(m_softwareLoadingLabel, 1);
+
 	// --- artwork panel ---
 	m_artwork = new ArtworkPanel;
 
@@ -2793,6 +2806,13 @@ void MainWindow::createWidgets()
 	m_softwareTimer->setSingleShot(true);
 	m_softwareTimer->setInterval(SOFTWARE_DEBOUNCE_MS);
 	connect(m_softwareTimer, &QTimer::timeout, this, &MainWindow::refreshSoftware);
+
+	// Reveal the "Loading…" placeholder only if a load is taking a while (e.g.
+	// parked behind a running audit), so the common fast case never flickers.
+	m_softwareLoadingTimer = new QTimer(this);
+	m_softwareLoadingTimer->setSingleShot(true);
+	m_softwareLoadingTimer->setInterval(SOFTWARE_LOADING_INDICATOR_MS);
+	connect(m_softwareLoadingTimer, &QTimer::timeout, this, &MainWindow::showSoftwareLoadingIndicator);
 }
 
 void MainWindow::applyIconSize(int size)
@@ -3394,6 +3414,10 @@ void MainWindow::refreshSoftware()
 	if (system.isEmpty())
 	{
 		m_softwareLoader->cancel();
+		m_softwareLoadingTimer->stop();
+		m_softwareLoading = false;
+		m_softwareLoadingLabel->setVisible(false);
+		m_softwareStack->setVisible(true);
 		m_softwareModel->setEntries({});
 		setSoftwarePaneVisible(false);
 		m_softwareLoadSystem.clear();
@@ -3401,12 +3425,38 @@ void MainWindow::refreshSoftware()
 	}
 
 	// Enumerate + audit on a worker thread; results arrive in onSoftwareLoaded.
+	// Arm the loading indicator: it reveals itself only if this load is slow.
 	m_softwareLoadSystem = system;
+	m_softwareLoading = true;
+	m_softwareLoadingTimer->start();
 	m_softwareLoader->load(system);
+}
+
+void MainWindow::showSoftwareLoadingIndicator()
+{
+	if (!m_softwareLoading)
+		return;
+
+	// Reveal the software pane with the placeholder in place of the list, so a
+	// slow load (e.g. parked behind a running audit) reads as "loading", not
+	// "no software list".
+	m_softwareGridBar->setVisible(false);
+	m_softwareStack->setVisible(false);
+	m_softwareLoadingLabel->setVisible(true);
+	setSoftwarePaneVisible(true);
 }
 
 void MainWindow::onSoftwareLoaded(const std::vector<qtui_software_entry> &entries)
 {
+	// The load resolved: dismiss the loading placeholder and restore the views.
+	m_softwareLoadingTimer->stop();
+	m_softwareLoading = false;
+	m_softwareLoadingLabel->setVisible(false);
+	m_softwareStack->setVisible(true);
+	bool const gridMode = (m_softwareStack->currentIndex() == ViewGrid
+			|| m_softwareStack->currentIndex() == ViewGridGrouped);
+	m_softwareGridBar->setVisible(gridMode);
+
 	bool const hasSoftware = !entries.empty();
 	m_softwareModel->setEntries(entries);
 	m_softwareModel->setHostSystem(m_softwareLoadSystem);   // for thumbnail fallback art
