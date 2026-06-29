@@ -474,12 +474,18 @@ MainWindow::MainWindow(QWidget *parent) :
 		m_progressBar->setRange(0, total);
 		m_progressBar->setValue(audited);
 		statusBar()->showMessage(tr("Auditing ROMs… %1 of %2").arg(audited).arg(total));
+		// Keep category visibility live as availability fills in, but only when it
+		// can actually matter (the category feature on AND an availability filter).
+		if (m_actFilterCategories && m_actFilterCategories->isChecked()
+				&& (m_actAvailable->isChecked() || m_actUnavailable->isChecked()))
+			updateCategoryFilter();
 	});
 	connect(m_audit, &AuditManager::finished, this, [this] {
 		m_progressBar->setVisible(false);
 		m_cancelAuditButton->setVisible(false);
 		m_auditAct->setEnabled(true);
 		m_softwareAuditAct->setEnabled(true);
+		updateCategoryFilter();
 		updateStatusCount();
 	});
 
@@ -1074,7 +1080,7 @@ void MainWindow::restoreSettings()
 	QAction *const filterActs[] = {
 		m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable,
 		m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
-		m_actHideMechanical, m_actHideScreenless };
+		m_actHideMechanical, m_actHideScreenless, m_actFilterCategories };
 	for (QAction *act : filterActs)
 		act->blockSignals(true);
 	m_actWorking->setChecked(settings.value(QStringLiteral("filters/working"), false).toBool());
@@ -1087,6 +1093,7 @@ void MainWindow::restoreSettings()
 	m_actHidePrototypes->setChecked(settings.value(QStringLiteral("filters/hidePrototypes"), false).toBool());
 	m_actHideMechanical->setChecked(settings.value(QStringLiteral("filters/hideMechanical"), false).toBool());
 	m_actHideScreenless->setChecked(settings.value(QStringLiteral("filters/hideScreenless"), false).toBool());
+	m_actFilterCategories->setChecked(settings.value(QStringLiteral("filters/applyToCategories"), false).toBool());
 	for (QAction *act : filterActs)
 		act->blockSignals(false);
 	onStatusFilterChanged();
@@ -1393,6 +1400,8 @@ void MainWindow::createMenus()
 	m_actHidePrototypes = makeFilterAction(tr("Hide prototypes"), tr("Hide prototype/incomplete sets"));
 	m_actHideMechanical = makeFilterAction(tr("Hide mechanical"), tr("Hide mechanical systems (pinball, redemption, slot machines, …)"));
 	m_actHideScreenless = makeFilterAction(tr("Hide screenless"), tr("Hide systems with no screen (scans once in the background the first time)"));
+	m_actFilterCategories = makeFilterAction(tr("Apply filters to categories"),
+			tr("Hide a category from the filter tree when the active filters leave it with no visible games"));
 
 	actionsExclusive(m_actWorking, m_actNotWorking);
 	actionsExclusive(m_actAvailable, m_actUnavailable);
@@ -1401,6 +1410,10 @@ void MainWindow::createMenus()
 	for (QAction *act : { m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
 			m_actHideMechanical, m_actHideScreenless })
 		connect(act, &QAction::toggled, this, &MainWindow::onVersionFilterChanged);
+	connect(m_actFilterCategories, &QAction::toggled, this, [this] (bool on) {
+		QSettings().setValue(QStringLiteral("filters/applyToCategories"), on);
+		updateCategoryFilter();
+	});
 
 	QMenu *filtersMenu = viewMenu->addMenu(tr("&Filters"));
 	filtersMenu->addAction(m_actWorking);
@@ -1415,6 +1428,8 @@ void MainWindow::createMenus()
 	filtersMenu->addSeparator();
 	filtersMenu->addAction(m_actHideMechanical);
 	filtersMenu->addAction(m_actHideScreenless);
+	filtersMenu->addSeparator();
+	filtersMenu->addAction(m_actFilterCategories);
 
 	// Software-list filters (same pattern as the machine list).
 	m_actSwSupported = makeFilterAction(tr("Supported"), tr("Show fully supported software"));
@@ -2640,6 +2655,8 @@ void MainWindow::createWidgets()
 	barFiltersMenu->addSeparator();
 	barFiltersMenu->addAction(m_actHideMechanical);
 	barFiltersMenu->addAction(m_actHideScreenless);
+	barFiltersMenu->addSeparator();
+	barFiltersMenu->addAction(m_actFilterCategories);
 	filtersButton->setMenu(barFiltersMenu);
 
 	// Flat grid: every member as a tile (shares the flat proxy + selection).
@@ -3446,6 +3463,7 @@ void MainWindow::onStatusFilterChanged()
 	m_proxy->setStatusFilter(flags);
 	invalidateMachineViews();
 	syncSoftwarePane();
+	updateCategoryFilter();
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
@@ -3480,7 +3498,20 @@ void MainWindow::onVersionFilterChanged()
 	if (m_actHideScreenless->isChecked() && !m_model->hasScreenlessData())
 		startScreenlessScan();
 
+	updateCategoryFilter();
 	updateStatusCount();
+}
+
+void MainWindow::updateCategoryFilter()
+{
+	if (!m_folders || !m_proxy)
+		return;
+	if (m_actFilterCategories && m_actFilterCategories->isChecked())
+		m_folders->applyCategoryFilter([this] (const QString &name) {
+			return m_proxy->acceptsSystemAttributes(name);
+		});
+	else
+		m_folders->applyCategoryFilter({});   // feature off: show all categories
 }
 
 void MainWindow::startScreenlessScan()
@@ -3521,6 +3552,7 @@ void MainWindow::applyScreenlessResults(const std::vector<std::pair<std::string,
 	// Re-filter now that the verdicts exist, in case the filter is on.
 	if (m_actHideScreenless && m_actHideScreenless->isChecked())
 		invalidateMachineViews();
+	updateCategoryFilter();   // screenless verdicts can now hide screenless-only categories
 	updateStatusCount();
 	statusBar()->showMessage(tr("Screenless scan complete."), 4000);
 }

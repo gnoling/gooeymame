@@ -20,6 +20,7 @@
 #include <QtCore/QString>
 #include <QtWidgets/QTreeWidget>
 
+#include <functional>
 #include <vector>
 
 namespace osd::qtui {
@@ -42,6 +43,11 @@ public:
 	// expanded parent nodes), so the tree's section layout survives a restart.
 	QStringList expandedSections() const;
 	void setExpandedSections(const QStringList &labels);
+
+	// Hide category nodes whose every member is currently filtered out.  The
+	// predicate answers "is this system short name currently visible?"; an empty
+	// predicate (default-constructed) shows all categories again.
+	void applyCategoryFilter(const std::function<bool (const QString &)> &isVisible);
 
 signals:
 	void folderSelected(const FolderFilter &filter);
@@ -66,6 +72,11 @@ private:
 	// Recursively drop category nodes none of whose members are present in the
 	// build; returns true if the item should be kept.  `model` is the system set.
 	bool pruneEmpty(QTreeWidgetItem *item, const GameListModel *model);
+
+	// Recursively show/hide a category subtree per the visibility predicate;
+	// returns whether the item (or any descendant) has a visible member.
+	bool applyCategoryFilterRec(QTreeWidgetItem *item,
+			const std::function<bool (const QString &)> &isVisible);
 
 	// Member sets for category nodes, referenced by index stored on the item.
 	std::vector<QSet<QString>> m_categorySets;

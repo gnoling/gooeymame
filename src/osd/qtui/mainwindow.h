@@ -125,6 +125,7 @@ private slots:
 	void onSearchTextChanged(const QString &text);
 	void onStatusFilterChanged();
 	void onVersionFilterChanged();
+	void updateCategoryFilter();   // hide categories with no currently-visible games (when enabled)
 	void onSoftwareFilterChanged();
 	void onSystemSelectionChanged();
 	void onSoftwareSelectionChanged();
@@ -368,6 +369,7 @@ private:
 	QAction *m_actHidePrototypes = nullptr;
 	QAction *m_actHideMechanical = nullptr;
 	QAction *m_actHideScreenless = nullptr;
+	QAction *m_actFilterCategories = nullptr;   // apply list filters to category visibility
 	// Software-list filters (shared by the software "Filters" button and the
 	// View ▸ Software Filters menu).
 	QAction *m_actSwSupported = nullptr;

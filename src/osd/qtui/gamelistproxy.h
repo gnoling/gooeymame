@@ -86,11 +86,21 @@ public:
 	void setHideMechanical(bool hide);
 	void setHideScreenless(bool hide);
 
+	// Whether the system with this short name passes the version / system-type /
+	// status filters, ignoring the selected folder and the search text.  Used to
+	// decide whether a category still has any visible member.  Returns false for
+	// a short name not present in the build.
+	bool acceptsSystemAttributes(const QString &shortName) const;
+
 protected:
 	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
 	bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
 
 private:
+	// The version / system-type / status attribute checks shared by
+	// filterAcceptsRow() and acceptsSystemAttributes() (folder + search excluded).
+	bool acceptsAttributes(const QModelIndex &sourceIndex) const;
+
 	FolderFilter m_filter;
 	int m_status = 0;
 	QString m_search;

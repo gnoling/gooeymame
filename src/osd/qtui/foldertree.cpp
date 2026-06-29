@@ -196,6 +196,50 @@ bool FolderTree::pruneEmpty(QTreeWidgetItem *item, const GameListModel *model)
 	return item->childCount() > 0;
 }
 
+void FolderTree::applyCategoryFilter(const std::function<bool (const QString &)> &isVisible)
+{
+	for (int i = 0; i < topLevelItemCount(); ++i)
+	{
+		QTreeWidgetItem *item = topLevelItem(i);
+		if (FolderFilter::Kind(item->data(0, KIND_ROLE).toInt()) == FolderFilter::Category)
+			applyCategoryFilterRec(item, isVisible);
+	}
+}
+
+bool FolderTree::applyCategoryFilterRec(QTreeWidgetItem *item,
+		const std::function<bool (const QString &)> &isVisible)
+{
+	bool anyDescendantVisible = false;
+	for (int i = 0; i < item->childCount(); ++i)
+		anyDescendantVisible |= applyCategoryFilterRec(item->child(i), isVisible);
+
+	bool ownVisible;
+	if (!isVisible)
+	{
+		ownVisible = true;   // no predicate: show every (build-surviving) category
+	}
+	else
+	{
+		ownVisible = false;
+		int const setIndex = item->data(0, SET_ROLE).toInt();
+		if (setIndex >= 0 && setIndex < int(m_categorySets.size()))
+		{
+			for (const QString &name : m_categorySets[std::size_t(setIndex)])
+			{
+				if (isVisible(name))
+				{
+					ownVisible = true;
+					break;
+				}
+			}
+		}
+	}
+
+	bool const visible = ownVisible || anyDescendantVisible;
+	item->setHidden(!visible);
+	return visible;
+}
+
 QStringList FolderTree::expandedSections() const
 {
 	QStringList out;

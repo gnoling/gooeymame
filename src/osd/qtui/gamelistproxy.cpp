@@ -101,6 +101,71 @@ void GameListProxy::setHideScreenless(bool hide)
 	invalidateFilter();
 }
 
+bool GameListProxy::acceptsAttributes(const QModelIndex &index) const
+{
+	// Version filters: hide clones (keep only family representatives) and hide
+	// bootleg/hack/prototype sets.
+	if (m_hideClones && !index.data(GameListModel::IsRepresentativeRole).toBool())
+		return false;
+	if (m_hideBootlegs || m_hideHacks || m_hidePrototypes)
+	{
+		int const flags = index.data(GameListModel::VersionFlagsRole).toInt();
+		if (m_hideBootlegs && (flags & GameListModel::VersionBootleg))
+			return false;
+		if (m_hideHacks && (flags & GameListModel::VersionHack))
+			return false;
+		if (m_hidePrototypes && (flags & GameListModel::VersionPrototype))
+			return false;
+	}
+
+	// System-type filters.  Mechanical is a static flag; screenless comes from a
+	// background scan, so only hide rows with a definite NoScreen verdict (rows
+	// still ScreenlessUnknown stay visible until the scan fills them in).
+	if (m_hideMechanical && index.data(GameListModel::IsMechanicalRole).toBool())
+		return false;
+	if (m_hideScreenless
+			&& index.data(GameListModel::IsScreenlessRole).toInt() == GameListModel::NoScreen)
+		return false;
+
+	// Emulation-status modifier.  OR within the group; an empty group imposes no
+	// constraint.
+	int const emuGroup = m_status & (StatusWorking | StatusNotWorking);
+	if (emuGroup)
+	{
+		bool const working = index.data(GameListModel::WorkingRole).toBool();
+		bool const accept = (working && (emuGroup & StatusWorking)) ||
+				(!working && (emuGroup & StatusNotWorking));
+		if (!accept)
+			return false;
+	}
+
+	// Availability modifier (AND'd with the emulation group).  OR within the
+	// group; Unknown availability matches neither toggle.
+	int const availGroup = m_status & (StatusAvailable | StatusUnavailable);
+	if (availGroup)
+	{
+		int const avail = index.data(GameListModel::AvailabilityRole).toInt();
+		bool const accept =
+				((avail == GameListModel::Available) && (availGroup & StatusAvailable)) ||
+				((avail == GameListModel::Unavailable) && (availGroup & StatusUnavailable));
+		if (!accept)
+			return false;
+	}
+
+	return true;
+}
+
+bool GameListProxy::acceptsSystemAttributes(const QString &shortName) const
+{
+	auto *model = qobject_cast<GameListModel *>(sourceModel());
+	if (!model)
+		return true;
+	int const row = model->rowForName(shortName);
+	if (row < 0)
+		return false;
+	return acceptsAttributes(model->index(row, 0));
+}
+
 bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
 	QAbstractItemModel *model = sourceModel();
@@ -143,54 +208,9 @@ bool GameListProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sourcePar
 	}
 	}
 
-	// Version filters: hide clones (keep only family representatives) and hide
-	// bootleg/hack/prototype sets.
-	if (m_hideClones && !index.data(GameListModel::IsRepresentativeRole).toBool())
+	// Version / system-type / status attributes (shared with category visibility).
+	if (!acceptsAttributes(index))
 		return false;
-	if (m_hideBootlegs || m_hideHacks || m_hidePrototypes)
-	{
-		int const flags = index.data(GameListModel::VersionFlagsRole).toInt();
-		if (m_hideBootlegs && (flags & GameListModel::VersionBootleg))
-			return false;
-		if (m_hideHacks && (flags & GameListModel::VersionHack))
-			return false;
-		if (m_hidePrototypes && (flags & GameListModel::VersionPrototype))
-			return false;
-	}
-
-	// System-type filters.  Mechanical is a static flag; screenless comes from a
-	// background scan, so only hide rows with a definite NoScreen verdict (rows
-	// still ScreenlessUnknown stay visible until the scan fills them in).
-	if (m_hideMechanical && index.data(GameListModel::IsMechanicalRole).toBool())
-		return false;
-	if (m_hideScreenless
-			&& index.data(GameListModel::IsScreenlessRole).toInt() == GameListModel::NoScreen)
-		return false;
-
-	// Emulation-status modifier (orthogonal to the folder).  OR within the
-	// group; an empty group imposes no constraint.
-	int const emuGroup = m_status & (StatusWorking | StatusNotWorking);
-	if (emuGroup)
-	{
-		bool const working = index.data(GameListModel::WorkingRole).toBool();
-		bool const accept = (working && (emuGroup & StatusWorking)) ||
-				(!working && (emuGroup & StatusNotWorking));
-		if (!accept)
-			return false;
-	}
-
-	// Availability modifier (AND'd with the emulation group).  OR within the
-	// group; Unknown availability matches neither toggle.
-	int const availGroup = m_status & (StatusAvailable | StatusUnavailable);
-	if (availGroup)
-	{
-		int const avail = index.data(GameListModel::AvailabilityRole).toInt();
-		bool const accept =
-				((avail == GameListModel::Available) && (availGroup & StatusAvailable)) ||
-				((avail == GameListModel::Unavailable) && (availGroup & StatusUnavailable));
-		if (!accept)
-			return false;
-	}
 
 	// Free-text search across description, short name and manufacturer.
 	if (!m_search.isEmpty())
