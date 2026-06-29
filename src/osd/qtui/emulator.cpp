@@ -2462,15 +2462,14 @@ bool qtui_write_options(
 
 	qt_options options;
 
-	// Find the mame.ini that is actually loaded, by searching the *default*
-	// inipath (the search MAME itself uses on startup) before parse_standard_inis
-	// overwrites inipath with the value the file contains.  We must write back to
-	// that same file; otherwise the new mame.ini lands in a directory that is
-	// searched later and gets shadowed by the one in effect, so edits silently
-	// have no effect.
-	std::string load_path;
-	{
-		std::string const search = options.ini_path();
+	// Finding the mame.ini to write back to is subtle.  parse_standard_inis()
+	// reads the master ini TWICE: first from the *default* search path (to pick
+	// up the inipath setting the file itself contains), then a second time from
+	// that *updated* inipath.  The second file is parsed last at equal priority,
+	// so its values OVERRIDE the first one's and are the ones that actually take
+	// effect.  We must therefore write back to whichever copy wins, or an edit
+	// silently vanishes behind the shadowing file in the configured inipath.
+	auto const first_existing = [](const std::string &search) -> std::string {
 		std::string::size_type pos = 0;
 		while (pos <= search.size())
 		{
@@ -2482,15 +2481,21 @@ bool qtui_write_options(
 			std::filesystem::path const candidate = std::filesystem::path(dir) / "mame.ini";
 			std::error_code ec;
 			if (std::filesystem::exists(candidate, ec))
-			{
-				load_path = candidate.string();
-				break;
-			}
+				return candidate.string();
 		}
-	}
+		return {};
+	};
+
+	// Pass 1 candidate: the file found via the default (pre-parse) search path.
+	std::string const pass1_path = first_existing(options.ini_path());
 
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors);
+
+	// Pass 2 candidate: after parsing, inipath may point elsewhere; a mame.ini
+	// found there was parsed last and so is the authoritative copy.  Prefer it.
+	std::string const pass2_path = first_existing(options.ini_path());
+	std::string const load_path = !pass2_path.empty() ? pass2_path : pass1_path;
 
 	for (const auto &change : changes)
 	{
