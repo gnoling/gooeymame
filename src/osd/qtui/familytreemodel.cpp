@@ -191,11 +191,13 @@ bool TreeFilterProxy::lessThan(const QModelIndex &left, const QModelIndex &right
 //============================================================
 
 RepresentativeProxy::RepresentativeProxy(QAbstractItemModel *source, QSortFilterProxyModel *flatProxy,
-		std::function<bool(int)> isRepresentative, QObject *parent) :
+		std::function<bool(int)> isRepresentative,
+		std::function<QList<int>(int)> familyMembers, QObject *parent) :
 	QSortFilterProxyModel(parent),
 	m_source(source),
 	m_flatProxy(flatProxy),
-	m_isRepresentative(std::move(isRepresentative))
+	m_isRepresentative(std::move(isRepresentative)),
+	m_familyMembers(std::move(familyMembers))
 {
 	setSortCaseSensitivity(Qt::CaseInsensitive);
 	setSortLocaleAware(true);
@@ -206,8 +208,14 @@ bool RepresentativeProxy::filterAcceptsRow(int sourceRow, const QModelIndex &sou
 {
 	if (!m_isRepresentative(sourceRow))
 		return false;
-	// Defer the remaining filters to the flat proxy's acceptance of this row.
-	return m_flatProxy->mapFromSource(m_source->index(sourceRow, 0, sourceParent)).isValid();
+	// Show this family's tile if the representative OR any of its members passes
+	// the flat proxy.  A clone can match the selected category/filters while the
+	// representative doesn't (the category lists the clone, not the parent); show
+	// the family anyway, mirroring the grouped tree's recursive filtering.
+	for (int member : m_familyMembers(sourceRow))
+		if (m_flatProxy->mapFromSource(m_source->index(member, 0)).isValid())
+			return true;
+	return false;
 }
 
 bool RepresentativeProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const

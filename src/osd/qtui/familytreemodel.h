@@ -99,7 +99,8 @@ class RepresentativeProxy : public QSortFilterProxyModel
 
 public:
 	RepresentativeProxy(QAbstractItemModel *source, QSortFilterProxyModel *flatProxy,
-			std::function<bool(int)> isRepresentative, QObject *parent = nullptr);
+			std::function<bool(int)> isRepresentative,
+			std::function<QList<int>(int)> familyMembers, QObject *parent = nullptr);
 
 protected:
 	bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
@@ -109,6 +110,7 @@ private:
 	QAbstractItemModel *m_source = nullptr;
 	QSortFilterProxyModel *m_flatProxy = nullptr;
 	std::function<bool(int)> m_isRepresentative;
+	std::function<QList<int>(int)> m_familyMembers;
 };
 
 } // namespace osd::qtui

@@ -2670,7 +2670,8 @@ void MainWindow::createWidgets()
 	// Grouped grid: one tile per clone family (representatives only), via a
 	// proxy that defers the rest of the filtering to the flat proxy.
 	m_gridProxy = new RepresentativeProxy(m_model, m_proxy,
-			[this] (int row) { return m_model->isRepresentative(row); }, this);
+			[this] (int row) { return m_model->isRepresentative(row); },
+			[this] (int row) { return m_model->familyMemberRows(row); }, this);
 	m_gridProxy->sort(GameListModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_gridGrouped = new GridView;
 	m_gridGrouped->setModel(m_gridProxy);
@@ -2795,7 +2796,8 @@ void MainWindow::createWidgets()
 
 	// Grouped software grid: one tile per family (representatives only).
 	m_swGridProxy = new RepresentativeProxy(m_softwareModel, m_softwareProxy,
-			[this] (int row) { return m_softwareModel->isRepresentative(row); }, this);
+			[this] (int row) { return m_softwareModel->isRepresentative(row); },
+			[this] (int row) { return m_softwareModel->familyMemberRows(row); }, this);
 	m_swGridProxy->sort(SoftwareModel::COLUMN_DESCRIPTION, Qt::AscendingOrder);
 	m_swGridGrouped = new GridView;
 	m_swGridGrouped->setModel(m_swGridProxy);
