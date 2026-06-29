@@ -163,6 +163,15 @@ public:
 	// family members (different-region variants).  Invalidates the cache.
 	void setThumbnailSources(const QStringList &machineKeys, bool familyFallback);
 
+	// Pixel size the list/tree views display row icons at.  Icons are rescaled
+	// to this since QIcon won't upscale a pixmap past its native size on its
+	// own.  Invalidates the icon cache.
+	void setIconDisplaySize(int px);
+
+	// Whether enlarged icons are scaled smoothly (true) or with nearest-
+	// neighbour (false, crisp pixel art).  Invalidates the icon cache.
+	void setIconSmoothScaling(bool smooth);
+
 private slots:
 	void onIconLoaded(int row, const QByteArray &bytes);
 	void onThumbnailLoaded(int row, quint64 generation, const QByteArray &bytes);
@@ -170,6 +179,7 @@ private slots:
 private:
 	const game_driver &driverForRow(int row) const;
 	QVariant iconForRow(int row) const;   // lazily requests/caches the icon
+	void invalidateIconCache();           // drop cached icons so they re-scale
 	QVariant thumbnailForRow(int row) const;   // lazily requests/caches the thumbnail
 
 	// driver_list indices of the rows we expose (the internal "___empty"
@@ -210,6 +220,8 @@ private:
 	QString m_iconsPath;
 	mutable QHash<int, QIcon> m_iconCache;
 	mutable QSet<int> m_iconRequested;
+	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)
+	bool m_iconSmooth = false;   // smooth vs nearest-neighbour upscaling
 
 	// Lazy, cached grid thumbnails for the selected image set (worker thread).
 	// A generation counter invalidates in-flight loads when the source changes.

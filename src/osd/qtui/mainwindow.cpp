@@ -929,6 +929,7 @@ void MainWindow::restoreSettings()
 		m_softwareView->horizontalHeader()->restoreState(softwareHeader);
 
 	int const iconSize = settings.value(QStringLiteral("iconSize"), 24).toInt();
+	bool const iconSmooth = settings.value(QStringLiteral("iconSmoothScaling"), false).toBool();
 	QString const selected = settings.value(QStringLiteral("selected")).toString();
 	QString const folderPath = settings.value(QStringLiteral("folderPath")).toString();
 	QString const searchText = settings.value(QStringLiteral("search")).toString();
@@ -936,10 +937,14 @@ void MainWindow::restoreSettings()
 	m_pendingSoftwareName = settings.value(QStringLiteral("softwareName")).toString();
 	settings.endGroup();
 
-	// Apply the saved icon size and tick the matching menu entry.
+	// Apply the saved icon size and scaling mode, ticking the matching entries.
+	applyIconScaling(iconSmooth);   // before applyIconSize so the first scale uses it
 	applyIconSize(iconSize);
 	for (QAction *act : m_iconSizeGroup->actions())
 		if (act->data().toInt() == iconSize)
+			act->setChecked(true);
+	for (QAction *act : m_iconScalingGroup->actions())
+		if (act->data().toBool() == iconSmooth)
 			act->setChecked(true);
 
 	// Restore the Qt-native play settings (placement / renderer / backend / audio).
@@ -1122,6 +1127,25 @@ void MainWindow::createMenus()
 		connect(act, &QAction::triggered, this, [this, size = choice.size] {
 			applyIconSize(size);
 			QSettings().setValue(QStringLiteral("mainwindow/iconSize"), size);
+		});
+	}
+
+	// How enlarged row icons are scaled.  They are usually pixel art, so the
+	// default is nearest-neighbour (crisp blocky pixels); smooth blends them.
+	QMenu *iconScaleMenu = iconMenu->addMenu(tr("Icon &Scaling"));
+	m_iconScalingGroup = new QActionGroup(this);
+	struct { const char *label; bool smooth; } const scaleModes[] = {
+		{ "Sharp (nearest neighbour)", false }, { "Smooth", true }
+	};
+	for (const auto &choice : scaleModes)
+	{
+		QAction *act = iconScaleMenu->addAction(tr(choice.label));
+		act->setCheckable(true);
+		act->setData(choice.smooth);
+		m_iconScalingGroup->addAction(act);
+		connect(act, &QAction::triggered, this, [this, smooth = choice.smooth] {
+			applyIconScaling(smooth);
+			QSettings().setValue(QStringLiteral("mainwindow/iconSmoothScaling"), smooth);
 		});
 	}
 
@@ -2817,6 +2841,12 @@ void MainWindow::createWidgets()
 
 void MainWindow::applyIconSize(int size)
 {
+	// Rescale the row icons to the chosen size (the models upscale pixel art
+	// with nearest-neighbour, which QIcon won't do on its own).
+	m_model->setIconDisplaySize(size);
+	if (m_softwareModel)
+		m_softwareModel->setIconDisplaySize(size);
+
 	m_view->setIconSize(QSize(size, size));
 	m_view->verticalHeader()->setDefaultSectionSize(size + 6);
 
@@ -2845,6 +2875,13 @@ void MainWindow::applyIconSize(int size)
 		m_softwareTree->setUniformRowHeights(false);
 		m_softwareTree->setUniformRowHeights(true);
 	}
+}
+
+void MainWindow::applyIconScaling(bool smooth)
+{
+	m_model->setIconSmoothScaling(smooth);
+	if (m_softwareModel)
+		m_softwareModel->setIconSmoothScaling(smooth);
 }
 
 void MainWindow::applyStyle(const QString &name)

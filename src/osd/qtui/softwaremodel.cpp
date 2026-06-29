@@ -417,13 +417,9 @@ QVariant SoftwareModel::iconForRow(int row) const
 
 void SoftwareModel::onIconLoaded(int row, const QByteArray &bytes)
 {
-	QIcon icon;
-	if (!bytes.isEmpty())
-	{
-		QPixmap pixmap;
-		if (pixmap.loadFromData(bytes))
-			icon = QIcon(pixmap);
-	}
+	// Scale to the size/mode the views display icons at (QIcon won't upscale a
+	// pixmap on its own).
+	QIcon const icon = makeRowIcon(bytes, m_iconDisplaySize, m_iconSmooth);
 
 	// Cache (even an empty icon) so we neither re-request nor re-decode.
 	m_iconCache.insert(row, icon);
@@ -432,6 +428,36 @@ void SoftwareModel::onIconLoaded(int row, const QByteArray &bytes)
 		QModelIndex const idx = index(row, COLUMN_DESCRIPTION);
 		emit dataChanged(idx, idx, { Qt::DecorationRole });
 	}
+}
+
+void SoftwareModel::invalidateIconCache()
+{
+	// Drop cached icons so they re-decode and re-scale as the views ask again.
+	if (m_iconCache.isEmpty() && m_iconRequested.isEmpty())
+		return;
+	m_iconCache.clear();
+	m_iconRequested.clear();
+	if (rowCount() > 0)
+	{
+		emit dataChanged(index(0, COLUMN_DESCRIPTION),
+				index(rowCount() - 1, COLUMN_DESCRIPTION), { Qt::DecorationRole });
+	}
+}
+
+void SoftwareModel::setIconDisplaySize(int px)
+{
+	if (px == m_iconDisplaySize)
+		return;
+	m_iconDisplaySize = px;
+	invalidateIconCache();
+}
+
+void SoftwareModel::setIconSmoothScaling(bool smooth)
+{
+	if (smooth == m_iconSmooth)
+		return;
+	m_iconSmooth = smooth;
+	invalidateIconCache();
 }
 
 void SoftwareModel::setAvailabilities(const QVector<int> &availability)

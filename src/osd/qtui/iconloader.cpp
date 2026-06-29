@@ -10,10 +10,34 @@
 
 #include "emulator.h"
 
+#include <QtGui/QIcon>
+#include <QtGui/QPixmap>
+
 #include <vector>
 
 
 namespace osd::qtui {
+
+QIcon makeRowIcon(const QByteArray &bytes, int displaySize, bool smoothUpscale)
+{
+	if (bytes.isEmpty())
+		return QIcon();
+
+	QPixmap pixmap;
+	if (!pixmap.loadFromData(bytes))
+		return QIcon();
+
+	if (displaySize <= 0 || (pixmap.width() == displaySize && pixmap.height() == displaySize))
+		return QIcon(pixmap);
+
+	// Enlarging: honour the user's choice (nearest-neighbour keeps pixel art
+	// crisp; smooth blends it).  Shrinking always uses smooth scaling to avoid
+	// dropped pixels.
+	bool const enlarging = (displaySize > pixmap.width() || displaySize > pixmap.height());
+	Qt::TransformationMode const mode =
+			(enlarging && !smoothUpscale) ? Qt::FastTransformation : Qt::SmoothTransformation;
+	return QIcon(pixmap.scaled(displaySize, displaySize, Qt::KeepAspectRatio, mode));
+}
 
 IconLoader::IconLoader(QObject *parent) :
 	QObject(parent)

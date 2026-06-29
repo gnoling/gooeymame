@@ -98,6 +98,15 @@ public:
 	// is true the other family members' images are tried too.
 	void setThumbnailSources(const QVector<QPair<QString, QString>> &keys, bool familyFallback);
 
+	// Pixel size the list/tree views display row icons at; icons are rescaled
+	// to this since QIcon won't upscale a pixmap on its own.  Invalidates the
+	// icon cache.
+	void setIconDisplaySize(int px);
+
+	// Whether enlarged icons are scaled smoothly (true) or with nearest-
+	// neighbour (false, crisp pixel art).  Invalidates the icon cache.
+	void setIconSmoothScaling(bool smooth);
+
 	// Apply availability results (qtui_availability) indexed to match the
 	// current entries, from the background audit phase.
 	void setAvailabilities(const QVector<int> &availability);
@@ -126,6 +135,7 @@ private slots:
 private:
 	QVariant thumbnailForRow(int row) const;
 	QVariant iconForRow(int row) const;   // lazily requests/caches the row icon
+	void invalidateIconCache();           // drop cached icons so they re-scale
 	void buildFamilies();           // families + region + version flags
 	void computeRepresentatives();  // (re)derive representatives from settings
 	void applyVersionSettings();    // read versions/* + computeRepresentatives (no emit)
@@ -160,6 +170,8 @@ private:
 	QString m_iconsPath;
 	mutable QHash<int, QIcon> m_iconCache;
 	mutable QSet<int> m_iconRequested;
+	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)
+	bool m_iconSmooth = false;   // smooth vs nearest-neighbour upscaling
 };
 
 } // namespace osd::qtui

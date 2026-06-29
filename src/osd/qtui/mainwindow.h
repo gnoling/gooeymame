@@ -213,6 +213,7 @@ private:
 	void applyMainLayout(int layout);   // (re)assemble the splitters
 	void applyPaneVisibility();         // show/hide folders, machine, artwork panes per the toggles
 	void applyIconSize(int size);   // icon size + matching row height
+	void applyIconScaling(bool smooth);   // smooth vs nearest-neighbour icon upscaling
 	void applyStyle(const QString &name);   // set + persist the Qt widget style ("" = default)
 	void applyColorScheme(const QString &scheme);   // set + persist colour scheme ("dark"/"light"/"")
 
@@ -381,6 +382,7 @@ private:
 	QAction *m_auditAct = nullptr;
 	QAction *m_softwareAuditAct = nullptr;
 	QActionGroup *m_iconSizeGroup = nullptr;
+	QActionGroup *m_iconScalingGroup = nullptr;
 	QActionGroup *m_layoutGroup = nullptr;
 	QAction *m_actShowFolders = nullptr;    // View ▸ Panes toggles
 	QAction *m_actShowSystems = nullptr;

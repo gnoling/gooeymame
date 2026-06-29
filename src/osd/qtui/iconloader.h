@@ -23,7 +23,16 @@
 #include <mutex>
 #include <thread>
 
+class QIcon;
+
 namespace osd::qtui {
+
+// Decode raw image bytes into a row icon scaled to `displaySize` px square.
+// When enlarging, `smoothUpscale` chooses smooth vs nearest-neighbour (the
+// latter keeps pixel art crisp); shrinking always uses smooth scaling.  A
+// displaySize <= 0 leaves the icon at its native size.  Returns a null QIcon
+// for empty/undecodable bytes.
+QIcon makeRowIcon(const QByteArray &bytes, int displaySize, bool smoothUpscale);
 
 class IconLoader : public QObject
 {
