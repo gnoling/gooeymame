@@ -464,7 +464,10 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 		return !(drv.type.emulation_flags() & emu::detail::device_flags::NOT_WORKING);
 
 	case ArcadeRole:
-		return bool(drv.flags & machine_flags::TYPE_ARCADE);
+		// Official MAME has no arcade flag.  GAME/GAMEL (arcade) leave
+		// compatible_with null; CONS/COMP/SYST (consoles/computers/systems)
+		// always set it (the stringised COMPAT), so a null marks an arcade game.
+		return drv.compatible_with == nullptr;
 
 	case ManufacturerRole:
 		return normaliseManufacturer(drv.manufacturer);
