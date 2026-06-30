@@ -6,7 +6,7 @@
 //
 //  Runs qtui_audit_all() on a worker thread, streams results into the
 //  GameListModel, and persists them to a cache so subsequent launches are
-//  instant.  Mirrors MAMEUI's background availability scan.
+//  instant.
 //
 //============================================================
 #ifndef MAME_OSD_QTUI_AUDITMANAGER_H

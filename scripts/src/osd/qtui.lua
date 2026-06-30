@@ -7,12 +7,11 @@
 --
 --   Rules for building the cross-platform Qt front-end ("qtui") OSD.
 --
---   qtui (branded "GooeyMAME") is MAMEUI re-imagined as a portable Qt GUI.
---   It is built as an integrated OSD target just like winui: a single
---   executable that shows the Qt browser front-end when invoked with no
---   arguments and runs a machine when given one on the command line.  A
---   launched machine runs in-process on a worker thread and renders into a
---   QWindow embedded in the GUI.
+--   qtui (branded "GooeyMAME") is a portable Qt GUI for MAME, built as an
+--   integrated OSD target: a single executable that shows the Qt browser
+--   front-end when invoked with no arguments and runs a machine when given one
+--   on the command line.  A launched machine runs in-process on a worker thread
+--   and renders into a QWindow embedded in the GUI.
 --
 --   The qtui OSD is a **Qt-native backend** (`qt_osd_interface : osd_common_t`,
 --   Phase 13/13f): MAME renders into a QWindow via OpenGL/BGFX and takes
@@ -37,8 +36,8 @@ function maintargetosdoptions(_target,_subtarget)
 	-- front-end does not pop a console window (and closing a console can no
 	-- longer kill the process).  We flip only the PE subsystem flag and keep the
 	-- console entry point (mainCRTStartup → our main() in qtmain.cpp), rather
-	-- than kind "WindowedApp", which on mingw expects a WinMain entry (as winui
-	-- uses).  Trade-off: CLI passthrough output (e.g. -listxml) no longer goes to
+	-- than kind "WindowedApp", which on mingw expects a WinMain entry.
+	-- Trade-off: CLI passthrough output (e.g. -listxml) no longer goes to
 	-- a console — same as any GUI front-end.  No effect off Windows.
 	if _OPTIONS["targetos"]=="windows" then
 		linkoptions {

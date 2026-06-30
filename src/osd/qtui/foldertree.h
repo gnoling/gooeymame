@@ -4,9 +4,9 @@
 //
 //  foldertree.h - category tree for filtering the system list
 //
-//  Mirrors a subset of MAMEUI's treeview categories (All / Working /
-//  Not Working / Arcade / Computer & Console / Manufacturer / Year).
-//  Selecting a node emits a FolderFilter consumed by GameListProxy.
+//  Builds the filter categories (All / Working / Not Working / Arcade /
+//  Computer & Console / Manufacturer / Year).  Selecting a node emits a
+//  FolderFilter consumed by GameListProxy.
 //
 //============================================================
 #ifndef MAME_OSD_QTUI_FOLDERTREE_H

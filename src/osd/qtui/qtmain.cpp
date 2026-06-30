@@ -4,9 +4,9 @@
 //
 //  qtmain.cpp - program entry point for the qtui (Qt front-end) OSD.
 //
-//  Mirrors MAMEUI's integrated model (src/osd/winui/mui_main.cpp):
-//    * invoked with arguments  -> behave exactly like SDLMAME and run the
-//                                  requested system on the command line;
+//  Single integrated binary:
+//    * invoked with arguments  -> behave like a command-line MAME and run the
+//                                  requested system;
 //    * invoked with no arguments -> launch the Qt browser front-end.
 //
 //  Keeping this translation unit Qt-only (the emulator/SDL world lives in
@@ -111,22 +111,6 @@ int main(int argc, char *argv[])
 	// (location: %APPDATA%\GooeyMAME\GooeyMAME.ini).  Must precede any QSettings use.
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 #endif
-
-	// One-time migration from the previous "MAMEUI" settings store after the GooeyMAME rebrand, so
-	// existing GUI state (window/splitter sizes, view modes, configured paths, version prefs)
-	// carries over.  Only runs when the new store is empty so it never clobbers fresh settings.
-	{
-		QSettings current;   // GooeyMAME / GooeyMAME (IniFormat on Windows)
-		if (current.allKeys().isEmpty())
-		{
-			QSettings legacy(QStringLiteral("MAMEUI"), QStringLiteral("MAMEUI"));
-			const QStringList keys = legacy.allKeys();
-			for (const QString &key : keys)
-				current.setValue(key, legacy.value(key));
-			if (!keys.isEmpty())
-				current.sync();
-		}
-	}
 
 	// Apply the user's chosen Qt widget style and colour scheme (if any) before
 	// building the UI.  Style first: it resets the palette the scheme rides on.

@@ -83,7 +83,7 @@ QString defaultStyleName();
 void applyPersistedColorScheme();
 
 //============================================================
-//  The main MAMEUI browser window.
+//  The main GooeyMAME browser window.
 //============================================================
 class MainWindow : public QMainWindow
 {
@@ -171,7 +171,7 @@ private:
 	// Restore the browser UI after a Qt-native run ends.
 	void returnFromEmbed();
 
-	// NEWUI-parity in-game controls (active only during an in-process embed).
+	// In-game controls (active only during an in-process embed).
 	// Capability keys for show/hide relevance gating (see applyMenuRelevance).
 	enum CapKey { CapDips, CapConfigs, CapBios, CapSlots, CapImages, CapTape,
 			CapNetwork, CapBarcode, CapCrosshair, CapSound, CapNaturalKeyboard,

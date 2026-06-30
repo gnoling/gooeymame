@@ -27,7 +27,7 @@
 
 namespace osd::qtui {
 
-// In-emulation actions, mirroring NEWUI's menu (newuires.h).  Each maps to a
+// In-emulation actions exposed by the in-game menu.  Each maps to a
 // running_machine / emu_options call applied on the emulation thread.
 enum class EmbedCommand
 {

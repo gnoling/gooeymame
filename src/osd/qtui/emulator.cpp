@@ -282,9 +282,9 @@ std::vector<std::string> qtui_command_line(int argc, char **argv)
 //
 //  The Qt-native OSD captures the running_machine and, each frame (in update(),
 //  which runs on the emulation thread), drains the UI's command queue via the
-//  EmbedController and applies it directly to the machine.  This is the analog
-//  of NEWUI, whose native menu is serviced by the Windows OSD's message pump
-//  (src/osd/winui/newui.cpp invoke_command()).
+//  EmbedController and applies it directly to the machine.  Servicing the
+//  commands on the emulation thread is what makes the direct running_machine
+//  calls safe.
 //============================================================
 
 namespace {
@@ -450,8 +450,8 @@ private:
 				}
 				// The game window's target is what the renderer draws (and is also
 				// the UI target in a single-window run), so set it directly — do NOT
-				// skip is_ui_target() or we'd rotate nothing.  Mirror NEWUI: when it
-				// is the UI target, rotate the UI container too.
+				// skip is_ui_target() or we'd rotate nothing.  When it is the UI
+				// target, rotate the UI container too.
 				render_manager &rm = m.render();
 				if (render_target *const t = rm.first_target())
 				{
