@@ -3958,10 +3958,15 @@ void MainWindow::runCliPassthrough(const std::vector<std::string> &args)
 
 	std::string const sound = soundProviderName(m_soundProvider).toStdString();
 	std::string const joystick = joystickProviderName(m_joystickProvider).toStdString();
+	QSettings nnSettings;
+	bool const oldNoNag = nnSettings.value(QStringLiteral("play/noNag"), false).toBool();
+	bool const noNagInfo = nnSettings.value(QStringLiteral("play/noNagInfo"), oldNoNag).toBool();
+	bool const noNagWarn = nnSettings.value(QStringLiteral("play/noNagWarnings"), oldNoNag).toBool();
+	bool const noNagLoad = nnSettings.value(QStringLiteral("play/noNagLoading"), oldNoNag).toBool();
 	std::vector<std::string> argv = args;
 	EmbedSession *const session = m_embedSession.get();
-	m_embedThread = std::thread([this, argv, target, session, sound, joystick]() mutable {
-		int const code = qtui_run_args_native(argv, target, *session, sound, joystick);
+	m_embedThread = std::thread([this, argv, target, session, sound, joystick, noNagInfo, noNagWarn, noNagLoad]() mutable {
+		int const code = qtui_run_args_native(argv, target, *session, sound, joystick, noNagInfo, noNagWarn, noNagLoad);
 		QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 	});
 }
@@ -4073,6 +4078,11 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	std::string const bgfxBackend = bgfxBackendName(m_bgfxBackend).toStdString();
 	std::string const soundProvider = soundProviderName(m_soundProvider).toStdString();
 	std::string const joystickProvider = joystickProviderName(m_joystickProvider).toStdString();
+	QSettings nnSettings;
+	bool const oldNoNag = nnSettings.value(QStringLiteral("play/noNag"), false).toBool();
+	bool const noNagInfo = nnSettings.value(QStringLiteral("play/noNagInfo"), oldNoNag).toBool();
+	bool const noNagWarn = nnSettings.value(QStringLiteral("play/noNagWarnings"), oldNoNag).toBool();
+	bool const noNagLoad = nnSettings.value(QStringLiteral("play/noNagLoading"), oldNoNag).toBool();
 
 	// Capture desktop monitor geometry on the GUI thread for the Qt-native
 	// monitor module (which initialises on the worker thread and can't touch
@@ -4153,7 +4163,7 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 	// spawning the emulation thread.
 	auto *const attempts = new int(0);
 	auto spawnPtr = std::make_shared<std::function<void()>>();
-	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend, soundProvider, joystickProvider]() {
+	*spawnPtr = [this, sys, sw, attempts, spawnPtr, useBgfx, bgfxBackend, soundProvider, joystickProvider, noNagInfo, noNagWarn, noNagLoad]() {
 		if (!m_nativeGlWindow || !m_nativeGlTarget)
 		{
 			delete attempts;
@@ -4173,8 +4183,8 @@ void MainWindow::launchEmbeddedNativeGl(const QString &label, const QString &sys
 		osd::qtui::QtEmbedTarget *const target = m_nativeGlTarget.get();
 		if (!session || !target)
 			return;
-		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend, soundProvider, joystickProvider] {
-			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend, soundProvider, joystickProvider);
+		m_embedThread = std::thread([this, sys, sw, target, session, useBgfx, bgfxBackend, soundProvider, joystickProvider, noNagInfo, noNagWarn, noNagLoad] {
+			int const code = qtui_run_embedded_native(sys, sw, target, *session, useBgfx, bgfxBackend, soundProvider, joystickProvider, noNagInfo, noNagWarn, noNagLoad);
 			QMetaObject::invokeMethod(this, "onEmbeddedFinished", Qt::QueuedConnection, Q_ARG(int, code));
 		});
 	};

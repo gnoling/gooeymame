@@ -2095,7 +2095,10 @@ int qtui_run_embedded_native(
 		bool useBgfx,
 		const std::string &bgfxBackend,
 		const std::string &soundProvider,
-		const std::string &joystickProvider)
+		const std::string &joystickProvider,
+		bool noNagInfo,
+		bool noNagWarnings,
+		bool noNagLoading)
 {
 	int res = 0;
 
@@ -2171,6 +2174,12 @@ int qtui_run_embedded_native(
 #else
 		args.push_back("sdlgame");
 #endif
+	// No-Nag (frontend options): authoritative global control.  Force each
+	// startup-screen option both ways so the toggles override whatever the
+	// user's mame.ini sets — On skips that screen, Off shows it.
+	args.push_back(noNagInfo ? "-skip_gameinfo" : "-noskip_gameinfo");
+	args.push_back(noNagWarnings ? "-skip_warnings" : "-noskip_warnings");
+	args.push_back(noNagLoading ? "-skip_loadinfo" : "-noskip_loadinfo");
 
 	{
 		qt_options options;
@@ -2204,7 +2213,10 @@ int qtui_run_args_native(
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
 		const std::string &soundProvider,
-		const std::string &joystickProvider)
+		const std::string &joystickProvider,
+		bool noNagInfo,
+		bool noNagWarnings,
+		bool noNagLoading)
 {
 	int res = 0;
 
@@ -2257,6 +2269,12 @@ int qtui_run_args_native(
 #else
 		args.push_back("sdlgame");
 #endif
+	// No-Nag (frontend options): authoritative global control.  Force each
+	// startup-screen option both ways so the toggles override whatever the
+	// user's mame.ini sets — On skips that screen, Off shows it.
+	args.push_back(noNagInfo ? "-skip_gameinfo" : "-noskip_gameinfo");
+	args.push_back(noNagWarnings ? "-skip_warnings" : "-noskip_warnings");
+	args.push_back(noNagLoading ? "-skip_loadinfo" : "-noskip_loadinfo");
 
 	{
 		qt_options options;

@@ -327,7 +327,10 @@ void mame_ui_manager::init()
 			handler_callback_func(
 				[this, &target = machine().render().ui_target()] () -> uint32_t
 				{
-					draw_text_box(target, messagebox_text, ui::text_layout::text_justify::LEFT, 0.5F, 0.5F, colors().background_color());
+					// GooeyMAME No-Nag: skip the "Initializing / Loading /
+					// Decrypting" startup messages when skip_loadinfo is set.
+					if (!machine().options().skip_loadinfo())
+						draw_text_box(target, messagebox_text, ui::text_layout::text_justify::LEFT, 0.5F, 0.5F, colors().background_color());
 					return 0;
 				}));
 	m_non_char_keys_down = std::make_unique<uint8_t[]>((std::size(non_char_keys) + 7) / 8);
@@ -655,7 +658,9 @@ void mame_ui_manager::display_startup_screens(bool first_time)
 	const int maxstate = 3;
 	int const str = machine().options().seconds_to_run();
 	bool show_gameinfo = !machine().options().skip_gameinfo();
-	bool show_warnings = true;
+	// GooeyMAME No-Nag: the red/yellow warning screen has its own skip option,
+	// independent of the system-information screen (skip_gameinfo).
+	bool show_warnings = !machine().options().skip_warnings();
 	bool video_none = strcmp(downcast<osd_options &>(machine().options()).video(), OSDOPTVAL_NONE) == 0;
 
 	// disable everything if we are using -str for 300 or fewer seconds, or if we're the empty driver,

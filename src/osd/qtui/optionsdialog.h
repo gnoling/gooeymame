@@ -58,6 +58,7 @@ private:
 	void addCategory(const QString &title, QWidget *page);
 	void buildOptionCategories();
 	void buildFolderCategory();
+	void buildGameplayCategory();
 	void buildVersionsCategory();
 	void buildGridArtCategory();
 	void buildArtScaleCategory();
@@ -88,6 +89,9 @@ private:
 	QStackedWidget *m_stack = nullptr;
 	QLabel *m_description = nullptr;
 	QCheckBox *m_videoAutoplay = nullptr;
+	QCheckBox *m_noNagInfo = nullptr;         // skip system-information screen on launch
+	QCheckBox *m_noNagWarnings = nullptr;     // skip warning screen on launch
+	QCheckBox *m_noNagLoading = nullptr;      // skip loading/initialising messages on launch
 	QComboBox *m_versionMode = nullptr;       // Versions & Regions page
 	QCheckBox *m_useSystemRegion = nullptr;
 	QListWidget *m_regionList = nullptr;      // checkable, reorderable priority

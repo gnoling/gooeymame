@@ -55,7 +55,10 @@ int qtui_run_args_native(
 		osd::qtui::QtEmbedTarget *target,
 		osd::qtui::EmbedSession &session,
 		const std::string &soundProvider,
-		const std::string &joystickProvider); // "" = per-platform default (winhybrid/sdlgame)
+		const std::string &joystickProvider, // "" = per-platform default (winhybrid/sdlgame)
+		bool noNagInfo = false,              // No-Nag: force skip_gameinfo (info screen)
+		bool noNagWarnings = false,          // No-Nag: force skip_warnings (warning screen)
+		bool noNagLoading = false);          // No-Nag: force skip_loadinfo (loading messages)
 
 // Phase 13 (Qt-native OSD): run `system` (+ optional `software`) rendering into
 // the QWindow carried by `target`, using a Qt-native OSD window + OpenGL context
@@ -70,7 +73,10 @@ int qtui_run_embedded_native(
 		bool useBgfx,
 		const std::string &bgfxBackend,     // "" / "auto" = let BGFX choose
 		const std::string &soundProvider,   // non-SDL audio: pulse/pipewire/portaudio/none
-		const std::string &joystickProvider); // "" = per-platform default (winhybrid/sdlgame)
+		const std::string &joystickProvider, // "" = per-platform default (winhybrid/sdlgame)
+		bool noNagInfo = false,              // No-Nag: force skip_gameinfo (info screen)
+		bool noNagWarnings = false,          // No-Nag: force skip_warnings (warning screen)
+		bool noNagLoading = false);          // No-Nag: force skip_loadinfo (loading messages)
 
 // A single software-list entry, flattened to plain data for the GUI.
 struct qtui_software_entry

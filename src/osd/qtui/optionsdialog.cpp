@@ -228,6 +228,7 @@ void OptionsDialog::buildUi()
 	buildOptionCategories();
 	if (!gameMode)
 	{
+		buildGameplayCategory();   // global only
 		buildVersionsCategory();   // global only
 		buildGridArtCategory();    // grid thumbnail fallback (global only)
 		buildArtScaleCategory();   // per-art-type image scaling (global only)
@@ -491,6 +492,44 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 	}
 
 	m_editors.push_back({ name, opt.type, readWidget, value });
+}
+
+void OptionsDialog::buildGameplayCategory()
+{
+	QWidget *page = new QWidget;
+	QVBoxLayout *layout = new QVBoxLayout(page);
+
+	QLabel *intro = new QLabel(
+			tr("No Nag — skip MAME's startup screens so games boot straight in.  "
+			   "Each screen can be skipped independently; these are global "
+			   "front-end settings."), page);
+	intro->setWordWrap(true);
+	layout->addWidget(intro);
+
+	// Fall back to the previous single "play/noNag" value so an existing
+	// preference carries over to all three when the split keys aren't set yet.
+	bool const old = QSettings().value(QStringLiteral("play/noNag"), false).toBool();
+
+	m_noNagInfo = new QCheckBox(tr("Skip the system-information screen"), page);
+	m_noNagInfo->setChecked(QSettings().value(QStringLiteral("play/noNagInfo"), old).toBool());
+	m_noNagInfo->setToolTip(tr("The blue screen listing the system name, manufacturer and "
+							   "emulation status shown before a game starts."));
+	layout->addWidget(m_noNagInfo);
+
+	m_noNagWarnings = new QCheckBox(tr("Skip the warning screen"), page);
+	m_noNagWarnings->setChecked(QSettings().value(QStringLiteral("play/noNagWarnings"), old).toBool());
+	m_noNagWarnings->setToolTip(tr("The red/yellow screen warning about imperfect or "
+								   "non-working emulation."));
+	layout->addWidget(m_noNagWarnings);
+
+	m_noNagLoading = new QCheckBox(tr("Skip the loading / initialising messages"), page);
+	m_noNagLoading->setChecked(QSettings().value(QStringLiteral("play/noNagLoading"), old).toBool());
+	m_noNagLoading->setToolTip(tr("The \"Initializing / Loading / Decrypting\" messages shown "
+								  "while the machine starts up."));
+	layout->addWidget(m_noNagLoading);
+
+	layout->addStretch(1);
+	addCategory(tr("Gameplay"), page);
 }
 
 void OptionsDialog::buildVersionsCategory()
@@ -818,6 +857,12 @@ void OptionsDialog::accept()
 			setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
 		if (m_videoAutoplay)
 			QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
+		if (m_noNagInfo)
+			QSettings().setValue(QStringLiteral("play/noNagInfo"), m_noNagInfo->isChecked());
+		if (m_noNagWarnings)
+			QSettings().setValue(QStringLiteral("play/noNagWarnings"), m_noNagWarnings->isChecked());
+		if (m_noNagLoading)
+			QSettings().setValue(QStringLiteral("play/noNagLoading"), m_noNagLoading->isChecked());
 
 		// Versions & Regions.
 		if (m_versionMode)
