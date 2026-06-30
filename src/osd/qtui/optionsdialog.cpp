@@ -173,7 +173,7 @@ const OptionChoices kOptionChoices[] =
 	// values not listed (e.g. coreaudio) can still be typed.  The Qt-native launch
 	// also force-overrides these for play (see emulator.cpp); the joystick provider
 	// is chosen via View ▸ Qt-native Gamepad.
-	{ "sound",            "auto,pulse,pipewire,portaudio,wasapi,xaudio2,dsound,coreaudio,none" },
+	{ "sound",            "auto,pulse,pipewire,portaudio,wasapi,xaudio2,coreaudio,none" },
 	{ "keyboardprovider", "auto,qt,none" },
 	{ "mouseprovider",    "auto,qt,none" },
 	{ "lightgunprovider", "auto,qt,none" },

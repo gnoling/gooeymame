@@ -364,7 +364,6 @@ struct SoundProviderInfo { const char *label; const char *prov; };
 const SoundProviderInfo kSoundProviders[] = {
 	{ "WASAPI",        "wasapi" },
 	{ "XAudio2",       "xaudio2" },
-	{ "DirectSound",   "dsound" },
 	{ "PortAudio",     "portaudio" },
 	{ "None (silent)", "none" },
 };
