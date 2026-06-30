@@ -31,7 +31,6 @@
 !/src/
 !/shaders/
 !/tests/
-!/tools/
 !/doxygen/
 !/web/
 !/.gitattributes
