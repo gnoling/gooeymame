@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GooeyMAME
+GenericName=Arcade Emulator Front-End
+Comment=Browse, configure and play MAME systems and software
+# Adjust Exec to wherever the GooeyMAME binary is installed.
+Exec=mame
+Icon=gooeymame
+Terminal=false
+Categories=Game;Emulator;
+Keywords=MAME;arcade;emulator;retro;
+StartupNotify=true
+StartupWMClass=GooeyMAME

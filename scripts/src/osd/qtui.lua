@@ -206,6 +206,13 @@ function qtui_find_moc()
 	return MOC
 end
 
+-- Locate Qt's resource compiler (rcc).  It lives alongside moc in the Qt host
+-- libexec dir, so derive it from qtui_find_moc() by swapping the tool name.
+function qtui_find_rcc()
+	local MOC = qtui_find_moc()
+	return (MOC:gsub("moc$", "rcc"):gsub("moc%.exe$", "rcc.exe"))
+end
+
 
 newoption {
 	trigger = "MESA_INSTALL_ROOT",
@@ -573,6 +580,10 @@ project ("osd_" .. _OPTIONS["osd"])
 		GEN_DIR .. "osd/qtui/thumbnailloader.moc.cpp",
 		GEN_DIR .. "osd/qtui/gridview.moc.cpp",
 		GEN_DIR .. "osd/qtui/familytreemodel.moc.cpp",
+
+		-- Application-icon resource (embedded PNGs at every size), compiled by
+		-- rcc.  Used for the Qt window/taskbar icon on all platforms.
+		GEN_DIR .. "osd/qtui/gooeymame.qrc.cpp",
 	}
 
 	-- The PDF manual viewer is only built where Qt PDF is available.
@@ -584,6 +595,7 @@ project ("osd_" .. _OPTIONS["osd"])
 	end
 
 	local MOC = qtui_find_moc()
+	local RCC = qtui_find_rcc()
 	custombuildtask {
 		{ MAME_DIR .. "src/osd/qtui/mainwindow.h", GEN_DIR .. "osd/qtui/mainwindow.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/gamelistmodel.h", GEN_DIR .. "osd/qtui/gamelistmodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
@@ -605,6 +617,18 @@ project ("osd_" .. _OPTIONS["osd"])
 		{ MAME_DIR .. "src/osd/qtui/thumbnailloader.h", GEN_DIR .. "osd/qtui/thumbnailloader.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/gridview.h", GEN_DIR .. "osd/qtui/gridview.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
 		{ MAME_DIR .. "src/osd/qtui/familytreemodel.h", GEN_DIR .. "osd/qtui/familytreemodel.moc.cpp", { }, { MOC .. " $(MOCINCPATH) $(<) -o $(@)" } },
+		-- Compile the application-icon resource.  The PNG files it embeds are
+		-- listed as extra dependencies so a changed icon triggers a rebuild.
+		{ MAME_DIR .. "src/osd/qtui/res/gooeymame.qrc", GEN_DIR .. "osd/qtui/gooeymame.qrc.cpp",
+			{ MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_16.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_24.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_32.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_48.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_64.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_128.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_256.png",
+			  MAME_DIR .. "src/osd/qtui/res/icons/gooeymame_512.png" },
+			{ RCC .. " --name gooeymame $(<) -o $(@)" } },
 	}
 
 

@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <QtCore/QtGlobal>
+#include <QtGui/QIcon>
 #include <QtWidgets/QApplication>
 
 
@@ -104,6 +105,18 @@ int main(int argc, char *argv[])
 	QApplication app(argc, argv);
 	QApplication::setApplicationName("GooeyMAME");
 	QApplication::setOrganizationName("GooeyMAME");
+
+	// Application icon (window title bar, taskbar, alt-tab).  The resource embeds
+	// the artwork at every size so Qt picks the best match per surface; on Windows
+	// the taskbar also uses the .ico compiled into the executable.  Q_INIT_RESOURCE
+	// forces the linker to keep the resource object (it lives in a static lib).
+	Q_INIT_RESOURCE(gooeymame);
+	{
+		QIcon appIcon;
+		for (int const sz : { 16, 24, 32, 48, 64, 128, 256, 512 })
+			appIcon.addFile(QStringLiteral(":/gooeymame/icon%1").arg(sz), QSize(sz, sz));
+		QApplication::setWindowIcon(appIcon);
+	}
 
 #ifdef _WIN32
 	// Store GUI settings in an INI file rather than the Windows registry, so the

@@ -1,0 +1,12 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/gooeymame">
+    <file alias="icon16">icons/gooeymame_16.png</file>
+    <file alias="icon24">icons/gooeymame_24.png</file>
+    <file alias="icon32">icons/gooeymame_32.png</file>
+    <file alias="icon48">icons/gooeymame_48.png</file>
+    <file alias="icon64">icons/gooeymame_64.png</file>
+    <file alias="icon128">icons/gooeymame_128.png</file>
+    <file alias="icon256">icons/gooeymame_256.png</file>
+    <file alias="icon512">icons/gooeymame_512.png</file>
+</qresource>
+</RCC>
