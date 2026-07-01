@@ -162,6 +162,11 @@ front-end. Everything else is stock MAME 0.288.
 - Upstream project: <https://www.mamedev.org/>
 - The original MAME README is preserved at [`docs/README.mame.md`](docs/README.mame.md).
 
+> **Origin.** GooeyMAME was originally inspired by a wish for a cross-platform equivalent of
+> MAMEUI (the Windows-only MAME front-end). It is, however, **unrelated to MAMEUI and shares no
+> code unique to that project** — the entire front-end was written from scratch in Qt against the
+> official MAME core.
+
 Please **do not** report GooeyMAME issues to the MAME team — they are not responsible for this fork.
 
 ## License
