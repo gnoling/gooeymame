@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <QtCore/QtGlobal>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtWidgets/QApplication>
 
@@ -105,6 +106,13 @@ int main(int argc, char *argv[])
 	QApplication app(argc, argv);
 	QApplication::setApplicationName("GooeyMAME");
 	QApplication::setOrganizationName("GooeyMAME");
+
+	// Associate the process with the installed desktop entry.  This sets the
+	// window's WM_CLASS / Wayland app-id to "gooeymame" so the desktop looks up
+	// gooeymame.desktop (Icon=gooeymame) instead of class-matching a system MAME,
+	// and is the only way to get a taskbar icon at all under Wayland (which
+	// ignores setWindowIcon).  Harmless on X11, where the icon below still wins.
+	QGuiApplication::setDesktopFileName(QStringLiteral("gooeymame"));
 
 	// Application icon (window title bar, taskbar, alt-tab).  The resource embeds
 	// the artwork at every size so Qt picks the best match per surface; on Windows
