@@ -1,101 +1,177 @@
-# MAME
+<div align="center">
 
-## What is MAME?
+<img src="docs/images/logo.png" width="160" alt="GooeyMAME logo">
 
-MAME is a multi-purpose emulation framework.
+# GooeyMAME
 
-MAME's purpose is to preserve decades of software history. As electronic technology continues to rush forward, MAME prevents this important "vintage" software from being lost and forgotten. This is achieved by documenting the hardware and how it functions. The source code to MAME serves as this documentation. The fact that the software is usable serves primarily to validate the accuracy of the documentation (how else can you prove that you have recreated the hardware faithfully?). Over time, MAME (originally stood for Multiple Arcade Machine Emulator) absorbed the sister-project MESS (Multi Emulator Super System), so MAME now documents a wide variety of (mostly vintage) computers, video game consoles and calculators, in addition to the arcade video games that were its initial focus.
+**A modern, cross-platform Qt front-end built _into_ MAME.**
 
-## Where can I find out more?
+Browse thousands of arcade machines, consoles and computers, dig through artwork and history,
+audit your ROMs, and play — all in one native window, with the game embedded right inside it.
 
-* [Official MAME Development Team Site](https://www.mamedev.org/) (includes binary downloads, wiki, forums, and more)
-* [MAME Testers](https://mametesters.org/) (official bug tracker for MAME)
+<em>GooeyMAME = MAME + a “gooey” (GUI). One executable, no launcher gymnastics.</em>
 
-### Community
+</div>
 
-* [MAME Forums on bannister.org](https://forums.bannister.org/ubbthreads.php?ubb=cfrm&c=5)
-* [r/MAME](https://www.reddit.com/r/MAME/) on Reddit
-* [MAMEWorld Forums](https://www.mameworld.info/ubbthreads/)
+---
 
-## Development
+GooeyMAME is a fork of [MAME](https://www.mamedev.org/) that adds a first-class graphical
+front-end as a native OSD (`OSD=qtui`). It's a clean-room Qt UI compiled directly into the
+emulator — so metadata, ROM auditing, and gameplay all come from the live MAME core with no
+subprocess round-trips or IPC. Games render **inside** the browser via a Qt-native OpenGL/BGFX
+backend, with a full in-game menu bar driving the running machine.
 
-![Alt](https://repobeats.axiom.co/api/embed/8461d8ae4630322dafc736fc25782de214b49630.svg "Repobeats analytics image")
+Based on **MAME 0.288**. Runs on **Linux** and **Windows** (macOS planned).
 
-### CI status and code scanning
+## Screenshots
 
-[![CI (Linux)](https://github.com/mamedev/mame/workflows/CI%20(Linux)/badge.svg)](https://github.com/mamedev/mame/actions/workflows/ci-linux.yml) [![CI (Windows](https://github.com/mamedev/mame/workflows/CI%20(Windows)/badge.svg)](https://github.com/mamedev/mame/actions/workflows/ci-windows.yml) [![CI (macOS)](https://github.com/mamedev/mame/workflows/CI%20(macOS)/badge.svg)](https://github.com/mamedev/mame/actions/workflows/ci-macos.yml) [![Compile UI translations](https://github.com/mamedev/mame/workflows/Compile%20UI%20translations/badge.svg)](https://github.com/mamedev/mame/actions/workflows/language.yml) [![Build documentation](https://github.com/mamedev/mame/workflows/Build%20documentation/badge.svg)](https://github.com/mamedev/mame/actions/workflows/docs.yml)  [![Coverity Scan Status](https://scan.coverity.com/projects/5727/badge.svg?flat=1)](https://scan.coverity.com/projects/mame-emulator)
+#### Browse with live artwork, video and info
+Every system alongside its snapshot/video/flyer/marquee art and a stack of info tabs
+(history, MAME info, command list, top scores, PDF manual, and more).
 
-### How to compile?
+![List view with art and info panel](docs/images/list-view-artinfo.png)
 
-If you're on a UNIX-like system (including Linux and macOS), it could be as easy as typing
+#### Grid view — covers, flyers, snapshots
+A DuckStation-style tile grid for both machines and software lists, with a size slider,
+selectable art source, and configurable caption. Video previews play in place.
 
+![Grid view of flyers](docs/images/grid-view-flyers.png)
+
+#### Software lists for consoles & computers
+Pick a system (e.g. Sega Genesis), browse its software list with box/cart art, and see it
+running with bezel artwork — all from the same window.
+
+![Software lists for a console](docs/images/software-lists-console.png)
+
+#### Play embedded, with a full in-game menu bar
+The game runs inside the window. A NEWUI-style menu bar operates the live machine —
+DIP switches, machine configuration, save states, media, rotate, throttle, and more.
+
+![In-game Machine menu](docs/images/in-game-machine-menu.png)
+
+#### Cheats, input remapping and audio effects — live
+Toggle cheats, remap every control, and dial in per-speaker EQ / filters / compressor
+while the game is running.
+
+![In-game cheat, input and audio editors](docs/images/in-game-cheat-audio-input.png)
+
+## Features
+
+### Browsing & organising
+- **Full machine list** straight from the MAME driver database — Description, Short name, Year,
+  Manufacturer and ROM Status columns, all sortable.
+- **Three view modes** per list: **List** (flat table), **Grouped** (clone-family tree), and
+  **Grid** (art tiles with a size slider, selectable image source and caption).
+- **Rich filter tree** — Arcade vs. Computers & Consoles, Manufacturer, Year, Category, Genre,
+  Series, Language, Best Games, Version. Collapsible, sectioned, and hides empty categories.
+- **Status filters** (Working / Available) as modifiers on the current list, with a per-pane
+  search box.
+- **Clone families, regions & versions** — group clones under a representative, prefer a region,
+  and hide bootlegs / hacks / prototypes; pick a family's default version from a right-click menu.
+- **Mechanical** and **Screenless** system-type filters.
+- **Software lists** (consoles/computers) get their own list/grouped/grid views, search,
+  filtering and availability.
+
+### Artwork & information
+- **Art tabs**: Snapshot, Video (gameplay + advert, with pause/mute), Title, Flyer, Cabinet,
+  Marquee, PCB, Logo, Artwork, Select, Versus, Score, Game Over — plus Box / Cart / 3D for software.
+- **Info tabs**: History, MAME Info, Command, MESS Info, Init, System, Story, Top Scores, and a
+  built-in **PDF manual viewer**.
+- **Configurable art fallback** (software → host machine → clone parent), a **secondary media
+  source**, per-art-type scaling, list row icons, and automatic hiding of empty tabs.
+
+### ROM management
+- **Availability auditing** for machines and software — cached, persisted, bulk-refreshable, and
+  auto-invalidated when your ROM/hash paths change.
+- **Options editor** that reads and writes `mame.ini`, a **per-machine Properties** dialog that
+  writes `<system>.ini` overrides, and front-end folder configuration.
+
+### Play — Qt-native, embedded
+- **Qt-native OSD**: MAME renders into a `QWindow` via **OpenGL or BGFX** (no SDL video), taking
+  keyboard, mouse, lightgun and text input from Qt. Play embedded **in a pane**, in a **separate
+  window**, or launch straight into a game with `--gooey <system>`.
+- **BGFX shader chains** (CRT effects, etc.) with a runtime backend selector.
+- **Full in-game menu bar** operating the live machine:
+  - **Machine** — pause, soft/hard reset, save / load / save-as state, screenshot, BIOS selection,
+    slot devices, media mount/unmount, tape / network / barcode, DIP switches, machine config, stop.
+  - **Video** — sharp/smooth pixels, render view, artwork & bezel visibility, rotate, aspect &
+    scaling, zoom-to-screen, fullscreen, brightness/contrast/gamma, throttle, frameskip, FPS, speed.
+  - **Audio** — master and per-channel volume.
+  - **Input** — emulated vs. natural keyboard, paste, crosshair options, and a live **input
+    remapping editor**.
+  - **Info** — system information, warnings, bookkeeping, and history.
+  - **Cheat** — global enable, reload, and per-cheat toggles.
+- **Audio effects editor** (per-speaker EQ / filters / compressor) and a **plugin options** menu.
+- **Gamepad support** — winhybrid / XInput / DirectInput on Windows, SDL game-controller on Linux,
+  with a runtime provider selector and sensible default mappings.
+
+### Appearance & quality-of-life
+- **View → Style** (any installed Qt widget style) and **View → Color Scheme** (System / Light /
+  Dark, auto-pairing with Fusion where the platform style ignores palettes).
+- **Collapsible panes** and full **GUI-state persistence** — window geometry, splitters, column
+  widths, view modes, filters, search text and selection all restore on next launch.
+- **No-Nag** — independently skip the system-information, warning, and loading screens.
+- **Application icon** on every platform.
+
+## Building
+
+GooeyMAME builds like MAME, selecting the Qt OSD with `OSD=qtui`.
+
+### Prerequisites
+
+- A C++17 toolchain and Python 3 (same as upstream MAME).
+- **Qt 6** (base + widgets; optionally Qt Multimedia + FFmpeg for video previews, and Qt PDF for
+  the manual viewer), discoverable via `qmake6`.
+- **Linux**: OpenGL, X11/XInput, fontconfig, and SDL2 (used only for the game-controller module).
+
+### Linux
+
+```sh
+make OSD=qtui SUBTARGET=mame -j"$(nproc)"
+./mame            # no arguments → launches the GUI
 ```
-make
+
+The Qt Multimedia and Qt PDF features are auto-detected; pass `NO_QTPDF=1` to skip the manual
+viewer if Qt PDF isn't installed.
+
+### Windows
+
+Built with MSYS2 (UCRT64) and the `mingw-w64-ucrt-x86_64-qt6-*` packages:
+
+```sh
+REGENIE=1 make OSD=qtui SUBTARGET=mame -j16
 ```
 
-for a full build,
+The Windows build is fully SDL-free (native XInput / DirectInput gamepads). For a redistributable
+build, deploy the Qt runtime next to `mame.exe` (see `windeployqt6` plus the FFmpeg codec DLLs).
 
-```
-make SUBTARGET=tiny
-```
+### Desktop integration (Linux)
 
-for a build including a small subset of supported systems.
+`scripts/resources/unix/` contains a `.desktop` entry and an installer:
 
-See the [Compiling MAME](http://docs.mamedev.org/initialsetup/compilingmame.html) page on our documentation site for more information, including prerequisites for macOS and popular Linux distributions.
-
-For recent versions of macOS you need to install [Xcode](https://developer.apple.com/xcode/) including command-line tools and [SDL 2.0](https://github.com/libsdl-org/SDL/releases/latest).
-
-For Windows users, we provide a ready-made [build environment](http://www.mamedev.org/tools/) based on MinGW-w64.
-
-Visual Studio builds are also possible, but you still need [build environment](http://www.mamedev.org/tools/) based on MinGW-w64.
-In order to generate solution and project files just run:
-
-```
-make vs2022
-```
-or use this command to build it directly using msbuild
-
-```
-make vs2022 MSBUILD=1
+```sh
+scripts/resources/unix/install-desktop.sh /path/to/mame
 ```
 
-### Coding standard
+## Relationship to MAME
 
-MAME source code should be viewed and edited with your editor set to use four spaces per tab. Tabs are used for initial indentation of lines, with one tab used per indentation level. Spaces are used for other alignment within a line.
+GooeyMAME is a downstream fork of MAME. The front-end lives entirely under `src/osd/qtui/` (plus a
+handful of additive OSD modules) and is **clean-room Qt** — it shares no code with any other MAME
+front-end. Everything else is stock MAME 0.288.
 
-Some parts of the code follow [Allman style](https://en.wikipedia.org/wiki/Indent_style#Allman_style); some parts of the code follow [K&R style](https://en.wikipedia.org/wiki/Indent_style#K.26R_style) -- mostly depending on who wrote the original version. **Above all else, be consistent with what you modify, and keep whitespace changes to a minimum when modifying existing source.** For new code, the majority tends to prefer Allman style, so if you don't care much, use that.
+- Upstream project: <https://www.mamedev.org/>
+- The original MAME README is preserved at [`docs/README.mame.md`](docs/README.mame.md).
 
-All contributors need to either add a standard header for license info (on new files) or inform us of their wishes regarding which of the following licenses they would like their code to be made available under: the [BSD-3-Clause](http://opensource.org/licenses/BSD-3-Clause) license, the [LGPL-2.1](http://opensource.org/licenses/LGPL-2.1), or the [GPL-2.0](http://opensource.org/licenses/GPL-2.0).
-
-See more specific [C++ Coding Guidelines](https://docs.mamedev.org/contributing/cxx.html) on our documentation web site.
+Please **do not** report GooeyMAME issues to the MAME team — they are not responsible for this fork.
 
 ## License
 
-The MAME project as a whole is made available under the terms of the
-[GNU General Public License, version 2](http://opensource.org/licenses/GPL-2.0)
-or later (GPL-2.0+), since it contains code made available under multiple
-GPL-compatible licenses.  A great majority of the source files (over 90%
-including core files) are made available under the terms of the
-[3-clause BSD License](http://opensource.org/licenses/BSD-3-Clause), and we
-would encourage new contributors to make their contributions available under the
-terms of this license.
+Same as MAME: predominantly **BSD-3-Clause**, with some components under other free-software
+licenses. See [`docs/legal/`](docs/legal) / [`COPYING`](COPYING) and the per-file license headers.
+MAME® is a trademark of the MAME development team; GooeyMAME is an independent fork and is not
+endorsed by or affiliated with the MAME project.
 
-Please note that MAME is a registered trademark of Gregory Ember, and permission
-is required to use the "MAME" name, logo, or wordmark.
+## Credits
 
-<a href="http://opensource.org/licenses/GPL-2.0" target="_blank">
-<img align="right" width="100" src="https://opensource.org/wp-content/uploads/2009/06/OSIApproved.svg">
-</a>
-
-    Copyright (c) 1997-2026  MAMEdev and contributors
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License version 2, as provided in
-    docs/legal/GPL-2.0.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-    more details.
-
-Please see [COPYING](COPYING) for more details.
+Built on the work of the **MAME development team** and its thousands of contributors. The Qt
+front-end and Qt-native OSD are GooeyMAME additions.
