@@ -14,6 +14,8 @@
 #include "gamelistproxy.h"   // for FolderFilter (used by a moc'd slot signature)
 
 #include <QtCore/QHash>
+#include <QtCore/QList>
+#include <QtCore/QSet>
 #include <QtCore/QStringList>
 #include <QtCore/QVector>
 #include <QtWidgets/QMainWindow>
@@ -49,6 +51,8 @@ class QTreeView;
 class QWidget;
 class QWindow;
 class QAbstractItemView;
+class QAbstractItemModel;
+class QHeaderView;
 class QModelIndex;
 
 namespace osd::qtui {
@@ -244,6 +248,28 @@ private:
 	void saveSettings() const;
 	void restoreSettings();
 
+	// List-column show/hide configuration.  A set of headers sharing the same
+	// columns (e.g. the system flat table + grouped tree) is driven together:
+	// right-clicking any of them shows a checkable menu, and visibility is
+	// persisted under settingsKey (default = only the first defaultVisibleCount
+	// columns shown).  Populates m_systemHeaders / m_softwareHeaders.
+	void installColumnMenu(const QList<QHeaderView *> &headers, QAbstractItemModel *model,
+			const QString &settingsKey, int defaultVisibleCount);
+	void showColumnMenu(const QList<QHeaderView *> &headers, QAbstractItemModel *model,
+			const QString &settingsKey, const QPoint &globalPos);
+	void applyColumnVisibility(const QList<QHeaderView *> &headers, const QString &settingsKey,
+			int defaultVisibleCount);
+	void saveColumnVisibility(QHeaderView *header, const QString &settingsKey) const;
+
+	// Combinable per-column value filters (Region / Media / Save states / Genre /
+	// Language / Controls).  Each column gets a dynamically-populated submenu of
+	// checkable values; the accepted set per column is persisted and pushed to the
+	// GameListProxy.
+	void buildColumnFilterMenu(QMenu *menu);
+	void populateColumnFilterSubmenu(QMenu *submenu, int column);
+	void applyColumnFilter(int column);
+	QHash<int, QSet<QString>> m_columnFilterValues;   // column -> accepted values
+
 	// Per-system software ROM-availability cache (avoids re-auditing on every
 	// re-selection); persisted to disk and invalidated on a ROM re-audit.
 	QString softwareCachePath() const;
@@ -258,6 +284,14 @@ private:
 	QString screenlessCachePath() const;
 	void loadScreenlessCache();
 	void saveScreenlessCache(const std::vector<std::pair<std::string, bool>> &results) const;
+
+	// Persisted control-type verdicts (system short name -> control summary),
+	// cached the same way as the screenless scan (see above).  Fed to the
+	// optional "Controls" column, which triggers the scan the first time it is
+	// shown.
+	QString controlCachePath() const;
+	void loadControlCache();
+	void saveControlCache(const std::vector<std::pair<std::string, std::string>> &results) const;
 
 	// Short name of the currently selected system, or empty if none.
 	QString selectedSystem() const;
@@ -283,6 +317,9 @@ private:
 	SoftwareModel *m_softwareModel = nullptr;
 	SoftwareProxy *m_softwareProxy = nullptr;
 	QTableView *m_softwareView = nullptr;
+	// Headers that share column visibility (populated by installColumnMenu).
+	QList<QHeaderView *> m_systemHeaders;
+	QList<QHeaderView *> m_softwareHeaders;
 	GridView *m_softwareGrid = nullptr;          // flat grid
 	GridView *m_swGridGrouped = nullptr;         // one tile per family
 	RepresentativeProxy *m_swGridProxy = nullptr;
@@ -311,6 +348,14 @@ private:
 	std::thread m_screenlessThread;
 	std::atomic<bool> m_screenlessCancel{ false };
 	bool m_screenlessScanning = false;
+
+	// One-time background scan of each system's control types, kicked off lazily
+	// the first time the optional "Controls" column is shown.
+	void startControlScan();
+	void applyControlResults(const std::vector<std::pair<std::string, std::string>> &results);
+	std::thread m_controlThread;
+	std::atomic<bool> m_controlCancel{ false };
+	bool m_controlScanning = false;
 	// Phase 13 Qt-native OSD: GUI-thread-owned render surface handed to the worker
 	QWindow *m_nativeGlWindow = nullptr;
 	QWidget *m_nativeGlContainer = nullptr;   // hosts m_nativeGlWindow (central stack or artwork pane)
@@ -360,6 +405,7 @@ private:
 	// Machine list filters, shared between the "Filters" bar button and the
 	// View ▸ Filters menu.
 	QAction *m_actWorking = nullptr;
+	QAction *m_actImperfect = nullptr;
 	QAction *m_actNotWorking = nullptr;
 	QAction *m_actAvailable = nullptr;
 	QAction *m_actUnavailable = nullptr;

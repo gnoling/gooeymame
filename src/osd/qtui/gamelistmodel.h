@@ -51,6 +51,18 @@ public:
 		COLUMN_YEAR,
 		COLUMN_MANUFACTURER,
 		COLUMN_STATUS,
+		// Additional, optional columns (hidden by default; toggled from the
+		// list header's context menu).  Appended so the indices of the columns
+		// above stay stable for saved header state and sort settings.
+		COLUMN_CLONEOF,     // clone parent's short name ("" for parents)
+		COLUMN_SOURCE,      // driver source file basename (e.g. galaga.cpp)
+		COLUMN_ROMS,        // ROM availability (Available / Missing)
+		COLUMN_SAVE,        // save-state support (Supported / No)
+		COLUMN_REGION,      // region inferred from the description
+		COLUMN_MEDIA,       // media types the driver uses (ROM / CHD)
+		COLUMN_GENRE,       // genre from catlist/genre.ini
+		COLUMN_LANGUAGE,    // language from languages.ini
+		COLUMN_CONTROL,     // control types (needs a background machine scan)
 		COLUMN_COUNT
 	};
 
@@ -63,6 +75,8 @@ public:
 		ShortNameRole,
 		// true if the system is emulated well enough to be considered working
 		WorkingRole,
+		// emulation quality as an EmulationStatus (good / imperfect / preliminary)
+		EmulationStatusRole,
 		// true if the system is an arcade machine (vs. a console/computer/etc.)
 		ArcadeRole,
 		// normalised manufacturer name (parenthetical notes stripped)
@@ -100,11 +114,21 @@ public:
 		Unavailable = 2
 	};
 
+	// Emulation quality of a system (mirrors the Status column text).
+	enum EmulationStatus { EmuWorking = 0, EmuImperfect = 1, EmuNotWorking = 2 };
+
 	// How the representative ("primary") member of a clone family is chosen.
 	enum VersionMode { MatchParent = 0, PromoteRegion = 1 };
 
 	// Version classification flags (from MACHINE_UNOFFICIAL + description tags).
 	enum VersionFlag { VersionBootleg = 0x1, VersionHack = 0x2, VersionPrototype = 0x4 };
+
+	// Media the driver declares in its ROM definition (COLUMN_MEDIA).
+	enum MediaFlag { MediaRom = 0x1, MediaDisk = 0x2 };
+
+	// Per-row control-type verdict (COLUMN_CONTROL); needs a machine_config
+	// scan, so it stays ControlUnknown until the background scan fills it in.
+	enum { ControlUnknown = -1 };
 
 	explicit GameListModel(QObject *parent = nullptr);
 
@@ -136,8 +160,29 @@ public:
 	// Whether the one-time screenless scan has populated any verdicts.
 	bool hasScreenlessData() const { return m_screenlessScanned; }
 
+	// Provide the short-name -> value maps for the Genre and Language columns,
+	// built from the EXTRAs .ini files (see MainWindow).  Empty until set.
+	void setCategoryData(QHash<QString, QString> genre, QHash<QString, QString> language);
+
+	// Apply control-type scan results keyed by system short name (a short human
+	// label such as "Lightgun" / "Joystick (8-way)").  Marks the model as having
+	// control data so COLUMN_CONTROL shows the verdicts.
+	void applyControlBatch(const std::vector<std::pair<std::string, std::string>> &results);
+	// Whether the one-time control-type scan has populated any verdicts.
+	bool hasControlData() const { return m_controlScanned; }
+
 	// Normalise a manufacturer string for grouping (strip "(...)" notes).
 	static QString normaliseManufacturer(const char *manufacturer);
+
+	// Split a filterable column's display text into the individual values used by
+	// the combinable column filters.  Most columns yield one value; Media splits
+	// "ROM + CHD" into {ROM, CHD} and Controls splits its comma list, so selecting
+	// e.g. "CHD" matches a "ROM + CHD" row.  Shared with GameListProxy.
+	static QStringList valueTokens(int column, const QString &display);
+
+	// Sorted, de-duplicated set of values present in a filterable column (from
+	// valueTokens over every row), for populating that column's filter submenu.
+	QStringList distinctColumnValues(int column) const;
 
 signals:
 	// Emitted when clone-family representatives change (after a version setting
@@ -209,6 +254,13 @@ private:
 	std::vector<int> m_representative;
 	std::vector<QString> m_region;               // canonical region per row
 	std::vector<std::uint8_t> m_versionFlags;    // VersionFlag bitmask per row
+	std::vector<std::uint8_t> m_media;           // MediaFlag bitmask per row (ROM/CHD)
+
+	// Optional column data filled in after construction (see setters above).
+	QHash<QString, QString> m_genre;             // short name -> genre
+	QHash<QString, QString> m_language;          // short name -> language
+	std::vector<QString> m_control;              // per-row control label
+	bool m_controlScanned = false;
 
 	// "Version" preference (read from versions/* in QSettings).
 	int m_versionMode = MatchParent;

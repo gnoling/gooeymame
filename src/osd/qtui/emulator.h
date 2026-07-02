@@ -221,4 +221,13 @@ void qtui_scan_screenless(
 		const std::function<void (const std::string &, bool)> &progress,
 		const std::atomic<bool> &cancel);
 
+// Determine each system's control types (Lightgun / Trackball / Joystick / …)
+// by enumerating its input ports.  Builds each machine configuration — expensive
+// — so it runs once on a worker thread, invoking progress(shortname, controls)
+// per system with a human-readable summary ("" when none).  Aborts promptly when
+// cancel becomes true.  Serialised with the other core sweeps via the core lock.
+void qtui_scan_controls(
+		const std::function<void (const std::string &, const std::string &)> &progress,
+		const std::atomic<bool> &cancel);
+
 #endif // MAME_OSD_QTUI_EMULATOR_H

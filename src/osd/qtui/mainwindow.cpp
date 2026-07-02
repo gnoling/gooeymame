@@ -34,6 +34,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QItemSelectionModel>
+#include <QtCore/QSet>
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QEvent>
@@ -530,7 +531,15 @@ MainWindow::MainWindow(QWidget *parent) :
 
 	loadSoftwareCache();
 	loadScreenlessCache();
+	loadControlCache();
 	restoreSettings();
+
+	// If the (persisted) Controls column is already shown but we have no cached
+	// verdicts yet, kick the one-time background scan now.
+	if (!m_model->hasControlData()
+			&& m_systemHeaders.value(0)
+			&& !m_systemHeaders.value(0)->isSectionHidden(GameListModel::COLUMN_CONTROL))
+		startControlScan();
 }
 
 // Read the ROM/hash search-path options that determine availability, joined
@@ -691,6 +700,238 @@ void MainWindow::showSoftwareContextMenu(const QPoint &pos)
 	}
 
 	menu.exec(view->viewport()->mapToGlobal(pos));
+}
+
+// Parse a MAME EXTRAs category .ini (catver-style: [Section] header followed by
+// one short name per line) into a short-name -> section-label map.  Used to fill
+// the optional Genre and Language columns.  Returns empty if the file is absent.
+static QHash<QString, QString> loadCategoryMap(const QString &dir, const QString &file)
+{
+	QHash<QString, QString> map;
+	if (dir.isEmpty())
+		return map;
+
+	QFile in(dir + QLatin1Char('/') + file);
+	if (!in.open(QIODevice::ReadOnly | QIODevice::Text))
+		return map;
+
+	QString section;
+	QTextStream stream(&in);
+	while (!stream.atEnd())
+	{
+		QString const line = stream.readLine().trimmed();
+		if (line.isEmpty() || line.startsWith(QLatin1Char(';')))
+			continue;
+
+		if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']')))
+		{
+			QString const s = line.mid(1, line.size() - 2);
+			section = (s == QLatin1String("FOLDER_SETTINGS") || s == QLatin1String("ROOT_FOLDER"))
+					? QString() : s;
+			continue;
+		}
+
+		if (!section.isEmpty())
+			map.insert(line, section);
+	}
+	return map;
+}
+
+void MainWindow::installColumnMenu(const QList<QHeaderView *> &headers, QAbstractItemModel *model,
+		const QString &settingsKey, int defaultVisibleCount)
+{
+	for (QHeaderView *header : headers)
+	{
+		header->setContextMenuPolicy(Qt::CustomContextMenu);
+		connect(header, &QWidget::customContextMenuRequested, this,
+				[this, headers, model, settingsKey](const QPoint &pos) {
+					showColumnMenu(headers, model, settingsKey,
+							qobject_cast<QWidget *>(sender())->mapToGlobal(pos));
+				});
+	}
+
+	// Remember the group so restoreSettings() can (re)apply visibility, and set
+	// the initial state now (so the default hides the optional columns even if
+	// restoreSettings runs before the views are shown).
+	if (settingsKey.contains(QStringLiteral("system")))
+		m_systemHeaders = headers;
+	else
+		m_softwareHeaders = headers;
+	applyColumnVisibility(headers, settingsKey, defaultVisibleCount);
+}
+
+void MainWindow::showColumnMenu(const QList<QHeaderView *> &headers, QAbstractItemModel *model,
+		const QString &settingsKey, const QPoint &globalPos)
+{
+	if (headers.isEmpty() || !model)
+		return;
+
+	QHeaderView *const primary = headers.first();
+	int const cols = model->columnCount();
+
+	QMenu menu(this);
+	menu.addAction(tr("Columns"))->setEnabled(false);
+	menu.addSeparator();
+
+	for (int col = 0; col < cols; ++col)
+	{
+		QString const label = model->headerData(col, Qt::Horizontal, Qt::DisplayRole).toString();
+		if (label.isEmpty())
+			continue;
+
+		QAction *const act = menu.addAction(label);
+		act->setCheckable(true);
+		act->setChecked(!primary->isSectionHidden(col));
+		// The first visible column (Description) is the anchor and can't be
+		// hidden, so there's always at least one column on screen.
+		if (col == 0)
+			act->setEnabled(false);
+		connect(act, &QAction::toggled, this,
+				[this, headers, settingsKey, col](bool shown) {
+					for (QHeaderView *h : headers)
+						h->setSectionHidden(col, !shown);
+					saveColumnVisibility(headers.first(), settingsKey);
+					// The Controls column needs a one-time background scan; start
+					// it the first time the column is revealed.
+					if (shown && settingsKey == QStringLiteral("columns/system")
+							&& col == GameListModel::COLUMN_CONTROL)
+						startControlScan();
+				});
+	}
+
+	menu.exec(globalPos);
+}
+
+void MainWindow::applyColumnVisibility(const QList<QHeaderView *> &headers, const QString &settingsKey,
+		int defaultVisibleCount)
+{
+	if (headers.isEmpty())
+		return;
+
+	int const cols = headers.first()->count();
+	QSet<int> hidden;
+	QSettings settings;
+	if (settings.contains(settingsKey))
+	{
+		const QStringList saved = settings.value(settingsKey).toStringList();
+		for (const QString &v : saved)
+			hidden.insert(v.toInt());
+	}
+	else
+	{
+		// First run: hide every optional (appended) column.
+		for (int col = defaultVisibleCount; col < cols; ++col)
+			hidden.insert(col);
+	}
+
+	for (QHeaderView *h : headers)
+		for (int col = 0; col < cols; ++col)
+			h->setSectionHidden(col, hidden.contains(col));
+}
+
+void MainWindow::saveColumnVisibility(QHeaderView *header, const QString &settingsKey) const
+{
+	QStringList hidden;
+	for (int col = 0; col < header->count(); ++col)
+		if (header->isSectionHidden(col))
+			hidden << QString::number(col);
+	QSettings().setValue(settingsKey, hidden);
+}
+
+// Machine-list columns that get a combinable value-filter submenu, with the
+// submenu title (kept here so the menu can be built before the model exists).
+namespace {
+struct FilterableColumn { int column; const char *label; };
+const FilterableColumn kFilterableColumns[] = {
+	{ GameListModel::COLUMN_REGION,   QT_TRANSLATE_NOOP("MainWindow", "Region") },
+	{ GameListModel::COLUMN_MEDIA,    QT_TRANSLATE_NOOP("MainWindow", "Media") },
+	{ GameListModel::COLUMN_SAVE,     QT_TRANSLATE_NOOP("MainWindow", "Save states") },
+	{ GameListModel::COLUMN_GENRE,    QT_TRANSLATE_NOOP("MainWindow", "Genre") },
+	{ GameListModel::COLUMN_LANGUAGE, QT_TRANSLATE_NOOP("MainWindow", "Language") },
+	{ GameListModel::COLUMN_CONTROL,  QT_TRANSLATE_NOOP("MainWindow", "Controls") },
+};
+} // anonymous namespace
+
+void MainWindow::buildColumnFilterMenu(QMenu *menu)
+{
+	QList<QMenu *> subs;
+	for (const FilterableColumn &fc : kFilterableColumns)
+	{
+		QMenu *sub = menu->addMenu(tr(fc.label));
+		int const col = fc.column;
+		subs.append(sub);
+		connect(sub, &QMenu::aboutToShow, this, [this, sub, col] {
+			populateColumnFilterSubmenu(sub, col);
+		});
+	}
+
+	// When the parent opens, annotate each submenu title with its active count.
+	connect(menu, &QMenu::aboutToShow, this, [this, subs] {
+		int i = 0;
+		for (const FilterableColumn &fc : kFilterableColumns)
+		{
+			int const n = m_columnFilterValues.value(fc.column).size();
+			subs[i++]->setTitle(n > 0 ? QStringLiteral("%1 (%2)").arg(tr(fc.label)).arg(n) : tr(fc.label));
+		}
+	});
+}
+
+void MainWindow::populateColumnFilterSubmenu(QMenu *submenu, int column)
+{
+	submenu->clear();
+
+	// The Controls column's values come from the one-time background scan; kick
+	// it off (if needed) and show a placeholder until it completes.
+	if (column == GameListModel::COLUMN_CONTROL && !m_model->hasControlData())
+	{
+		startControlScan();
+		QAction *const busy = submenu->addAction(tr("Scanning controls… (reopen shortly)"));
+		busy->setEnabled(false);
+		return;
+	}
+
+	QStringList const values = m_model->distinctColumnValues(column);
+	if (values.isEmpty())
+	{
+		QAction *const none = submenu->addAction(tr("(no values)"));
+		none->setEnabled(false);
+		return;
+	}
+
+	QAction *const clear = submenu->addAction(tr("Clear"));
+	clear->setEnabled(!m_columnFilterValues.value(column).isEmpty());
+	connect(clear, &QAction::triggered, this, [this, column] {
+		m_columnFilterValues[column].clear();
+		applyColumnFilter(column);
+	});
+	submenu->addSeparator();
+
+	for (const QString &value : values)
+	{
+		QAction *const act = submenu->addAction(value);
+		act->setCheckable(true);
+		act->setChecked(m_columnFilterValues.value(column).contains(value));
+		connect(act, &QAction::toggled, this, [this, column, value](bool on) {
+			if (on)
+				m_columnFilterValues[column].insert(value);
+			else
+				m_columnFilterValues[column].remove(value);
+			applyColumnFilter(column);
+		});
+	}
+}
+
+void MainWindow::applyColumnFilter(int column)
+{
+	QSet<QString> const accepted = m_columnFilterValues.value(column);
+	m_proxy->setColumnValueFilter(column, accepted);
+	invalidateMachineViews();
+	syncSoftwarePane();
+	updateCategoryFilter();
+	updateStatusCount();
+
+	QStringList const values(accepted.cbegin(), accepted.cend());
+	QSettings().setValue(QStringLiteral("colfilter/") + QString::number(column), values);
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -987,6 +1228,54 @@ void MainWindow::saveScreenlessCache(const std::vector<std::pair<std::string, bo
 			<< (entry.second ? 1 : 0) << QLatin1Char('\n');
 }
 
+QString MainWindow::controlCachePath() const
+{
+	QString const dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+	QDir().mkpath(dir);
+	return dir + QStringLiteral("/controls.cache");
+}
+
+void MainWindow::loadControlCache()
+{
+	QFile file(controlCachePath());
+	if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+		return;
+
+	QTextStream in(&file);
+	// First line: system-count stamp (invalidates the cache across builds that
+	// add/remove systems), like the screenless cache.
+	QString const stamp = in.readLine();
+	if (stamp.toInt() != m_model->rowCount())
+		return;
+
+	// "shortname\tlabel" — a tab separator because the label contains spaces
+	// and commas ("Joystick (8-way), Buttons").
+	std::vector<std::pair<std::string, std::string>> results;
+	while (!in.atEnd())
+	{
+		QString const line = in.readLine();
+		int const sep = line.indexOf(QLatin1Char('\t'));
+		if (sep < 0)
+			continue;
+		results.emplace_back(line.left(sep).toStdString(), line.mid(sep + 1).toStdString());
+	}
+	if (!results.empty())
+		m_model->applyControlBatch(results);   // marks hasControlData()
+}
+
+void MainWindow::saveControlCache(const std::vector<std::pair<std::string, std::string>> &results) const
+{
+	QFile file(controlCachePath());
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+		return;
+
+	QTextStream out(&file);
+	out << m_model->rowCount() << QLatin1Char('\n');
+	for (const auto &entry : results)
+		out << QString::fromStdString(entry.first) << QLatin1Char('\t')
+			<< QString::fromStdString(entry.second) << QLatin1Char('\n');
+}
+
 void MainWindow::restoreSettings()
 {
 	QSettings settings;
@@ -1019,6 +1308,36 @@ void MainWindow::restoreSettings()
 	QByteArray const softwareHeader = settings.value(QStringLiteral("softwareHeader")).toByteArray();
 	if (!softwareHeader.isEmpty())
 		m_softwareView->horizontalHeader()->restoreState(softwareHeader);
+
+	// restoreState() also carries per-section hidden bits, but our explicit
+	// column-visibility list is authoritative (it survives column-count changes
+	// between versions, which invalidate a saved header state).  Re-apply last.
+	applyColumnVisibility(m_systemHeaders, QStringLiteral("columns/system"),
+			GameListModel::COLUMN_STATUS + 1);
+	applyColumnVisibility(m_softwareHeaders, QStringLiteral("columns/software"),
+			SoftwareModel::COLUMN_LIST + 1);
+
+	// Restore combinable per-column value filters and push them to the proxy.
+	// (These are stored at the settings root, not under the mainwindow group.)
+	{
+		QSettings root;
+		for (const FilterableColumn &fc : kFilterableColumns)
+		{
+			int const col = fc.column;
+			QStringList const vals =
+					root.value(QStringLiteral("colfilter/") + QString::number(col)).toStringList();
+			if (vals.isEmpty())
+				continue;
+			QSet<QString> const set(vals.cbegin(), vals.cend());
+			m_columnFilterValues[col] = set;
+			// A control filter can only match once the scan has run; defer applying
+			// it (applyControlResults re-applies) so the list isn't briefly empty.
+			if (col == GameListModel::COLUMN_CONTROL && !m_model->hasControlData())
+				startControlScan();
+			else
+				m_proxy->setColumnValueFilter(col, set);
+		}
+	}
 
 	int const iconSize = settings.value(QStringLiteral("iconSize"), 24).toInt();
 	bool const iconSmooth = settings.value(QStringLiteral("iconSmoothScaling"), false).toBool();
@@ -1077,12 +1396,13 @@ void MainWindow::restoreSettings()
 	// states so an early toggle doesn't write back the not-yet-restored others,
 	// then apply once.
 	QAction *const filterActs[] = {
-		m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable,
+		m_actWorking, m_actImperfect, m_actNotWorking, m_actAvailable, m_actUnavailable,
 		m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
 		m_actHideMechanical, m_actHideScreenless, m_actFilterCategories };
 	for (QAction *act : filterActs)
 		act->blockSignals(true);
 	m_actWorking->setChecked(settings.value(QStringLiteral("filters/working"), false).toBool());
+	m_actImperfect->setChecked(settings.value(QStringLiteral("filters/imperfect"), false).toBool());
 	m_actNotWorking->setChecked(settings.value(QStringLiteral("filters/notWorking"), false).toBool());
 	m_actAvailable->setChecked(settings.value(QStringLiteral("filters/available"), false).toBool());
 	m_actUnavailable->setChecked(settings.value(QStringLiteral("filters/unavailable"), false).toBool());
@@ -1151,6 +1471,13 @@ MainWindow::~MainWindow()
 	{
 		m_screenlessCancel.store(true, std::memory_order_relaxed);
 		m_screenlessThread.join();
+	}
+
+	// Likewise the control-type scan.
+	if (m_controlThread.joinable())
+	{
+		m_controlCancel.store(true, std::memory_order_relaxed);
+		m_controlThread.join();
 	}
 }
 
@@ -1389,7 +1716,8 @@ void MainWindow::createMenus()
 		act->setToolTip(tip);
 		return act;
 	};
-	m_actWorking = makeFilterAction(tr("Working"), tr("Show systems with working emulation"));
+	m_actWorking = makeFilterAction(tr("Working"), tr("Show systems with fully working emulation"));
+	m_actImperfect = makeFilterAction(tr("Imperfect"), tr("Show working systems with imperfect graphics/sound/etc."));
 	m_actNotWorking = makeFilterAction(tr("Not working"), tr("Show systems with non-working emulation"));
 	m_actAvailable = makeFilterAction(tr("Available"), tr("Show systems whose ROMs are present"));
 	m_actUnavailable = makeFilterAction(tr("Unavailable"), tr("Show systems whose ROMs are missing"));
@@ -1402,9 +1730,10 @@ void MainWindow::createMenus()
 	m_actFilterCategories = makeFilterAction(tr("Apply filters to categories"),
 			tr("Hide a category from the filter tree when the active filters leave it with no visible games"));
 
-	actionsExclusive(m_actWorking, m_actNotWorking);
+	// Emulation status (Working / Imperfect / Not working) is multi-select — the
+	// three combine.  Availability (Available / Unavailable) stays exclusive.
 	actionsExclusive(m_actAvailable, m_actUnavailable);
-	for (QAction *act : { m_actWorking, m_actNotWorking, m_actAvailable, m_actUnavailable })
+	for (QAction *act : { m_actWorking, m_actImperfect, m_actNotWorking, m_actAvailable, m_actUnavailable })
 		connect(act, &QAction::toggled, this, &MainWindow::onStatusFilterChanged);
 	for (QAction *act : { m_actHideClones, m_actHideBootlegs, m_actHideHacks, m_actHidePrototypes,
 			m_actHideMechanical, m_actHideScreenless })
@@ -1416,9 +1745,12 @@ void MainWindow::createMenus()
 
 	QMenu *filtersMenu = viewMenu->addMenu(tr("&Filters"));
 	filtersMenu->addAction(m_actWorking);
+	filtersMenu->addAction(m_actImperfect);
 	filtersMenu->addAction(m_actNotWorking);
 	filtersMenu->addAction(m_actAvailable);
 	filtersMenu->addAction(m_actUnavailable);
+	filtersMenu->addSeparator();
+	buildColumnFilterMenu(filtersMenu->addMenu(tr("&Column Filters")));
 	filtersMenu->addSeparator();
 	filtersMenu->addAction(m_actHideClones);
 	filtersMenu->addAction(m_actHideBootlegs);
@@ -2621,6 +2953,15 @@ void MainWindow::createWidgets()
 	m_view->setColumnWidth(GameListModel::COLUMN_YEAR, 56);
 	m_view->setColumnWidth(GameListModel::COLUMN_MANUFACTURER, 200);
 	m_view->setColumnWidth(GameListModel::COLUMN_STATUS, 110);
+	m_view->setColumnWidth(GameListModel::COLUMN_CLONEOF, 100);
+	m_view->setColumnWidth(GameListModel::COLUMN_SOURCE, 140);
+	m_view->setColumnWidth(GameListModel::COLUMN_ROMS, 90);
+	m_view->setColumnWidth(GameListModel::COLUMN_SAVE, 90);
+	m_view->setColumnWidth(GameListModel::COLUMN_REGION, 90);
+	m_view->setColumnWidth(GameListModel::COLUMN_MEDIA, 90);
+	m_view->setColumnWidth(GameListModel::COLUMN_GENRE, 140);
+	m_view->setColumnWidth(GameListModel::COLUMN_LANGUAGE, 100);
+	m_view->setColumnWidth(GameListModel::COLUMN_CONTROL, 130);
 
 	connect(m_view, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSystem);
 	connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -2643,9 +2984,12 @@ void MainWindow::createWidgets()
 	filtersButton->setPopupMode(QToolButton::InstantPopup);
 	QMenu *barFiltersMenu = new QMenu(filtersButton);
 	barFiltersMenu->addAction(m_actWorking);
+	barFiltersMenu->addAction(m_actImperfect);
 	barFiltersMenu->addAction(m_actNotWorking);
 	barFiltersMenu->addAction(m_actAvailable);
 	barFiltersMenu->addAction(m_actUnavailable);
+	barFiltersMenu->addSeparator();
+	buildColumnFilterMenu(barFiltersMenu->addMenu(tr("Column Filters")));
 	barFiltersMenu->addSeparator();
 	barFiltersMenu->addAction(m_actHideClones);
 	barFiltersMenu->addAction(m_actHideBootlegs);
@@ -2777,12 +3121,31 @@ void MainWindow::createWidgets()
 	m_softwareView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
 	m_softwareView->horizontalHeader()->setStretchLastSection(true);
 	m_softwareView->setColumnWidth(SoftwareModel::COLUMN_DESCRIPTION, 280);
+	m_softwareView->setColumnWidth(SoftwareModel::COLUMN_CLONEOF, 100);
+	m_softwareView->setColumnWidth(SoftwareModel::COLUMN_ROMS, 90);
+	m_softwareView->setColumnWidth(SoftwareModel::COLUMN_REGION, 90);
 	connect(m_softwareView, &QTableView::doubleClicked, this, &MainWindow::launchSelectedSoftware);
 	connect(m_softwareView->selectionModel(), &QItemSelectionModel::selectionChanged,
 			this, &MainWindow::onSoftwareSelectionChanged);
 	m_softwareView->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(m_softwareView, &QWidget::customContextMenuRequested,
 			this, &MainWindow::showSoftwareContextMenu);
+
+	// Right-click any list header to choose which columns are shown.  The system
+	// flat table and the grouped tree share one visibility set; the software
+	// table has its own.  Optional (appended) columns start hidden.
+	installColumnMenu({ m_view->horizontalHeader(), m_tree->header() }, m_proxy,
+			QStringLiteral("columns/system"), GameListModel::COLUMN_STATUS + 1);
+	installColumnMenu({ m_softwareView->horizontalHeader() }, m_softwareProxy,
+			QStringLiteral("columns/software"), SoftwareModel::COLUMN_LIST + 1);
+
+	// Fill the optional Genre / Language columns from the EXTRAs category .ini
+	// files (same source the folder tree uses); no-op if they aren't present.
+	{
+		QString const catDir = frontendFolderPath(QStringLiteral("categories"));
+		m_model->setCategoryData(loadCategoryMap(catDir, QStringLiteral("genre.ini")),
+				loadCategoryMap(catDir, QStringLiteral("languages.ini")));
+	}
 
 	// Flat software grid: every member as a tile (shares the flat proxy).
 	m_softwareGrid = new GridView;
@@ -3455,6 +3818,8 @@ void MainWindow::onStatusFilterChanged()
 	int flags = 0;
 	if (m_actWorking->isChecked())
 		flags |= StatusWorking;
+	if (m_actImperfect->isChecked())
+		flags |= StatusImperfect;
 	if (m_actNotWorking->isChecked())
 		flags |= StatusNotWorking;
 	if (m_actAvailable->isChecked())
@@ -3468,6 +3833,7 @@ void MainWindow::onStatusFilterChanged()
 
 	QSettings settings;
 	settings.setValue(QStringLiteral("filters/working"), m_actWorking->isChecked());
+	settings.setValue(QStringLiteral("filters/imperfect"), m_actImperfect->isChecked());
 	settings.setValue(QStringLiteral("filters/notWorking"), m_actNotWorking->isChecked());
 	settings.setValue(QStringLiteral("filters/available"), m_actAvailable->isChecked());
 	settings.setValue(QStringLiteral("filters/unavailable"), m_actUnavailable->isChecked());
@@ -3556,6 +3922,54 @@ void MainWindow::applyScreenlessResults(const std::vector<std::pair<std::string,
 	updateCategoryFilter();   // screenless verdicts can now hide screenless-only categories
 	updateStatusCount();
 	statusBar()->showMessage(tr("Screenless scan complete."), 4000);
+}
+
+void MainWindow::startControlScan()
+{
+	if (m_controlScanning || m_controlThread.joinable() || m_model->hasControlData())
+		return;
+	m_controlScanning = true;
+	statusBar()->showMessage(
+			tr("Scanning system controls… (one-time, runs in the background)"));
+
+	m_controlCancel.store(false, std::memory_order_relaxed);
+	m_controlThread = std::thread([this] {
+		osd::qtui::lower_current_thread_priority();
+		auto results = std::make_shared<std::vector<std::pair<std::string, std::string>>>();
+		qtui_scan_controls(
+				[&results](const std::string &name, const std::string &controls) {
+					results->emplace_back(name, controls);
+				},
+				m_controlCancel);
+		QMetaObject::invokeMethod(this, [this, results] {
+			applyControlResults(*results);
+		}, Qt::QueuedConnection);
+	});
+}
+
+void MainWindow::applyControlResults(const std::vector<std::pair<std::string, std::string>> &results)
+{
+	if (m_controlThread.joinable())
+		m_controlThread.join();
+	m_controlScanning = false;
+
+	if (m_controlCancel.load(std::memory_order_relaxed))
+		return;   // cancelled (app shutting down)
+
+	m_model->applyControlBatch(results);
+	saveControlCache(results);   // persist so the scan never repeats on this build
+
+	// Apply a Controls value-filter that was restored/selected before the scan
+	// had data (it was deferred so the list wasn't empty in the meantime).
+	QSet<QString> const controlFilter = m_columnFilterValues.value(GameListModel::COLUMN_CONTROL);
+	if (!controlFilter.isEmpty())
+	{
+		m_proxy->setColumnValueFilter(GameListModel::COLUMN_CONTROL, controlFilter);
+		invalidateMachineViews();
+		updateStatusCount();
+	}
+
+	statusBar()->showMessage(tr("Control-type scan complete."), 4000);
 }
 
 void MainWindow::onSoftwareFilterChanged()

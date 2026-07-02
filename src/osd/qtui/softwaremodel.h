@@ -49,6 +49,11 @@ public:
 		COLUMN_PUBLISHER,
 		COLUMN_SUPPORTED,
 		COLUMN_LIST,
+		// Optional columns (hidden by default; toggled from the list header's
+		// context menu).  Appended to keep the indices above stable.
+		COLUMN_CLONEOF,   // clone parent's short name ("" for parents)
+		COLUMN_ROMS,      // ROM availability (Available / Missing)
+		COLUMN_REGION,    // region inferred from the title
 		COLUMN_COUNT
 	};
 

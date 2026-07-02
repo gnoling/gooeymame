@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <QtCore/QHash>
 #include <QtCore/QSet>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QString>
@@ -58,7 +59,8 @@ enum StatusFlag
 	StatusWorking     = 0x01,
 	StatusNotWorking  = 0x02,
 	StatusAvailable   = 0x04,   // wired in the audit phase
-	StatusUnavailable = 0x08    // wired in the audit phase
+	StatusUnavailable = 0x08,   // wired in the audit phase
+	StatusImperfect   = 0x10    // working, but with imperfect/unemulated features
 };
 
 
@@ -72,6 +74,12 @@ public:
 	void setFolderFilter(const FolderFilter &filter);
 	void setStatusFilter(int flags);   // bitwise OR of StatusFlag
 	void setSearchText(const QString &text);
+
+	// Combinable per-column value filters (Region / Media / Save states / Genre /
+	// Language / Controls).  A row passes a column's filter if any of its values
+	// (GameListModel::valueTokens) is in the accepted set; an empty set clears the
+	// filter.  Different columns are AND'd together and with the other filters.
+	void setColumnValueFilter(int column, const QSet<QString> &accepted);
 
 	// Version filters: hide clones (show only family representatives), and hide
 	// bootleg/hack/prototype sets.
@@ -110,6 +118,7 @@ private:
 	bool m_hidePrototypes = false;
 	bool m_hideMechanical = false;
 	bool m_hideScreenless = false;
+	QHash<int, QSet<QString>> m_columnFilters;   // column -> accepted value set
 };
 
 } // namespace osd::qtui

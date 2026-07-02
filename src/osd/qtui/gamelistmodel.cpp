@@ -11,6 +11,7 @@
 #include "gamelistmodel.h"
 
 #include "drivenum.h"
+#include "romentry.h"
 
 #include "frontendpaths.h"
 #include "iconloader.h"
@@ -156,6 +157,8 @@ void GameListModel::buildFamilies()
 	m_familyRoot.assign(n, -1);
 	m_region.assign(n, QString());
 	m_versionFlags.assign(n, 0);
+	m_media.assign(n, 0);
+	m_control.assign(n, QString());
 	m_representative.assign(n, -1);
 	m_familyMembers.clear();
 
@@ -194,6 +197,22 @@ void GameListModel::buildFamilies()
 		if (lower.contains(QStringLiteral("prototype")) || (drv.flags & machine_flags::IS_INCOMPLETE))
 			flags |= VersionPrototype;
 		m_versionFlags[row] = flags;
+
+		// Media types the driver declares: walk its ROM regions and note whether
+		// it loads ROM files, CHD (disk) images, or both.  A ROM entry inside a
+		// DISK_REGION is a CHD; inside a normal region it is a ROM file.
+		std::uint8_t media = 0;
+		bool regionIsDisk = false;
+		for (const tiny_rom_entry *e = drv.rom;
+				e && (e->flags & ROMENTRY_TYPEMASK) != ROMENTRYTYPE_END; ++e)
+		{
+			std::uint32_t const type = e->flags & ROMENTRY_TYPEMASK;
+			if (type == ROMENTRYTYPE_REGION)
+				regionIsDisk = (e->flags & ROMREGION_DATATYPEMASK) == ROMREGION_DATATYPEDISK;
+			else if (type == ROMENTRYTYPE_ROM)
+				media |= regionIsDisk ? MediaDisk : MediaRom;
+		}
+		m_media[row] = media;
 	}
 
 	for (int row = 0; row < n; row++)
@@ -445,6 +464,19 @@ void GameListModel::setIconSmoothScaling(bool smooth)
 	invalidateIconCache();
 }
 
+// Emulation quality of a driver: not working, working-but-imperfect (any
+// unemulated/imperfect feature), or fully working.  Shared by the Status column
+// and EmulationStatusRole.
+static GameListModel::EmulationStatus emulationStatusOf(const game_driver &drv)
+{
+	if (drv.type.emulation_flags() & emu::detail::device_flags::NOT_WORKING)
+		return GameListModel::EmuNotWorking;
+	if (drv.type.unemulated_features() != emu::detail::device_feature::NONE
+			|| drv.type.imperfect_features() != emu::detail::device_feature::NONE)
+		return GameListModel::EmuImperfect;
+	return GameListModel::EmuWorking;
+}
+
 QVariant GameListModel::data(const QModelIndex &index, int role) const
 {
 	if (!index.isValid() || index.row() < 0 || index.row() >= int(m_rows.size()))
@@ -462,6 +494,9 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 
 	case WorkingRole:
 		return !(drv.type.emulation_flags() & emu::detail::device_flags::NOT_WORKING);
+
+	case EmulationStatusRole:
+		return int(emulationStatusOf(drv));
 
 	case ArcadeRole:
 		// Official MAME has no arcade flag.  GAME/GAMEL (arcade) leave
@@ -534,11 +569,58 @@ QVariant GameListModel::data(const QModelIndex &index, int role) const
 		case COLUMN_MANUFACTURER:
 			return QString::fromUtf8(drv.manufacturer ? drv.manufacturer : "");
 		case COLUMN_STATUS:
-			// Emulation status only for now; ROM availability arrives with
-			// the audit phase.
-			return (drv.type.emulation_flags() & emu::detail::device_flags::NOT_WORKING)
-					? tr("Not working")
-					: tr("Working");
+			switch (emulationStatusOf(drv))
+			{
+			case EmuNotWorking: return tr("Not working");
+			case EmuImperfect:  return tr("Imperfect");
+			default:            return tr("Working");
+			}
+
+		case COLUMN_CLONEOF:
+			return isClone(index.row()) ? QString::fromLatin1(drv.parent) : QString();
+
+		case COLUMN_SOURCE:
+		{
+			const char *const src = drv.type.source();
+			if (!src || !*src)
+				return QString();
+			QString s = QString::fromUtf8(src);
+			int const slash = s.lastIndexOf(QLatin1Char('/'));
+			return slash >= 0 ? s.mid(slash + 1) : s;
+		}
+
+		case COLUMN_ROMS:
+			switch (m_availability[index.row()])
+			{
+			case Available:   return tr("Available");
+			case Unavailable: return tr("Missing");
+			default:          return QString();
+			}
+
+		case COLUMN_SAVE:
+			return (drv.type.emulation_flags() & emu::detail::device_flags::SAVE_UNSUPPORTED)
+					? tr("No") : tr("Supported");
+
+		case COLUMN_REGION:
+			return m_region.empty() ? QString() : m_region[index.row()];
+
+		case COLUMN_MEDIA:
+		{
+			std::uint8_t const m = m_media.empty() ? 0 : m_media[index.row()];
+			if ((m & MediaRom) && (m & MediaDisk)) return tr("ROM + CHD");
+			if (m & MediaDisk)                     return tr("CHD");
+			if (m & MediaRom)                      return tr("ROM");
+			return QString();
+		}
+
+		case COLUMN_GENRE:
+			return m_genre.value(QString::fromLatin1(drv.name));
+
+		case COLUMN_LANGUAGE:
+			return m_language.value(QString::fromLatin1(drv.name));
+
+		case COLUMN_CONTROL:
+			return m_control.empty() ? QString() : m_control[index.row()];
 		}
 		break;
 
@@ -561,6 +643,15 @@ QVariant GameListModel::headerData(int section, Qt::Orientation orientation, int
 	case COLUMN_YEAR:         return tr("Year");
 	case COLUMN_MANUFACTURER: return tr("Manufacturer");
 	case COLUMN_STATUS:       return tr("Status");
+	case COLUMN_CLONEOF:      return tr("Clone of");
+	case COLUMN_SOURCE:       return tr("Source file");
+	case COLUMN_ROMS:         return tr("ROMs");
+	case COLUMN_SAVE:         return tr("Save states");
+	case COLUMN_REGION:       return tr("Region");
+	case COLUMN_MEDIA:        return tr("Media");
+	case COLUMN_GENRE:        return tr("Genre");
+	case COLUMN_LANGUAGE:     return tr("Language");
+	case COLUMN_CONTROL:      return tr("Controls");
 	}
 	return QVariant();
 }
@@ -636,6 +727,40 @@ void GameListModel::applyScreenlessBatch(const std::vector<std::pair<std::string
 				{ IsScreenlessRole });
 }
 
+void GameListModel::setCategoryData(QHash<QString, QString> genre, QHash<QString, QString> language)
+{
+	m_genre = std::move(genre);
+	m_language = std::move(language);
+	if (m_rows.empty())
+		return;
+
+	// Both columns are optional and normally hidden, but refresh them so they
+	// populate if the user has them shown.
+	emit dataChanged(index(0, COLUMN_GENRE), index(int(m_rows.size()) - 1, COLUMN_GENRE),
+			{ Qt::DisplayRole });
+	emit dataChanged(index(0, COLUMN_LANGUAGE), index(int(m_rows.size()) - 1, COLUMN_LANGUAGE),
+			{ Qt::DisplayRole });
+}
+
+void GameListModel::applyControlBatch(const std::vector<std::pair<std::string, std::string>> &results)
+{
+	if (int(m_control.size()) != int(m_rows.size()))
+		m_control.assign(m_rows.size(), QString());
+
+	for (const auto &entry : results)
+	{
+		auto it = m_nameToRow.constFind(QString::fromStdString(entry.first));
+		if (it == m_nameToRow.constEnd())
+			continue;
+		m_control[it.value()] = QString::fromStdString(entry.second);
+	}
+	m_controlScanned = true;
+
+	if (!m_rows.empty())
+		emit dataChanged(index(0, COLUMN_CONTROL), index(int(m_rows.size()) - 1, COLUMN_CONTROL),
+				{ Qt::DisplayRole });
+}
+
 QStringList GameListModel::years() const
 {
 	QSet<QString> seen;
@@ -644,6 +769,39 @@ QStringList GameListModel::years() const
 		const char *year = driver_list::driver(row).year;
 		if (year && *year)
 			seen.insert(QString::fromLatin1(year));
+	}
+
+	QStringList list(seen.cbegin(), seen.cend());
+	std::sort(list.begin(), list.end());
+	return list;
+}
+
+QStringList GameListModel::valueTokens(int column, const QString &display)
+{
+	if (display.isEmpty())
+		return {};
+
+	switch (column)
+	{
+	case COLUMN_MEDIA:
+		// "ROM + CHD" -> {ROM, CHD}
+		return display.split(QStringLiteral(" + "), Qt::SkipEmptyParts);
+	case COLUMN_CONTROL:
+		// "Joystick (4-way), Buttons" -> {Joystick (4-way), Buttons}
+		return display.split(QStringLiteral(", "), Qt::SkipEmptyParts);
+	default:
+		return { display };
+	}
+}
+
+QStringList GameListModel::distinctColumnValues(int column) const
+{
+	QSet<QString> seen;
+	for (int row = 0; row < int(m_rows.size()); ++row)
+	{
+		QString const disp = data(index(row, column), Qt::DisplayRole).toString();
+		for (const QString &tok : valueTokens(column, disp))
+			seen.insert(tok);
 	}
 
 	QStringList list(seen.cbegin(), seen.cend());

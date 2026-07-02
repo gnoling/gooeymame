@@ -3182,3 +3182,124 @@ void qtui_scan_screenless(
 		progress(name, screenless);
 	}
 }
+
+// Human-readable control-type summary for one driver, derived from its input
+// ports (mirrors the categories MAME's own tools report).  Empty when the
+// machine has no notable controls.
+static std::string qtui_controls_for_config(machine_config const &config)
+{
+	ioport_list portlist;
+	std::ostringstream errors;
+	for (device_t &dev : device_enumerator(config.root_device()))
+		portlist.append(dev, errors);
+
+	bool lightgun = false, trackball = false, dial = false, paddle = false;
+	bool positional = false, adstick = false, pedal = false, mouse = false;
+	bool keyboard = false, mahjong = false, hanafuda = false, gambling = false;
+	bool joystick = false, buttons = false;
+	int joyway = 0;
+
+	for (auto &port : portlist)
+	{
+		for (ioport_field const &field : port.second->fields())
+		{
+			ioport_type const t = field.type();
+			switch (t)
+			{
+			case IPT_LIGHTGUN_X: case IPT_LIGHTGUN_Y: lightgun = true; break;
+			case IPT_TRACKBALL_X: case IPT_TRACKBALL_Y: trackball = true; break;
+			case IPT_DIAL: case IPT_DIAL_V: dial = true; break;
+			case IPT_PADDLE: case IPT_PADDLE_V: paddle = true; break;
+			case IPT_POSITIONAL: case IPT_POSITIONAL_V: positional = true; break;
+			case IPT_AD_STICK_X: case IPT_AD_STICK_Y: case IPT_AD_STICK_Z: adstick = true; break;
+			case IPT_PEDAL: case IPT_PEDAL2: case IPT_PEDAL3: pedal = true; break;
+			case IPT_MOUSE_X: case IPT_MOUSE_Y: mouse = true; break;
+			case IPT_KEYBOARD: keyboard = true; break;
+			default:
+				if (t >= IPT_DIGITAL_JOYSTICK_FIRST && t <= IPT_DIGITAL_JOYSTICK_LAST)
+				{
+					joystick = true;
+					joyway = std::max<int>(joyway, field.way());
+				}
+				else if (t >= IPT_MAHJONG_FIRST && t <= IPT_MAHJONG_LAST)
+					mahjong = true;
+				else if (t >= IPT_HANAFUDA_FIRST && t <= IPT_HANAFUDA_LAST)
+					hanafuda = true;
+				else if (t >= IPT_GAMBLING_FIRST && t <= IPT_GAMBLING_LAST)
+					gambling = true;
+				else if (t >= IPT_BUTTON1 && t <= IPT_BUTTON16)
+					buttons = true;
+				break;
+			}
+		}
+	}
+
+	std::vector<std::string> parts;
+	if (lightgun)   parts.emplace_back("Lightgun");
+	if (trackball)  parts.emplace_back("Trackball");
+	if (dial)       parts.emplace_back("Dial");
+	if (paddle)     parts.emplace_back("Paddle");
+	if (positional) parts.emplace_back("Positional");
+	if (adstick)    parts.emplace_back("Analog stick");
+	if (pedal)      parts.emplace_back("Pedal");
+	if (mouse)      parts.emplace_back("Mouse");
+	if (keyboard)   parts.emplace_back("Keyboard");
+	if (mahjong)    parts.emplace_back("Mahjong");
+	if (hanafuda)   parts.emplace_back("Hanafuda");
+	if (gambling)   parts.emplace_back("Gambling");
+	if (joystick)
+	{
+		parts.emplace_back(joyway > 0
+				? "Joystick (" + std::to_string(joyway) + "-way)"
+				: std::string("Joystick"));
+	}
+	// Only report bare buttons when there is no directional/analog control, so
+	// the common "joystick + fire buttons" case reads simply as "Joystick".
+	if (buttons && parts.empty())
+		parts.emplace_back("Buttons");
+
+	std::string result;
+	for (std::string const &p : parts)
+	{
+		if (!result.empty())
+			result += ", ";
+		result += p;
+	}
+	return result;
+}
+
+void qtui_scan_controls(
+		const std::function<void (const std::string &, const std::string &)> &progress,
+		const std::atomic<bool> &cancel)
+{
+	qt_options options;
+	{
+		core_guard guard;
+		std::ostringstream errors;
+		mame_options::parse_standard_inis(options, errors);
+	}
+
+	driver_enumerator drivlist(options);
+
+	while (!cancel.load(std::memory_order_relaxed))
+	{
+		std::string name, controls;
+		{
+			core_guard guard;
+			if (!drivlist.next())
+				break;
+
+			name = drivlist.driver().name;
+			try
+			{
+				controls = qtui_controls_for_config(*drivlist.config());
+			}
+			catch (...)
+			{
+				continue;   // un-instantiable driver: leave it ControlUnknown
+			}
+		}
+
+		progress(name, controls);
+	}
+}

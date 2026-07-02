@@ -44,6 +44,20 @@ void GameListProxy::setStatusFilter(int flags)
 	invalidateFilter();
 }
 
+void GameListProxy::setColumnValueFilter(int column, const QSet<QString> &accepted)
+{
+	if (accepted.isEmpty())
+	{
+		if (m_columnFilters.remove(column) > 0)
+			invalidateFilter();
+		return;
+	}
+	if (m_columnFilters.value(column) == accepted)
+		return;
+	m_columnFilters.insert(column, accepted);
+	invalidateFilter();
+}
+
 void GameListProxy::setSearchText(const QString &text)
 {
 	QString const trimmed = text.trimmed();
@@ -127,14 +141,16 @@ bool GameListProxy::acceptsAttributes(const QModelIndex &index) const
 			&& index.data(GameListModel::IsScreenlessRole).toInt() == GameListModel::NoScreen)
 		return false;
 
-	// Emulation-status modifier.  OR within the group; an empty group imposes no
-	// constraint.
-	int const emuGroup = m_status & (StatusWorking | StatusNotWorking);
+	// Emulation-status modifier (Working / Imperfect / Not working).  OR within
+	// the group; an empty group imposes no constraint.
+	int const emuGroup = m_status & (StatusWorking | StatusImperfect | StatusNotWorking);
 	if (emuGroup)
 	{
-		bool const working = index.data(GameListModel::WorkingRole).toBool();
-		bool const accept = (working && (emuGroup & StatusWorking)) ||
-				(!working && (emuGroup & StatusNotWorking));
+		int const es = index.data(GameListModel::EmulationStatusRole).toInt();
+		bool const accept =
+				((es == GameListModel::EmuWorking) && (emuGroup & StatusWorking)) ||
+				((es == GameListModel::EmuImperfect) && (emuGroup & StatusImperfect)) ||
+				((es == GameListModel::EmuNotWorking) && (emuGroup & StatusNotWorking));
 		if (!accept)
 			return false;
 	}
@@ -149,6 +165,24 @@ bool GameListProxy::acceptsAttributes(const QModelIndex &index) const
 				((avail == GameListModel::Available) && (availGroup & StatusAvailable)) ||
 				((avail == GameListModel::Unavailable) && (availGroup & StatusUnavailable));
 		if (!accept)
+			return false;
+	}
+
+	// Combinable per-column value filters.  For each active column, the row must
+	// carry at least one of the accepted values (AND across columns).
+	for (auto it = m_columnFilters.constBegin(); it != m_columnFilters.constEnd(); ++it)
+	{
+		QString const display = index.siblingAtColumn(it.key()).data(Qt::DisplayRole).toString();
+		bool match = false;
+		for (const QString &tok : GameListModel::valueTokens(it.key(), display))
+		{
+			if (it.value().contains(tok))
+			{
+				match = true;
+				break;
+			}
+		}
+		if (!match)
 			return false;
 	}
 

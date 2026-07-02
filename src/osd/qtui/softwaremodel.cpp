@@ -557,6 +557,15 @@ QVariant SoftwareModel::data(const QModelIndex &index, int role) const
 			default: return tr("Unsupported");
 			}
 		case COLUMN_LIST:        return QString::fromStdString(entry.list);
+		case COLUMN_CLONEOF:     return QString::fromStdString(entry.parent);
+		case COLUMN_ROMS:
+			switch (entry.availability)
+			{
+			case 1:  return tr("Available");
+			case 2:  return tr("Missing");
+			default: return QString();
+			}
+		case COLUMN_REGION:      return m_region.empty() ? QString() : m_region[index.row()];
 		}
 	}
 	else if (role == Qt::TextAlignmentRole && index.column() == COLUMN_YEAR)
@@ -580,6 +589,9 @@ QVariant SoftwareModel::headerData(int section, Qt::Orientation orientation, int
 	case COLUMN_PUBLISHER:   return tr("Publisher");
 	case COLUMN_SUPPORTED:   return tr("Supported");
 	case COLUMN_LIST:        return tr("List");
+	case COLUMN_CLONEOF:     return tr("Clone of");
+	case COLUMN_ROMS:        return tr("ROMs");
+	case COLUMN_REGION:      return tr("Region");
 	}
 	return QVariant();
 }
