@@ -11,6 +11,7 @@
 #include "emulator.h"
 
 #include <QtGui/QIcon>
+#include <QtGui/QPainter>
 #include <QtGui/QPixmap>
 
 #include <vector>
@@ -27,16 +28,40 @@ QIcon makeRowIcon(const QByteArray &bytes, int displaySize, bool smoothUpscale)
 	if (!pixmap.loadFromData(bytes))
 		return QIcon();
 
-	if (displaySize <= 0 || (pixmap.width() == displaySize && pixmap.height() == displaySize))
-		return QIcon(pixmap);
+	if (displaySize <= 0)
+		return QIcon(pixmap);   // native size (no uniform slot)
 
-	// Enlarging: honour the user's choice (nearest-neighbour keeps pixel art
-	// crisp; smooth blends it).  Shrinking always uses smooth scaling to avoid
-	// dropped pixels.
-	bool const enlarging = (displaySize > pixmap.width() || displaySize > pixmap.height());
-	Qt::TransformationMode const mode =
-			(enlarging && !smoothUpscale) ? Qt::FastTransformation : Qt::SmoothTransformation;
-	return QIcon(pixmap.scaled(displaySize, displaySize, Qt::KeepAspectRatio, mode));
+	// Scale to fit within a displaySize square, keeping the art's aspect ratio.
+	QPixmap scaled;
+	if (pixmap.width() == displaySize && pixmap.height() == displaySize)
+	{
+		scaled = pixmap;
+	}
+	else
+	{
+		// Enlarging: honour the user's choice (nearest-neighbour keeps pixel art
+		// crisp; smooth blends it).  Shrinking always uses smooth scaling to avoid
+		// dropped pixels.
+		bool const enlarging = (displaySize > pixmap.width() || displaySize > pixmap.height());
+		Qt::TransformationMode const mode =
+				(enlarging && !smoothUpscale) ? Qt::FastTransformation : Qt::SmoothTransformation;
+		scaled = pixmap.scaled(displaySize, displaySize, Qt::KeepAspectRatio, mode);
+	}
+
+	// A square icon already fills its slot; return it directly.
+	if (scaled.width() == displaySize && scaled.height() == displaySize)
+		return QIcon(scaled);
+
+	// Otherwise centre it on a transparent displaySize square so every row icon
+	// occupies the same footprint regardless of the art's aspect ratio — this
+	// keeps the row text left-aligned (portrait/landscape box art would otherwise
+	// reserve a variable-width decoration and shift the text).
+	QPixmap canvas(displaySize, displaySize);
+	canvas.fill(Qt::transparent);
+	QPainter painter(&canvas);
+	painter.drawPixmap((displaySize - scaled.width()) / 2, (displaySize - scaled.height()) / 2, scaled);
+	painter.end();
+	return QIcon(canvas);
 }
 
 IconLoader::IconLoader(QObject *parent) :
@@ -56,11 +81,11 @@ IconLoader::~IconLoader()
 		m_thread.join();
 }
 
-void IconLoader::request(int row, const QString &path, const QStringList &entries)
+void IconLoader::request(int row, const ArtCandidates &candidates)
 {
 	{
 		std::lock_guard<std::mutex> lk(m_mutex);
-		m_queue.push_back({ row, path, entries });
+		m_queue.push_back({ row, candidates });
 		// Bound the backlog: during fast scrolling, drop the oldest (now
 		// off-screen) requests so the worker stays focused on recent rows.
 		while (m_queue.size() > 256)
@@ -86,10 +111,12 @@ void IconLoader::run()
 		}
 
 		QByteArray result;
-		std::string const pathStr = req.path.toStdString();
-		for (const QString &entry : req.entries)
+		for (const auto &cand : req.candidates)
 		{
-			std::vector<std::uint8_t> const bytes = qtui_load_asset(pathStr, entry.toStdString());
+			if (cand.first.isEmpty() || cand.second.isEmpty())
+				continue;
+			std::vector<std::uint8_t> const bytes =
+					qtui_load_asset(cand.first.toStdString(), cand.second.toStdString());
 			if (!bytes.empty())
 			{
 				result = QByteArray(reinterpret_cast<const char *>(bytes.data()), int(bytes.size()));

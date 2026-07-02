@@ -212,6 +212,15 @@ public:
 	// family members (different-region variants).  Invalidates the cache.
 	void setThumbnailSources(const QStringList &machineKeys, bool familyFallback);
 
+	// One entry in the row-icon source priority list (native = icons.zip/.ico).
+	struct IconSourceKey { QString machineKey; bool native; };
+
+	// Configure the row-icon sources: an ordered art-type priority list, whether
+	// the item's own artwork is preferred over the clone parent's (else per-type
+	// self→parent, the original behavior), and whether region/family siblings are
+	// tried too.  Invalidates the icon cache.
+	void setIconSources(const QVector<IconSourceKey> &sources, bool preferOwn, bool family);
+
 	// Pixel size the list/tree views display row icons at.  Icons are rescaled
 	// to this since QIcon won't upscale a pixmap past its native size on its
 	// own.  Invalidates the icon cache.
@@ -278,6 +287,14 @@ private:
 	mutable QSet<int> m_iconRequested;
 	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)
 	bool m_iconSmooth = false;   // smooth vs nearest-neighbour upscaling
+
+	// Resolved row-icon source chain (art folder + native/.ico flag), in priority
+	// order, plus the fallback-order toggles.
+	struct IconSrc { QString path; bool native; bool operator==(const IconSrc &o) const
+			{ return path == o.path && native == o.native; } };
+	QVector<IconSrc> m_iconChain;
+	bool m_iconPreferOwn = false;   // item's own art over the parent icon
+	bool m_iconFamily = false;      // also try region/family siblings
 
 	// Lazy, cached grid thumbnails for the selected image set (worker thread).
 	// A generation counter invalidates in-flight loads when the source changes.

@@ -45,6 +45,21 @@ struct ThumbnailSource
 extern const ThumbnailSource THUMBNAIL_SOURCES[];
 extern const std::size_t THUMBNAIL_SOURCE_COUNT;
 
+// Art types offered as row-icon sources (an independent priority list from the
+// grid thumbnails).  "native" = the icons.zip/.ico set (uses the "icons" folder
+// path, not machineKey/softwareKey); the rest are PNG art folders.
+struct IconSourceType
+{
+	const char *id;          // stable QSettings id
+	const char *label;       // human-readable label
+	const char *machineKey;  // frontendpaths key for machine art ("" = n/a)
+	const char *softwareKey; // frontendpaths key for software art ("" = n/a)
+	bool native;             // true = icons.zip (.ico), resolved via the "icons" folder
+};
+
+extern const IconSourceType ICON_SOURCES[];
+extern const std::size_t ICON_SOURCE_COUNT;
+
 // Read/write a configured front-end folder path (empty if unset).
 QString frontendFolderPath(const QString &key);
 void setFrontendFolderPath(const QString &key, const QString &path);

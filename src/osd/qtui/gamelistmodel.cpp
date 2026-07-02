@@ -65,6 +65,10 @@ GameListModel::GameListModel(QObject *parent) :
 	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
 	m_iconLoader = new IconLoader(this);
 	connect(m_iconLoader, &IconLoader::loaded, this, &GameListModel::onIconLoaded);
+	// Default source chain = the native icon set (self→parent), matching the
+	// historical behavior until MainWindow applies the user's configuration.
+	if (!m_iconsPath.isEmpty())
+		m_iconChain.append({ m_iconsPath, true });
 
 	// Grid thumbnails (image set chosen at runtime) load on their own thread.
 	m_thumbLoader = new ThumbnailLoader(this);
@@ -395,26 +399,73 @@ const game_driver &GameListModel::driverForRow(int row) const
 	return driver_list::driver(m_rows[row]);
 }
 
+void GameListModel::setIconSources(const QVector<IconSourceKey> &sources, bool preferOwn, bool family)
+{
+	QVector<IconSrc> chain;
+	for (const IconSourceKey &s : sources)
+	{
+		QString const path = s.native ? m_iconsPath : frontendFolderPath(s.machineKey);
+		if (!path.isEmpty())
+			chain.append({ path, s.native });
+	}
+	if (chain == m_iconChain && preferOwn == m_iconPreferOwn && family == m_iconFamily)
+		return;
+	m_iconChain = chain;
+	m_iconPreferOwn = preferOwn;
+	m_iconFamily = family;
+	invalidateIconCache();
+}
+
 QVariant GameListModel::iconForRow(int row) const
 {
-	if (m_iconsPath.isEmpty())
+	if (m_iconChain.isEmpty())
 		return QVariant();
 
 	auto it = m_iconCache.constFind(row);
 	if (it != m_iconCache.constEnd())
 		return it.value();
 
-	// Not cached yet: queue a one-time async load (system icon, parent
-	// fallback) and show nothing until it arrives.
+	// Not cached yet: queue a one-time async load across the configured art-type
+	// chain and name fallbacks, and show nothing until it arrives.
 	if (!m_iconRequested.contains(row))
 	{
 		m_iconRequested.insert(row);
+
+		// Name fallbacks: the item, then its clone parent, then (optionally) the
+		// other family members (different-region variants).
+		QStringList names;
 		const game_driver &drv = driverForRow(row);
-		QStringList entries;
-		entries << QString::fromLatin1(drv.name) + QStringLiteral(".ico");
+		names << QString::fromLatin1(drv.name);
 		if (drv.parent && drv.parent[0] && std::strcmp(drv.parent, "0") != 0)
-			entries << QString::fromLatin1(drv.parent) + QStringLiteral(".ico");
-		m_iconLoader->request(row, m_iconsPath, entries);
+			names << QString::fromLatin1(drv.parent);
+		if (m_iconFamily)
+			for (int member : familyMemberRows(row))
+			{
+				QString const n = QString::fromLatin1(driverForRow(member).name);
+				if (!names.contains(n))
+					names << n;
+			}
+
+		auto fileFor = [] (const QString &name, const IconSrc &src) {
+			return name + (src.native ? QStringLiteral(".ico") : QStringLiteral(".png"));
+		};
+		ArtCandidates candidates;
+		if (m_iconPreferOwn)
+		{
+			// The item's own artwork (any listed type) beats the parent's icon.
+			for (const QString &n : names)
+				for (const IconSrc &src : m_iconChain)
+					candidates.append({ src.path, fileFor(n, src) });
+		}
+		else
+		{
+			// Each art type checks the item then the parent before the next type
+			// (the original parent-first behavior).
+			for (const IconSrc &src : m_iconChain)
+				for (const QString &n : names)
+					candidates.append({ src.path, fileFor(n, src) });
+		}
+		m_iconLoader->request(row, candidates);
 	}
 	return QVariant();
 }

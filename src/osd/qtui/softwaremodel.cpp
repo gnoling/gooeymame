@@ -31,6 +31,35 @@ SoftwareModel::SoftwareModel(QObject *parent) :
 	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
 	m_iconLoader = new IconLoader(this);
 	connect(m_iconLoader, &IconLoader::loaded, this, &SoftwareModel::onIconLoaded);
+	// Default = native icon set (per-software icon, then host machine), matching
+	// the historical behavior until MainWindow applies the user's configuration.
+	if (!m_iconsPath.isEmpty())
+		m_iconChain.append({ QString(), QString(), QString(), QString(), true });
+}
+
+void SoftwareModel::setIconSources(const QVector<IconSourceKeySw> &sources, bool preferOwn, bool family)
+{
+	QVector<IconSrcSw> chain;
+	for (const IconSourceKeySw &s : sources)
+	{
+		IconSrcSw src;
+		src.native = s.native;
+		src.swKey = s.swKey;
+		src.machineKey = s.machineKey;
+		src.swPath = s.swKey.isEmpty() ? QString() : frontendFolderPath(s.swKey);
+		src.machinePath = s.machineKey.isEmpty() ? QString() : frontendFolderPath(s.machineKey);
+		// Native uses the icons path; a non-native source is kept even with no
+		// primary path since the secondary media root may still supply it.
+		if (src.native && m_iconsPath.isEmpty())
+			continue;
+		chain.append(src);
+	}
+	if (chain == m_iconChain && preferOwn == m_iconPreferOwn && family == m_iconFamily)
+		return;
+	m_iconChain = chain;
+	m_iconPreferOwn = preferOwn;
+	m_iconFamily = family;
+	invalidateIconCache();
 }
 
 void SoftwareModel::setEntries(std::vector<qtui_software_entry> entries)
@@ -384,33 +413,106 @@ void SoftwareModel::onThumbnailLoaded(int row, quint64 generation, const QByteAr
 
 QVariant SoftwareModel::iconForRow(int row) const
 {
-	if (m_iconsPath.isEmpty() || row < 0 || row >= int(m_entries.size()))
+	if (m_iconChain.isEmpty() || row < 0 || row >= int(m_entries.size()))
 		return QVariant();
 
 	auto it = m_iconCache.constFind(row);
 	if (it != m_iconCache.constEnd())
 		return it.value();
 
-	// Not cached: queue a one-time async load.  Prefer a per-software icon (in
-	// case a software-list icon pack keyed <list>/<software>.ico is present),
-	// then fall back to the host machine's icon so every row is still iconified.
 	if (!m_iconRequested.contains(row))
 	{
 		m_iconRequested.insert(row);
-		const qtui_software_entry &e = m_entries[row];
-		QString const list = QString::fromStdString(e.list);
-		QString const sw = QString::fromStdString(e.shortname);
-		QStringList entries;
-		if (!list.isEmpty() && !sw.isEmpty())
-			entries << list + QLatin1Char('/') + sw + QStringLiteral(".ico");
-		if (!sw.isEmpty())
-			entries << sw + QStringLiteral(".ico");
-		if (!m_hostSystem.isEmpty())
-			entries << m_hostSystem + QStringLiteral(".ico");
-		if (!m_hostParent.isEmpty())
-			entries << m_hostParent + QStringLiteral(".ico");
-		if (!entries.isEmpty())
-			m_iconLoader->request(row, m_iconsPath, entries);
+
+		// Software (_SL) names to try: this item, then (optionally) the other
+		// family members (different-region variants).
+		QVector<QPair<QString, QString>> swNames;   // (list, shortname)
+		auto addSw = [&swNames] (const qtui_software_entry &e) {
+			if (e.list.empty() || e.shortname.empty())
+				return;
+			QPair<QString, QString> nm(QString::fromStdString(e.list), QString::fromStdString(e.shortname));
+			if (!swNames.contains(nm))
+				swNames.append(nm);
+		};
+		addSw(m_entries[row]);
+		if (m_iconFamily)
+			for (int member : familyMemberRows(row))
+				if (member >= 0 && member < int(m_entries.size()))
+					addSw(m_entries[member]);
+
+		QString const secondaryRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
+
+		// Candidates for one art source, split into the software item's own art
+		// and the host-machine fallback so the two orderings can interleave them.
+		auto ownCands = [&] (const IconSrcSw &src) {
+			ArtCandidates c;
+			if (src.native)
+			{
+				for (const auto &nm : swNames)
+				{
+					c.append({ m_iconsPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".ico") });
+					c.append({ m_iconsPath, nm.second + QStringLiteral(".ico") });
+				}
+			}
+			else
+			{
+				if (!src.swPath.isEmpty())
+					for (const auto &nm : swNames)
+						c.append({ src.swPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+				if (!secondaryRoot.isEmpty() && !src.swKey.isEmpty())
+				{
+					QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
+					for (const auto &nm : swNames)
+						c.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+				}
+			}
+			return c;
+		};
+		auto hostCands = [&] (const IconSrcSw &src) {
+			ArtCandidates c;
+			QString const ext = src.native ? QStringLiteral(".ico") : QStringLiteral(".png");
+			if (src.native)
+			{
+				if (!m_hostSystem.isEmpty()) c.append({ m_iconsPath, m_hostSystem + ext });
+				if (!m_hostParent.isEmpty()) c.append({ m_iconsPath, m_hostParent + ext });
+			}
+			else
+			{
+				if (!src.machinePath.isEmpty() && !m_hostSystem.isEmpty())
+				{
+					c.append({ src.machinePath, m_hostSystem + ext });
+					if (!m_hostParent.isEmpty()) c.append({ src.machinePath, m_hostParent + ext });
+				}
+				if (!secondaryRoot.isEmpty() && !src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
+				{
+					QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
+					c.append({ base, m_hostSystem + ext });
+					if (!m_hostParent.isEmpty()) c.append({ base, m_hostParent + ext });
+				}
+			}
+			return c;
+		};
+
+		ArtCandidates candidates;
+		if (m_iconPreferOwn)
+		{
+			// The item's own artwork (any listed type) beats the host icon.
+			for (const IconSrcSw &src : m_iconChain)
+				candidates += ownCands(src);
+			for (const IconSrcSw &src : m_iconChain)
+				candidates += hostCands(src);
+		}
+		else
+		{
+			// Each art type checks the item then the host before the next type.
+			for (const IconSrcSw &src : m_iconChain)
+			{
+				candidates += ownCands(src);
+				candidates += hostCands(src);
+			}
+		}
+		if (!candidates.isEmpty())
+			m_iconLoader->request(row, candidates);
 	}
 	return QVariant();
 }

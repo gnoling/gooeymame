@@ -534,6 +534,10 @@ MainWindow::MainWindow(QWidget *parent) :
 	loadControlCache();
 	restoreSettings();
 
+	// Row-icon source priorities (shown in the list view regardless of mode).
+	applyMachineIconSource();
+	applySoftwareIconSource();
+
 	// If the (persisted) Controls column is already shown but we have no cached
 	// verdicts yet, kick the one-time background scan now.
 	if (!m_model->hasControlData()
@@ -570,6 +574,9 @@ void MainWindow::openOptions()
 		// Grid artwork fallback order/folders may have changed.
 		applyMachineThumbSource();
 		applySoftwareThumbSource();
+		// Row-icon source priorities may have changed.
+		applyMachineIconSource();
+		applySoftwareIconSource();
 		// Art-view image scaling may have changed.
 		m_artwork->reloadScaling();
 
@@ -3565,6 +3572,46 @@ void MainWindow::applySoftwareThumbSource()
 						QString::fromLatin1(THUMBNAIL_SOURCES[j].machineKey) });
 
 	m_softwareModel->setThumbnailSources(keys, family);
+}
+
+// Read the saved row-icon source ids (default just "icon") in priority order.
+static QStringList iconSourceIds(const QString &orderKey)
+{
+	QStringList ids = QSettings().value(orderKey).toStringList();
+	if (ids.isEmpty())
+		ids << QStringLiteral("icon");
+	return ids;
+}
+
+void MainWindow::applyMachineIconSource()
+{
+	QSettings s;
+	bool const preferOwn = s.value(QStringLiteral("icons/machinePreferOwn"), false).toBool();
+	bool const family = s.value(QStringLiteral("icons/machineFamily"), false).toBool();
+
+	QVector<GameListModel::IconSourceKey> keys;
+	for (const QString &id : iconSourceIds(QStringLiteral("icons/machineSources")))
+		for (std::size_t i = 0; i < ICON_SOURCE_COUNT; ++i)
+			if (id == QLatin1String(ICON_SOURCES[i].id))
+				keys.append({ QString::fromLatin1(ICON_SOURCES[i].machineKey), ICON_SOURCES[i].native });
+
+	m_model->setIconSources(keys, preferOwn, family);
+}
+
+void MainWindow::applySoftwareIconSource()
+{
+	QSettings s;
+	bool const preferOwn = s.value(QStringLiteral("icons/softwarePreferOwn"), false).toBool();
+	bool const family = s.value(QStringLiteral("icons/softwareFamily"), false).toBool();
+
+	QVector<SoftwareModel::IconSourceKeySw> keys;
+	for (const QString &id : iconSourceIds(QStringLiteral("icons/softwareSources")))
+		for (std::size_t i = 0; i < ICON_SOURCE_COUNT; ++i)
+			if (id == QLatin1String(ICON_SOURCES[i].id))
+				keys.append({ QString::fromLatin1(ICON_SOURCES[i].softwareKey),
+						QString::fromLatin1(ICON_SOURCES[i].machineKey), ICON_SOURCES[i].native });
+
+	m_softwareModel->setIconSources(keys, preferOwn, family);
 }
 
 void MainWindow::setMachineViewMode(int mode)

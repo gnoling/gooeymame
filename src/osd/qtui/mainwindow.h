@@ -232,6 +232,8 @@ private:
 	void setSoftwareViewMode(int mode);
 	void applyMachineThumbSource();
 	void applySoftwareThumbSource();
+	void applyMachineIconSource();    // row-icon source priority (machine list)
+	void applySoftwareIconSource();   // row-icon source priority (software list)
 	// Ordered art-type labels to fall back through (configured in Options), and
 	// whether to also try related sets (clone parent / other regions).
 	QStringList gridFallbackLabels(bool *family) const;

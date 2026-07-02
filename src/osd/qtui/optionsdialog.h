@@ -61,6 +61,7 @@ private:
 	void buildGameplayCategory();
 	void buildVersionsCategory();
 	void buildGridArtCategory();
+	void buildIconSourcesCategory();
 	void buildArtScaleCategory();
 	void addOptionRow(QFormLayout *form, const qtui_option &opt);
 
@@ -97,6 +98,14 @@ private:
 	QListWidget *m_regionList = nullptr;      // checkable, reorderable priority
 	QListWidget *m_gridArtList = nullptr;     // Grid Artwork page: fallback order
 	QCheckBox *m_gridArtFamily = nullptr;     // try related sets (parent/regions)
+
+	// Row Icons page: independent icon-source priority per list, plus toggles.
+	QListWidget *m_iconMachineList = nullptr;
+	QCheckBox *m_iconMachinePrefer = nullptr;  // prefer item's own art over parent
+	QCheckBox *m_iconMachineFamily = nullptr;  // also try region/family siblings
+	QListWidget *m_iconSoftwareList = nullptr;
+	QCheckBox *m_iconSoftwarePrefer = nullptr; // prefer item's own art over host
+	QCheckBox *m_iconSoftwareFamily = nullptr;
 	QString m_system;                   // empty = global mame.ini; else per-machine
 	QString m_systemDescription;        // machine friendly name (per-machine mode)
 	QSet<QString> m_overridden;         // option names set by the machine's ini

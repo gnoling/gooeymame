@@ -103,6 +103,14 @@ public:
 	// is true the other family members' images are tried too.
 	void setThumbnailSources(const QVector<QPair<QString, QString>> &keys, bool familyFallback);
 
+	// One entry in the software row-icon source priority list.
+	struct IconSourceKeySw { QString swKey; QString machineKey; bool native; };
+
+	// Configure the software row-icon sources: art-type priority list, whether the
+	// item's own artwork is preferred over the host machine's icon (else per-type
+	// item→host, the original behavior), and whether family siblings are tried.
+	void setIconSources(const QVector<IconSourceKeySw> &sources, bool preferOwn, bool family);
+
 	// Pixel size the list/tree views display row icons at; icons are rescaled
 	// to this since QIcon won't upscale a pixmap on its own.  Invalidates the
 	// icon cache.
@@ -177,6 +185,21 @@ private:
 	mutable QSet<int> m_iconRequested;
 	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)
 	bool m_iconSmooth = false;   // smooth vs nearest-neighbour upscaling
+
+	// Resolved row-icon source chain + fallback-order toggles (see setIconSources).
+	struct IconSrcSw
+	{
+		QString swPath, machinePath, swKey, machineKey;
+		bool native;
+		bool operator==(const IconSrcSw &o) const
+		{
+			return swPath == o.swPath && machinePath == o.machinePath && swKey == o.swKey
+					&& machineKey == o.machineKey && native == o.native;
+		}
+	};
+	QVector<IconSrcSw> m_iconChain;
+	bool m_iconPreferOwn = false;
+	bool m_iconFamily = false;
 };
 
 } // namespace osd::qtui

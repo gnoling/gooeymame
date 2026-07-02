@@ -27,6 +27,7 @@
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QFrame>
+#include <QtWidgets/QGroupBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
@@ -231,6 +232,7 @@ void OptionsDialog::buildUi()
 		buildGameplayCategory();   // global only
 		buildVersionsCategory();   // global only
 		buildGridArtCategory();    // grid thumbnail fallback (global only)
+		buildIconSourcesCategory();// row-icon source priority (global only)
 		buildArtScaleCategory();   // per-art-type image scaling (global only)
 		buildFolderCategory();     // front-end folders are global only
 	}
@@ -682,6 +684,101 @@ void OptionsDialog::buildGridArtCategory()
 	addCategory(tr("Grid Artwork"), page);
 }
 
+void OptionsDialog::buildIconSourcesCategory()
+{
+	QWidget *page = new QWidget;
+	QVBoxLayout *layout = new QVBoxLayout(page);
+
+	QLabel *intro = new QLabel(
+			tr("Which artwork the small row icons use, as an independent priority "
+			   "list per list (top = tried first; uncheck to skip).  \"Icon\" is the "
+			   "icons.zip set; the rest are art folders."), page);
+	intro->setWordWrap(true);
+	layout->addWidget(intro);
+
+	// Build one reorderable, checkable icon-source section into `box`, wiring the
+	// list + the two toggles.  `preferLabel` differs (parent vs host machine).
+	auto buildSection = [this, page] (QGroupBox *box, const QString &orderKey,
+			const QString &preferKey, const QString &familyKey, const QString &preferLabel,
+			QListWidget *&listOut, QCheckBox *&preferOut, QCheckBox *&familyOut) {
+		QVBoxLayout *v = new QVBoxLayout(box);
+
+		preferOut = new QCheckBox(preferLabel, box);
+		familyOut = new QCheckBox(tr("Also try region/family variants"), box);
+		v->addWidget(preferOut);
+		v->addWidget(familyOut);
+
+		listOut = new QListWidget(box);
+		v->addWidget(listOut, 1);
+
+		QHBoxLayout *buttons = new QHBoxLayout;
+		QPushButton *up = new QPushButton(tr("Move Up"), box);
+		QPushButton *down = new QPushButton(tr("Move Down"), box);
+		QListWidget *const list = listOut;
+		auto move = [list] (int delta) {
+			int const row = list->currentRow();
+			int const target = row + delta;
+			if (row < 0 || target < 0 || target >= list->count())
+				return;
+			list->insertItem(target, list->takeItem(row));
+			list->setCurrentRow(target);
+		};
+		connect(up, &QPushButton::clicked, box, [move] { move(-1); });
+		connect(down, &QPushButton::clicked, box, [move] { move(1); });
+		buttons->addWidget(up);
+		buttons->addWidget(down);
+		buttons->addStretch();
+		v->addLayout(buttons);
+
+		// Load: saved order is the checked ids; default = just "icon" checked.
+		QSettings settings;
+		preferOut->setChecked(settings.value(preferKey, false).toBool());
+		familyOut->setChecked(settings.value(familyKey, false).toBool());
+
+		QStringList const savedIds = settings.value(orderKey).toStringList();
+		QSet<QString> const checked = savedIds.isEmpty()
+				? QSet<QString>{ QStringLiteral("icon") }
+				: QSet<QString>(savedIds.begin(), savedIds.end());
+
+		// Order: the saved ids first (in order), then any remaining sources.
+		QStringList ordered = savedIds;
+		for (std::size_t i = 0; i < ICON_SOURCE_COUNT; ++i)
+		{
+			QString const id = QString::fromLatin1(ICON_SOURCES[i].id);
+			if (!ordered.contains(id))
+				ordered << id;
+		}
+		for (const QString &id : ordered)
+		{
+			// Resolve the label for this id.
+			QString label = id;
+			for (std::size_t i = 0; i < ICON_SOURCE_COUNT; ++i)
+				if (id == QLatin1String(ICON_SOURCES[i].id))
+					label = QString::fromLatin1(ICON_SOURCES[i].label);
+			QListWidgetItem *item = new QListWidgetItem(label, list);
+			item->setData(Qt::UserRole, id);
+			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+			item->setCheckState(checked.contains(id) ? Qt::Checked : Qt::Unchecked);
+		}
+	};
+
+	QGroupBox *machineBox = new QGroupBox(tr("Machine list"), page);
+	buildSection(machineBox, QStringLiteral("icons/machineSources"),
+			QStringLiteral("icons/machinePreferOwn"), QStringLiteral("icons/machineFamily"),
+			tr("Prefer this item's own artwork over the clone parent's icon"),
+			m_iconMachineList, m_iconMachinePrefer, m_iconMachineFamily);
+	layout->addWidget(machineBox, 1);
+
+	QGroupBox *softwareBox = new QGroupBox(tr("Software list"), page);
+	buildSection(softwareBox, QStringLiteral("icons/softwareSources"),
+			QStringLiteral("icons/softwarePreferOwn"), QStringLiteral("icons/softwareFamily"),
+			tr("Prefer this item's own artwork over the host machine's icon"),
+			m_iconSoftwareList, m_iconSoftwarePrefer, m_iconSoftwareFamily);
+	layout->addWidget(softwareBox, 1);
+
+	addCategory(tr("Row Icons"), page);
+}
+
 void OptionsDialog::buildArtScaleCategory()
 {
 	QWidget *page = new QWidget;
@@ -895,6 +992,30 @@ void OptionsDialog::accept()
 			}
 			QSettings().setValue(QStringLiteral("grid/artFallbackOrder"), order);
 		}
+
+		// Row-icon source priority lists (ids, in order) + per-list toggles.
+		auto saveIconList = [] (QListWidget *list, const QString &orderKey) {
+			if (!list)
+				return;
+			QStringList ids;
+			for (int i = 0; i < list->count(); i++)
+			{
+				QListWidgetItem *item = list->item(i);
+				if (item->checkState() == Qt::Checked)
+					ids << item->data(Qt::UserRole).toString();
+			}
+			QSettings().setValue(orderKey, ids);
+		};
+		saveIconList(m_iconMachineList, QStringLiteral("icons/machineSources"));
+		saveIconList(m_iconSoftwareList, QStringLiteral("icons/softwareSources"));
+		if (m_iconMachinePrefer)
+			QSettings().setValue(QStringLiteral("icons/machinePreferOwn"), m_iconMachinePrefer->isChecked());
+		if (m_iconMachineFamily)
+			QSettings().setValue(QStringLiteral("icons/machineFamily"), m_iconMachineFamily->isChecked());
+		if (m_iconSoftwarePrefer)
+			QSettings().setValue(QStringLiteral("icons/softwarePreferOwn"), m_iconSoftwarePrefer->isChecked());
+		if (m_iconSoftwareFamily)
+			QSettings().setValue(QStringLiteral("icons/softwareFamily"), m_iconSoftwareFamily->isChecked());
 
 		// Per-art-type image scaling.
 		for (const ArtScaleEditor &e : m_artScaleEditors)

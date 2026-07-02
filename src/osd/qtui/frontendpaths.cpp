@@ -98,6 +98,25 @@ const ThumbnailSource THUMBNAIL_SOURCES[] =
 
 const std::size_t THUMBNAIL_SOURCE_COUNT = sizeof(THUMBNAIL_SOURCES) / sizeof(THUMBNAIL_SOURCES[0]);
 
+const IconSourceType ICON_SOURCES[] =
+{
+	{ "icon",    "Icon",     "",           "",           true  },
+	{ "snap",    "Snapshot", "snap",       "snap_sl",    false },
+	{ "title",   "Title",    "titles",     "titles_sl",  false },
+	{ "cover",   "Cover",    "",           "covers",     false },
+	{ "cart",    "Cart",     "",           "cart_sl",    false },
+	{ "box",     "Box",      "",           "box_sl",     false },
+	{ "box3d",   "Box 3D",   "",           "box3d_sl",   false },
+	{ "flyer",   "Flyer",    "flyers",     "",           false },
+	{ "marquee", "Marquee",  "marquees",   "marquees_sl",false },
+	{ "logo",    "Logo",     "logos",      "logos_sl",   false },
+	{ "cabinet", "Cabinet",  "cabinets",   "",           false },
+	{ "artwork", "Artwork",  "artpreview", "artpreview", false },
+	{ "banner",  "Banner",   "",           "banner_sl",  false },
+};
+
+const std::size_t ICON_SOURCE_COUNT = sizeof(ICON_SOURCES) / sizeof(ICON_SOURCES[0]);
+
 QString frontendFolderPath(const QString &key)
 {
 	QSettings settings;

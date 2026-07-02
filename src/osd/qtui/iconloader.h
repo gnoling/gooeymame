@@ -13,6 +13,8 @@
 
 #pragma once
 
+#include "artloader.h"   // ArtCandidates
+
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -42,9 +44,10 @@ public:
 	explicit IconLoader(QObject *parent = nullptr);
 	~IconLoader() override;
 
-	// Queue an icon load for a model row: try each entry in `entries` within
-	// `path`, first hit wins.
-	void request(int row, const QString &path, const QStringList &entries);
+	// Queue an icon load for a model row: try each (folder, entry) candidate in
+	// order, first hit wins.  Candidates may mix the icons set (.ico) with any
+	// art folder (.png) so the row icon can fall back across art types.
+	void request(int row, const ArtCandidates &candidates);
 
 signals:
 	void loaded(int row, const QByteArray &bytes);
@@ -55,8 +58,7 @@ private:
 	struct Request
 	{
 		int row;
-		QString path;
-		QStringList entries;
+		ArtCandidates candidates;
 	};
 
 	std::thread m_thread;
