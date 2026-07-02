@@ -156,8 +156,7 @@ scripts/resources/unix/install-desktop.sh /path/to/mame
 ## Relationship to MAME
 
 GooeyMAME is a downstream fork of MAME. The front-end lives entirely under `src/osd/qtui/` (plus a
-handful of additive OSD modules) and is **clean-room Qt** — it shares no code with any other MAME
-front-end. Everything else is stock MAME 0.288.
+handful of additive OSD modules). Everything else is stock MAME 0.288.
 
 - Upstream project: <https://www.mamedev.org/>
 - The original MAME README is preserved at [`docs/README.mame.md`](docs/README.mame.md).
