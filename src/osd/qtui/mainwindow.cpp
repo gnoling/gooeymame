@@ -546,25 +546,8 @@ MainWindow::MainWindow(QWidget *parent) :
 		startControlScan();
 }
 
-// Read the ROM/hash search-path options that determine availability, joined
-// into one string for cheap before/after comparison around the Options dialog.
-static QString romSearchPathFingerprint()
-{
-	QString fp;
-	for (const auto &group : qtui_read_options())
-		for (const auto &opt : group.options)
-			if (opt.name == "rompath" || opt.name == "hashpath")
-				fp += QString::fromStdString(opt.name) + '=' +
-						QString::fromStdString(opt.value) + '\n';
-	return fp;
-}
-
 void MainWindow::openOptions()
 {
-	// Capture the ROM/hash paths before editing so we can tell whether the saved
-	// changes actually affect ROM availability (and thus invalidate the caches).
-	QString const pathsBefore = romSearchPathFingerprint();
-
 	OptionsDialog dialog(this);
 	if (dialog.exec() == QDialog::Accepted)
 	{
@@ -583,7 +566,7 @@ void MainWindow::openOptions()
 		// If the ROM/hash search paths changed, the cached machine + software
 		// availability is stale — invalidate and re-audit automatically (the same
 		// path as Tools ▸ Refresh ROM Availability) instead of asking the user to.
-		if (romSearchPathFingerprint() != pathsBefore
+		if (dialog.romSearchPathsChanged()
 				&& m_audit && !m_audit->isRunning()
 				&& m_softwareAudit && !m_softwareAudit->isRunning())
 		{

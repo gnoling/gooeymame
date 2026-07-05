@@ -47,6 +47,10 @@ public:
 	// `description` is the machine's friendly name, shown in the title.
 	explicit OptionsDialog(const QString &system, const QString &description, QWidget *parent = nullptr);
 
+	// Whether OK saved a change to rompath/hashpath — the options that decide
+	// ROM availability, so the caller knows to invalidate its audit caches.
+	bool romSearchPathsChanged() const { return m_romPathsChanged; }
+
 protected:
 	bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -108,6 +112,7 @@ private:
 	QCheckBox *m_iconSoftwareFamily = nullptr;
 	QString m_system;                   // empty = global mame.ini; else per-machine
 	QString m_systemDescription;        // machine friendly name (per-machine mode)
+	bool m_romPathsChanged = false;     // OK saved a rompath/hashpath change
 	QSet<QString> m_overridden;         // option names set by the machine's ini
 	QHash<QObject *, QString> m_help;   // editor widget -> description
 	std::vector<Editor> m_editors;

@@ -71,6 +71,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>     // SEEK_SET / SEEK_CUR (cassette seek)
 #include <cstring>
 #include <filesystem>
@@ -208,7 +209,38 @@ std::error_condition osd_set_clipboard_text(std::string_view text) noexcept
 
 namespace {
 
-std::mutex g_core_mutex;
+// FIFO ("ticket") mutex: waiters acquire strictly in arrival order.  A plain
+// std::mutex makes no fairness guarantee — on Windows in particular, a
+// background scan that releases and immediately re-acquires in a tight
+// per-driver loop can win the race indefinitely and starve the GUI thread
+// (the Options dialog blocks on its options read and the app appears hung).
+class fifo_mutex
+{
+public:
+	void lock()
+	{
+		std::unique_lock<std::mutex> lk(m_mutex);
+		std::uint64_t const ticket = m_next++;
+		m_cv.wait(lk, [this, ticket] { return m_serving == ticket; });
+	}
+
+	void unlock()
+	{
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			++m_serving;
+		}
+		m_cv.notify_all();
+	}
+
+private:
+	std::mutex m_mutex;
+	std::condition_variable m_cv;
+	std::uint64_t m_next = 0;
+	std::uint64_t m_serving = 0;
+};
+
+fifo_mutex g_core_mutex;
 
 // Per-platform default ini search path, mirroring the SDL OSD's (sdlopts.cpp)
 // so existing user config (e.g. under $HOME/.<appname>) is still found — the
@@ -251,7 +283,7 @@ public:
 	}
 
 private:
-	std::lock_guard<std::mutex> m_lock;
+	std::lock_guard<fifo_mutex> m_lock;
 	std::string m_saved;
 };
 
@@ -2318,67 +2350,90 @@ void qtui_load_software(
 
 	auto cancelled = [cancel] { return cancel && cancel->load(std::memory_order_relaxed); };
 
-	// Serialise with the auditor and force the "C" locale (see qtui_run_args()
-	// for why the locale matters).
-	core_guard guard;
-
-	try
+	// Phase 1 (one short core hold): build the configuration, parse the
+	// software lists, enumerate the entries.  The enumerator and config must
+	// outlive phase 2; keep the config shared_ptr so the enumerator's LRU
+	// cache cannot evict the device tree the collected pointers live in.
+	std::unique_ptr<qt_options> options;
+	std::unique_ptr<driver_enumerator> drivlist;
+	std::shared_ptr<machine_config> config;
+	std::vector<software_list_device *> lists;
+	std::vector<qtui_software_entry> entries;
 	{
-		const game_driver &driver = driver_list::driver(index);
+		// Serialise with the auditor and force the "C" locale (see
+		// qtui_run_args() for why the locale matters).
+		core_guard guard;
 
-		// Load the configured paths (hashpath in particular) so the software
-		// list definition files can be found.
-		qt_options options;
-		std::ostringstream errors;
-		mame_options::parse_standard_inis(options, errors, &driver);
-
-		// Build the machine configuration once; both phases walk it in the
-		// same order (get_info() is parsed and cached on first access).
-		driver_enumerator drivlist(options, driver);
-		drivlist.next();
-		device_t &root = drivlist.config()->root_device();
-
-		// Phase 1: enumerate entries (fast) and hand them over immediately.
-		std::vector<qtui_software_entry> entries;
-		for (software_list_device &swlistdev : software_list_device_enumerator(root))
+		try
 		{
-			for (const software_info &info : swlistdev.get_info())
+			const game_driver &driver = driver_list::driver(index);
+
+			// Load the configured paths (hashpath in particular) so the
+			// software list definition files can be found.
+			options = std::make_unique<qt_options>();
+			std::ostringstream errors;
+			mame_options::parse_standard_inis(*options, errors, &driver);
+
+			drivlist = std::make_unique<driver_enumerator>(*options, driver);
+			drivlist->next();
+			config = drivlist->config();
+
+			for (software_list_device &swlistdev : software_list_device_enumerator(config->root_device()))
 			{
-				qtui_software_entry entry;
-				entry.list = swlistdev.list_name();
-				entry.shortname = info.shortname();
-				entry.parent = info.parentname();   // cloneof, "" if a parent
-				entry.description = info.longname();
-				entry.year = info.year();
-				entry.publisher = info.publisher();
-				entry.supported = int(info.supported());
-				entry.availability = QTUI_AVAIL_UNKNOWN;
-				entries.push_back(std::move(entry));
+				lists.push_back(&swlistdev);
+				for (const software_info &info : swlistdev.get_info())
+				{
+					qtui_software_entry entry;
+					entry.list = swlistdev.list_name();
+					entry.shortname = info.shortname();
+					entry.parent = info.parentname();   // cloneof, "" if a parent
+					entry.description = info.longname();
+					entry.year = info.year();
+					entry.publisher = info.publisher();
+					entry.supported = int(info.supported());
+					entry.availability = QTUI_AVAIL_UNKNOWN;
+					entries.push_back(std::move(entry));
+				}
 			}
 		}
-		on_entries(entries);
-
-		// Phase 2: fast-audit each entry's ROMs (slow).
-		media_auditor auditor(drivlist);
-		int i = 0;
-		for (software_list_device &swlistdev : software_list_device_enumerator(root))
+		catch (...)
 		{
-			for (const software_info &info : swlistdev.get_info())
+			// A malformed software list or machine configuration should not
+			// take down the front-end.
+			return;
+		}
+	}
+	on_entries(entries);
+
+	// Phase 2: fast-audit each entry's ROMs (slow file IO).  One core hold per
+	// item — NOT one for the whole system: a big list audited over a network
+	// rompath would otherwise pin the lock for minutes and any GUI-thread core
+	// user (e.g. opening the Options dialog) would appear to hang.
+	try
+	{
+		media_auditor auditor(*drivlist);
+		int i = 0;
+		for (software_list_device *swlistdev : lists)
+		{
+			for (const software_info &info : swlistdev->get_info())
 			{
 				if (cancelled())
 					return;
 
 				int availability;
-				switch (auditor.audit_software(swlistdev, info, AUDIT_VALIDATE_FAST))
 				{
-				case media_auditor::CORRECT:
-				case media_auditor::BEST_AVAILABLE:
-				case media_auditor::NONE_NEEDED:
-					availability = QTUI_AVAIL_AVAILABLE;
-					break;
-				default:
-					availability = QTUI_AVAIL_UNAVAILABLE;
-					break;
+					core_guard guard;
+					switch (auditor.audit_software(*swlistdev, info, AUDIT_VALIDATE_FAST))
+					{
+					case media_auditor::CORRECT:
+					case media_auditor::BEST_AVAILABLE:
+					case media_auditor::NONE_NEEDED:
+						availability = QTUI_AVAIL_AVAILABLE;
+						break;
+					default:
+						availability = QTUI_AVAIL_UNAVAILABLE;
+						break;
+					}
 				}
 				on_audited(i++, availability);
 			}
@@ -2386,8 +2441,7 @@ void qtui_load_software(
 	}
 	catch (...)
 	{
-		// A malformed software list or machine configuration should not take
-		// down the front-end.
+		// Leave the remaining entries unaudited (QTUI_AVAIL_UNKNOWN).
 	}
 }
 
@@ -3088,9 +3142,12 @@ void qtui_audit_all_software(
 		std::vector<int> availability;
 		bool has_software = false;
 
+		// Advance and collect the driver's software lists under one short
+		// hold.  Copy the config shared_ptr so the device tree stays alive
+		// across the item loop (the enumerator's LRU cache may evict it).
+		std::shared_ptr<machine_config> config;
+		std::vector<software_list_device *> lists;
 		{
-			// Hold the core only for the per-driver work, releasing between
-			// systems so on-demand software enumeration stays responsive.
 			core_guard guard;
 			if (!drivlist.next())
 				break;
@@ -3098,24 +3155,51 @@ void qtui_audit_all_software(
 			name = drivlist.driver().name;
 			try
 			{
-				device_t &root = drivlist.config()->root_device();
+				config = drivlist.config();
+				for (software_list_device &swlistdev : software_list_device_enumerator(config->root_device()))
+					lists.push_back(&swlistdev);
+			}
+			catch (...)
+			{
+				lists.clear();
+				config.reset();
+			}
+		}
+
+		if (config)
+		{
+			try
+			{
 				media_auditor auditor(drivlist);
-				for (software_list_device &swlistdev : software_list_device_enumerator(root))
+				for (software_list_device *swlistdev : lists)
 				{
-					for (const software_info &info : swlistdev.get_info())
+					std::list<software_info> const *infos;
+					{
+						// get_info() lazily parses the softlist XML; do that
+						// under its own hold — the list is immutable after.
+						core_guard guard;
+						infos = &swlistdev->get_info();
+					}
+					for (const software_info &info : *infos)
 					{
 						has_software = true;
 						int avail;
-						switch (auditor.audit_software(swlistdev, info, AUDIT_VALIDATE_FAST))
 						{
-						case media_auditor::CORRECT:
-						case media_auditor::BEST_AVAILABLE:
-						case media_auditor::NONE_NEEDED:
-							avail = QTUI_AVAIL_AVAILABLE;
-							break;
-						default:
-							avail = QTUI_AVAIL_UNAVAILABLE;
-							break;
+							// One hold per item (not per system — a big list
+							// would block a waiting GUI-thread options
+							// read/write for its entire audit).
+							core_guard guard;
+							switch (auditor.audit_software(*swlistdev, info, AUDIT_VALIDATE_FAST))
+							{
+							case media_auditor::CORRECT:
+							case media_auditor::BEST_AVAILABLE:
+							case media_auditor::NONE_NEEDED:
+								avail = QTUI_AVAIL_AVAILABLE;
+								break;
+							default:
+								avail = QTUI_AVAIL_UNAVAILABLE;
+								break;
+							}
 						}
 						availability.push_back(avail);
 

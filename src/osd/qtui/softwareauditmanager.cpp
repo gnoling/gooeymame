@@ -53,6 +53,11 @@ void SoftwareAuditManager::startAudit()
 	if (m_running.load())
 		return;
 
+	// The previous worker may have finished but not yet been reaped by the
+	// flush() timer tick; assigning a new std::thread over a still-joinable
+	// one calls std::terminate.  The join is (near-)instant here.
+	joinWorker();
+
 	m_cancel.store(false);
 	m_running.store(true);
 	m_audited = 0;

@@ -945,6 +945,10 @@ void OptionsDialog::accept()
 									   : tr("Failed to write the per-machine ini."));
 			return;
 		}
+
+		for (const auto &change : changes)
+			if (change.first == "rompath" || change.first == "hashpath")
+				m_romPathsChanged = true;
 	}
 
 	// Front-end folders and playback preferences are global-only settings.
