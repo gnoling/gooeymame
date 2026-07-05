@@ -517,24 +517,25 @@ void ArtworkPanel::addSecondaryCandidates(
 {
 	if (key.isEmpty())
 		return;
-	QString const root = frontendFolderPath(QStringLiteral("secondaryRoot"));
-	if (root.isEmpty())
-		return;
-	QString const base = root + QLatin1Char('/') + key;
-	if (m_mode == Mode::Software)
+	// Several roots may be configured (';'-separated); earlier roots win.
+	for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
 	{
-		if (m_swList.isEmpty() || m_swName.isEmpty())
-			return;
-		candidates.append({ base, m_swList + QLatin1Char('/') + m_swName + ext });
-		if (!m_swParent.isEmpty())
-			candidates.append({ base, m_swList + QLatin1Char('/') + m_swParent + ext });
-	}
-	else if (!m_system.isEmpty())
-	{
-		candidates.append({ base, m_system + ext });
-		std::string const parent = qtui_parent_of(m_system.toStdString());
-		if (!parent.empty())
-			candidates.append({ base, QString::fromStdString(parent) + ext });
+		QString const base = root + QLatin1Char('/') + key;
+		if (m_mode == Mode::Software)
+		{
+			if (m_swList.isEmpty() || m_swName.isEmpty())
+				return;
+			candidates.append({ base, m_swList + QLatin1Char('/') + m_swName + ext });
+			if (!m_swParent.isEmpty())
+				candidates.append({ base, m_swList + QLatin1Char('/') + m_swParent + ext });
+		}
+		else if (!m_system.isEmpty())
+		{
+			candidates.append({ base, m_system + ext });
+			std::string const parent = qtui_parent_of(m_system.toStdString());
+			if (!parent.empty())
+				candidates.append({ base, QString::fromStdString(parent) + ext });
+		}
 	}
 }
 
@@ -609,10 +610,6 @@ QString ArtworkPanel::videoPathFor(const Tab &tab) const
 {
 	QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
 	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-	QString const secRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
-	QString const secBase = (tab.swKey.isEmpty() || secRoot.isEmpty())
-			? QString()
-			: secRoot + QLatin1Char('/') + tab.swKey;
 
 	QString path;
 	auto trySoftware = [&] (const QString &dir) {
@@ -634,17 +631,15 @@ QString ArtworkPanel::videoPathFor(const Tab &tab) const
 				path = resolveVideo(base, QString::fromStdString(parent));
 		}
 	}
-	trySoftware(secBase);   // secondary media root last
+	if (!tab.swKey.isEmpty())   // secondary media root(s) last
+		for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
+			trySoftware(root + QLatin1Char('/') + tab.swKey);
 	return path;
 }
 
 QString ArtworkPanel::musicPathFor(const Tab &tab) const
 {
 	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-	QString const secRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
-	QString const secBase = (tab.swKey.isEmpty() || secRoot.isEmpty())
-			? QString()
-			: secRoot + QLatin1Char('/') + tab.swKey;
 
 	QString path;
 	auto trySoftware = [&] (const QString &dir) {
@@ -656,7 +651,9 @@ QString ArtworkPanel::musicPathFor(const Tab &tab) const
 		}
 	};
 	trySoftware(slBase);
-	trySoftware(secBase);
+	if (!tab.swKey.isEmpty())
+		for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
+			trySoftware(root + QLatin1Char('/') + tab.swKey);
 	return path;
 }
 

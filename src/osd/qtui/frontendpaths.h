@@ -16,6 +16,7 @@
 #pragma once
 
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 
 #include <cstddef>
 
@@ -63,6 +64,10 @@ extern const std::size_t ICON_SOURCE_COUNT;
 // Read/write a configured front-end folder path (empty if unset).
 QString frontendFolderPath(const QString &key);
 void setFrontendFolderPath(const QString &key, const QString &path);
+
+// A folder value split on ';' into individual roots (empty parts dropped).
+// Used by keys that accept several directories, e.g. secondaryRoot.
+QStringList frontendFolderPathList(const QString &key);
 
 } // namespace osd::qtui
 

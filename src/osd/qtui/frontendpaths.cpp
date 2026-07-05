@@ -74,7 +74,7 @@ const FrontendFolder FRONTEND_FOLDERS[] =
 	{ "music_sl",     "Software music",            false },
 	// Fallback art root (tools/optimize-sl-media.py output): consulted only when
 	// the primary source above has nothing.  Layout <root>/<key>/<list>/<sw>.png.
-	{ "secondaryRoot", "Secondary media root (title-matched fallback)", false },
+	{ "secondaryRoot", "Secondary media root(s) (title-matched fallback; separate several with ';')", false },
 };
 
 const std::size_t FRONTEND_FOLDER_COUNT = sizeof(FRONTEND_FOLDERS) / sizeof(FRONTEND_FOLDERS[0]);
@@ -121,6 +121,18 @@ QString frontendFolderPath(const QString &key)
 {
 	QSettings settings;
 	return settings.value(QStringLiteral("folders/") + key).toString();
+}
+
+QStringList frontendFolderPathList(const QString &key)
+{
+	QStringList out;
+	for (const QString &part : frontendFolderPath(key).split(QLatin1Char(';')))
+	{
+		QString const dir = part.trimmed();
+		if (!dir.isEmpty())
+			out.append(dir);
+	}
+	return out;
 }
 
 void setFrontendFolderPath(const QString &key, const QString &path)

@@ -357,8 +357,8 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 
 		// For each art type (primary first): the software _SL images, then the
 		// host-machine image as a last resort for that type; finally the optional
-		// secondary media root (<root>/<key>/<list>/<sw>.png) fills any gaps.
-		QString const secondaryRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
+		// secondary media root(s) (<root>/<key>/<list>/<sw>.png) fill any gaps.
+		QStringList const secondaryRoots = frontendFolderPathList(QStringLiteral("secondaryRoot"));
 		ArtCandidates candidates;
 		for (const ThumbSource &src : m_thumbChain)
 		{
@@ -371,7 +371,7 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 				if (!m_hostParent.isEmpty())
 					candidates.append({ src.machinePath, m_hostParent + QStringLiteral(".png") });
 			}
-			if (!secondaryRoot.isEmpty())
+			for (const QString &secondaryRoot : secondaryRoots)
 			{
 				if (!src.swKey.isEmpty())
 				{
@@ -440,7 +440,7 @@ QVariant SoftwareModel::iconForRow(int row) const
 				if (member >= 0 && member < int(m_entries.size()))
 					addSw(m_entries[member]);
 
-		QString const secondaryRoot = frontendFolderPath(QStringLiteral("secondaryRoot"));
+		QStringList const secondaryRoots = frontendFolderPathList(QStringLiteral("secondaryRoot"));
 
 		// Candidates for one art source, split into the software item's own art
 		// and the host-machine fallback so the two orderings can interleave them.
@@ -459,12 +459,13 @@ QVariant SoftwareModel::iconForRow(int row) const
 				if (!src.swPath.isEmpty())
 					for (const auto &nm : swNames)
 						c.append({ src.swPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-				if (!secondaryRoot.isEmpty() && !src.swKey.isEmpty())
-				{
-					QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
-					for (const auto &nm : swNames)
-						c.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-				}
+				if (!src.swKey.isEmpty())
+					for (const QString &secondaryRoot : secondaryRoots)
+					{
+						QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
+						for (const auto &nm : swNames)
+							c.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+					}
 			}
 			return c;
 		};
@@ -483,12 +484,13 @@ QVariant SoftwareModel::iconForRow(int row) const
 					c.append({ src.machinePath, m_hostSystem + ext });
 					if (!m_hostParent.isEmpty()) c.append({ src.machinePath, m_hostParent + ext });
 				}
-				if (!secondaryRoot.isEmpty() && !src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
-				{
-					QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
-					c.append({ base, m_hostSystem + ext });
-					if (!m_hostParent.isEmpty()) c.append({ base, m_hostParent + ext });
-				}
+				if (!src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
+					for (const QString &secondaryRoot : secondaryRoots)
+					{
+						QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
+						c.append({ base, m_hostSystem + ext });
+						if (!m_hostParent.isEmpty()) c.append({ base, m_hostParent + ext });
+					}
 			}
 			return c;
 		};
