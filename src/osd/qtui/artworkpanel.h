@@ -101,11 +101,6 @@ private:
 	void refresh();          // invalidate all tabs and (re)load the visible ones
 	void applyLayout(int layout);
 	void loadTab(int index); // load one tab by index into m_views
-	// Append fallback candidates from the optional secondary media root
-	// (folders/secondaryRoot, laid out <root>/<key>/<list>/<sw>.<ext>) for the
-	// current item.  No-op when the root is unset.  `key` is the art-type key.
-	void addSecondaryCandidates(QVector<QPair<QString, QString>> &candidates,
-			const QString &key, const QString &ext) const;
 	void rescale(int index);
 	int indexOfView(QWidget *view) const;
 	void loadVisible(QTabWidget *group);
@@ -128,6 +123,10 @@ private:
 	};
 
 	// Candidate / path resolution for a tab (shared by load + content probe).
+	// (path, entry) candidates for the current item across a tab's software
+	// and machine art keys, each expanded to its full search-path list
+	// (multipath value + secondary media roots) via artSearchPaths().
+	QVector<QPair<QString, QString>> artCandidatesFor(const Tab &tab, const QString &ext) const;
 	QVector<QPair<QString, QString>> imageCandidates(const Tab &tab) const;
 	QVector<QPair<QString, QString>> manualCandidates(const Tab &tab) const;
 	QString videoPathFor(const Tab &tab) const;

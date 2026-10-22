@@ -167,9 +167,10 @@ private:
 	QStringList m_regionOrder;
 	QHash<QString, QString> m_overrides;   // "list\x1froot" -> member short name
 
-	// Grid thumbnails: ordered art-type sources (each = software _SL path +
-	// host-machine fallback path), primary first.
-	struct ThumbSource { QString swPath; QString machinePath; QString swKey; QString machineKey; };
+	// Grid thumbnails: ordered art-type sources (each = software _SL search
+	// paths + host-machine fallback search paths, both already expanded via
+	// artSearchPaths so multipath values and the secondary roots are included).
+	struct ThumbSource { QStringList swPaths; QStringList machinePaths; QString swKey; QString machineKey; };
 	ThumbnailLoader *m_thumbLoader = nullptr;
 	QVector<ThumbSource> m_thumbChain;
 	bool m_thumbFamily = true;
@@ -180,7 +181,7 @@ private:
 
 	// Row icons: per-software icon if present, else the host machine's icon.
 	IconLoader *m_iconLoader = nullptr;
-	QString m_iconsPath;
+	QStringList m_iconsPaths;
 	mutable QHash<int, QIcon> m_iconCache;
 	mutable QSet<int> m_iconRequested;
 	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)
@@ -189,11 +190,12 @@ private:
 	// Resolved row-icon source chain + fallback-order toggles (see setIconSources).
 	struct IconSrcSw
 	{
-		QString swPath, machinePath, swKey, machineKey;
+		QStringList swPaths, machinePaths;
+		QString swKey, machineKey;
 		bool native;
 		bool operator==(const IconSrcSw &o) const
 		{
-			return swPath == o.swPath && machinePath == o.machinePath && swKey == o.swKey
+			return swPaths == o.swPaths && machinePaths == o.machinePaths && swKey == o.swKey
 					&& machineKey == o.machineKey && native == o.native;
 		}
 	};

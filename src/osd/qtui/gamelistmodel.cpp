@@ -62,13 +62,12 @@ GameListModel::GameListModel(QObject *parent) :
 	reloadVersionSettings();
 
 	// Row icons (icons.zip) are loaded lazily on a worker thread.
-	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
 	m_iconLoader = new IconLoader(this);
 	connect(m_iconLoader, &IconLoader::loaded, this, &GameListModel::onIconLoaded);
 	// Default source chain = the native icon set (self→parent), matching the
 	// historical behavior until MainWindow applies the user's configuration.
-	if (!m_iconsPath.isEmpty())
-		m_iconChain.append({ m_iconsPath, true });
+	for (const QString &path : artSearchPaths(QStringLiteral("icons")))
+		m_iconChain.append({ path, true });
 
 	// Grid thumbnails (image set chosen at runtime) load on their own thread.
 	m_thumbLoader = new ThumbnailLoader(this);
@@ -79,13 +78,8 @@ void GameListModel::setThumbnailSources(const QStringList &machineKeys, bool fam
 {
 	QVector<QPair<QString, QString>> chain;
 	for (const QString &key : machineKeys)
-	{
-		if (key.isEmpty())
-			continue;
-		QString const path = frontendFolderPath(key);
-		if (!path.isEmpty())
+		for (const QString &path : artSearchPaths(key))
 			chain.append({ key, path });
-	}
 	if (chain == m_thumbChain && familyFallback == m_thumbFamily)
 		return;
 	m_thumbChain = chain;
@@ -403,11 +397,8 @@ void GameListModel::setIconSources(const QVector<IconSourceKey> &sources, bool p
 {
 	QVector<IconSrc> chain;
 	for (const IconSourceKey &s : sources)
-	{
-		QString const path = s.native ? m_iconsPath : frontendFolderPath(s.machineKey);
-		if (!path.isEmpty())
+		for (const QString &path : artSearchPaths(s.native ? QStringLiteral("icons") : s.machineKey))
 			chain.append({ path, s.native });
-	}
 	if (chain == m_iconChain && preferOwn == m_iconPreferOwn && family == m_iconFamily)
 		return;
 	m_iconChain = chain;

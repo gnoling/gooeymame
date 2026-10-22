@@ -282,7 +282,6 @@ private:
 
 	// Lazy, cached row icons from icons.zip (loaded on a worker thread).
 	IconLoader *m_iconLoader = nullptr;
-	QString m_iconsPath;
 	mutable QHash<int, QIcon> m_iconCache;
 	mutable QSet<int> m_iconRequested;
 	int m_iconDisplaySize = 0;   // px the views show icons at (0 = native)

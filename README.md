@@ -77,8 +77,9 @@ while the game is running.
   Marquee, PCB, Logo, Artwork, Select, Versus, Score, Game Over — plus Box / Cart / 3D for software.
 - **Info tabs**: History, MAME Info, Command, MESS Info, Init, System, Story, Top Scores, and a
   built-in **PDF manual viewer**.
-- **Configurable art fallback** (software → host machine → clone parent), a **secondary media
-  source**, per-art-type scaling, list row icons, and automatic hiding of empty tabs.
+- **Configurable art fallback** (software → host machine → clone parent), **multiple search
+  paths per art type** (folders or zips, in priority order) with one-click auto-fill from a media
+  folder, per-art-type scaling, list row icons, and automatic hiding of empty tabs.
 
 ### ROM management
 - **Availability auditing** for machines and software — cached, persisted, bulk-refreshable, and

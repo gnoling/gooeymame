@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <QtCore/QHash>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 
@@ -22,14 +23,33 @@
 
 namespace osd::qtui {
 
-struct FrontendFolder
+// How a front-end folder entry is configured and consumed.
+enum class FolderKind
 {
-	const char *key;    // QSettings key (under group "folders")
-	const char *label;  // human-readable label
-	bool isFile;        // true = pick a file, false = pick a directory
+	SearchPath,   // ordered list of folders and/or zip archives, searched in turn
+	Dir,          // a single folder
+	File          // a single file
 };
 
-// Curated list of front-end asset folders/files (MAME EXTRAs).
+// Which Options ▸ Front-end Folders tab an entry is shown on.
+enum class FolderGroup
+{
+	MachineArt,   // per-machine image/video/sound sets
+	SoftwareArt,  // per-software-list sets
+	DataFiles     // category folders, history/info .dat files
+};
+
+struct FrontendFolder
+{
+	const char *key;      // QSettings key (under group "folders")
+	const char *label;    // human-readable label
+	FolderKind kind;
+	FolderGroup group;
+	const char *aliases;  // ';'-separated alternative basenames (file or folder
+	                      // names, archive extension optional) recognised by
+	                      // discoverFrontendFolders() in addition to `key`
+};
+
 extern const FrontendFolder FRONTEND_FOLDERS[];
 extern const std::size_t FRONTEND_FOLDER_COUNT;
 
@@ -65,9 +85,31 @@ extern const std::size_t ICON_SOURCE_COUNT;
 QString frontendFolderPath(const QString &key);
 void setFrontendFolderPath(const QString &key, const QString &path);
 
-// A folder value split on ';' into individual roots (empty parts dropped).
-// Used by keys that accept several directories, e.g. secondaryRoot.
+// A folder value split on ';' into individual entries (empty parts dropped).
+// SearchPath keys store their ordered list this way.
 QStringList frontendFolderPathList(const QString &key);
+
+// Every location to search for one art-type key, in priority order: the
+// key's own ';'-separated folders or zip files.  All art lookups (machine and
+// software alike) resolve through this, so any tool that generates the
+// EXTRAs-style layout (<key>/<machine>.png, <key>/<list>/<software>.png)
+// plugs in by adding its output folder to the relevant keys.
+QStringList artSearchPaths(const QString &key);
+
+// Look through one media root (a MAME EXTRAs download, a Multimedia pack, an
+// optimize-sl-media.py / import-launchbox-media.py output tree, ...) for
+// entries matching each front-end folder key or its aliases, case-insensitively:
+// a folder or .zip/.7z archive named after the key for SearchPath/Dir kinds,
+// and a file named after an alias (directly under the root or one subfolder
+// down, e.g. dats/history.xml) for File kinds.  Returns key -> absolute path for
+// every key that matched.  Used by the Options auto-fill and by the one-time
+// secondary-root migration.
+QHash<QString, QString> discoverFrontendFolders(const QString &root);
+
+// One-time settings upgrade, run at startup: fold the retired
+// "folders/secondaryRoot" list into the per-key search paths (appending
+// <root>/<key> for every key that exists under each root) and remove the key.
+void migrateFrontendFolders();
 
 } // namespace osd::qtui
 

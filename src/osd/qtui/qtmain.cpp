@@ -15,6 +15,7 @@
 //============================================================
 
 #include "emulator.h"
+#include "frontendpaths.h"
 #include "mainwindow.h"
 
 #include <QtCore/QSettings>
@@ -132,6 +133,11 @@ int main(int argc, char *argv[])
 	// (location: %APPDATA%\GooeyMAME\GooeyMAME.ini).  Must precede any QSettings use.
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 #endif
+
+	// Upgrade older front-end folder settings in place (fold the retired
+	// secondary media roots into the per-art-type search paths).  Must run
+	// before anything reads the folder keys.
+	osd::qtui::migrateFrontendFolders();
 
 	// Apply the user's chosen Qt widget style and colour scheme (if any) before
 	// building the UI.  Style first: it resets the palette the scheme rides on.

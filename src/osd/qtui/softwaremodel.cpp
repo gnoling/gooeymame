@@ -28,13 +28,13 @@ SoftwareModel::SoftwareModel(QObject *parent) :
 	connect(m_thumbLoader, &ThumbnailLoader::loaded, this, &SoftwareModel::onThumbnailLoaded);
 
 	// Row icons (icons.zip) loaded lazily on a worker thread, like the machine list.
-	m_iconsPath = frontendFolderPath(QStringLiteral("icons"));
+	m_iconsPaths = artSearchPaths(QStringLiteral("icons"));
 	m_iconLoader = new IconLoader(this);
 	connect(m_iconLoader, &IconLoader::loaded, this, &SoftwareModel::onIconLoaded);
 	// Default = native icon set (per-software icon, then host machine), matching
 	// the historical behavior until MainWindow applies the user's configuration.
-	if (!m_iconsPath.isEmpty())
-		m_iconChain.append({ QString(), QString(), QString(), QString(), true });
+	if (!m_iconsPaths.isEmpty())
+		m_iconChain.append({ QStringList(), QStringList(), QString(), QString(), true });
 }
 
 void SoftwareModel::setIconSources(const QVector<IconSourceKeySw> &sources, bool preferOwn, bool family)
@@ -46,11 +46,10 @@ void SoftwareModel::setIconSources(const QVector<IconSourceKeySw> &sources, bool
 		src.native = s.native;
 		src.swKey = s.swKey;
 		src.machineKey = s.machineKey;
-		src.swPath = s.swKey.isEmpty() ? QString() : frontendFolderPath(s.swKey);
-		src.machinePath = s.machineKey.isEmpty() ? QString() : frontendFolderPath(s.machineKey);
-		// Native uses the icons path; a non-native source is kept even with no
-		// primary path since the secondary media root may still supply it.
-		if (src.native && m_iconsPath.isEmpty())
+		src.swPaths = artSearchPaths(s.swKey);
+		src.machinePaths = artSearchPaths(s.machineKey);
+		// Native uses the icons search paths (kept in m_iconsPaths).
+		if (src.native && m_iconsPaths.isEmpty())
 			continue;
 		chain.append(src);
 	}
@@ -304,15 +303,13 @@ void SoftwareModel::setThumbnailSources(const QVector<QPair<QString, QString>> &
 		ThumbSource src;
 		src.swKey = pair.first;
 		src.machineKey = pair.second;
-		src.swPath = pair.first.isEmpty() ? QString() : frontendFolderPath(pair.first);
-		src.machinePath = pair.second.isEmpty() ? QString() : frontendFolderPath(pair.second);
-		// Keep the source even if neither primary path is configured: the
-		// secondary media root (resolved at request time) may still supply it.
+		src.swPaths = artSearchPaths(pair.first);
+		src.machinePaths = artSearchPaths(pair.second);
 		chain.append(src);
 	}
 	bool same = (familyFallback == m_thumbFamily) && (chain.size() == m_thumbChain.size());
 	for (int i = 0; same && i < chain.size(); ++i)
-		same = (chain[i].swPath == m_thumbChain[i].swPath) && (chain[i].machinePath == m_thumbChain[i].machinePath)
+		same = (chain[i].swPaths == m_thumbChain[i].swPaths) && (chain[i].machinePaths == m_thumbChain[i].machinePaths)
 				&& (chain[i].swKey == m_thumbChain[i].swKey) && (chain[i].machineKey == m_thumbChain[i].machineKey);
 	if (same)
 		return;
@@ -355,38 +352,22 @@ QVariant SoftwareModel::thumbnailForRow(int row) const
 				if (member >= 0 && member < int(m_entries.size()))
 					addSw(m_entries[member]);
 
-		// For each art type (primary first): the software _SL images, then the
-		// host-machine image as a last resort for that type; finally the optional
-		// secondary media root(s) (<root>/<key>/<list>/<sw>.png) fill any gaps.
-		QStringList const secondaryRoots = frontendFolderPathList(QStringLiteral("secondaryRoot"));
+		// For each art type (primary first): the software _SL images across every
+		// configured search path (multipath + secondary roots), then the host-
+		// machine image as a last resort for that type.
 		ArtCandidates candidates;
 		for (const ThumbSource &src : m_thumbChain)
 		{
-			if (!src.swPath.isEmpty())
+			for (const QString &path : src.swPaths)
 				for (const auto &nm : swNames)
-					candidates.append({ src.swPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-			if (!src.machinePath.isEmpty() && !m_hostSystem.isEmpty())
-			{
-				candidates.append({ src.machinePath, m_hostSystem + QStringLiteral(".png") });
-				if (!m_hostParent.isEmpty())
-					candidates.append({ src.machinePath, m_hostParent + QStringLiteral(".png") });
-			}
-			for (const QString &secondaryRoot : secondaryRoots)
-			{
-				if (!src.swKey.isEmpty())
+					candidates.append({ path, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
+			if (!m_hostSystem.isEmpty())
+				for (const QString &path : src.machinePaths)
 				{
-					QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
-					for (const auto &nm : swNames)
-						candidates.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-				}
-				if (!src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
-				{
-					QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
-					candidates.append({ base, m_hostSystem + QStringLiteral(".png") });
+					candidates.append({ path, m_hostSystem + QStringLiteral(".png") });
 					if (!m_hostParent.isEmpty())
-						candidates.append({ base, m_hostParent + QStringLiteral(".png") });
+						candidates.append({ path, m_hostParent + QStringLiteral(".png") });
 				}
-			}
 		}
 		if (!candidates.isEmpty())
 			m_thumbLoader->request(row, m_thumbGen, candidates);
@@ -440,57 +421,37 @@ QVariant SoftwareModel::iconForRow(int row) const
 				if (member >= 0 && member < int(m_entries.size()))
 					addSw(m_entries[member]);
 
-		QStringList const secondaryRoots = frontendFolderPathList(QStringLiteral("secondaryRoot"));
-
 		// Candidates for one art source, split into the software item's own art
 		// and the host-machine fallback so the two orderings can interleave them.
+		// Every source's paths are pre-expanded (multipath + secondary roots).
 		auto ownCands = [&] (const IconSrcSw &src) {
 			ArtCandidates c;
 			if (src.native)
 			{
-				for (const auto &nm : swNames)
-				{
-					c.append({ m_iconsPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".ico") });
-					c.append({ m_iconsPath, nm.second + QStringLiteral(".ico") });
-				}
+				for (const QString &path : m_iconsPaths)
+					for (const auto &nm : swNames)
+					{
+						c.append({ path, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".ico") });
+						c.append({ path, nm.second + QStringLiteral(".ico") });
+					}
 			}
 			else
 			{
-				if (!src.swPath.isEmpty())
+				for (const QString &path : src.swPaths)
 					for (const auto &nm : swNames)
-						c.append({ src.swPath, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-				if (!src.swKey.isEmpty())
-					for (const QString &secondaryRoot : secondaryRoots)
-					{
-						QString const base = secondaryRoot + QLatin1Char('/') + src.swKey;
-						for (const auto &nm : swNames)
-							c.append({ base, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
-					}
+						c.append({ path, nm.first + QLatin1Char('/') + nm.second + QStringLiteral(".png") });
 			}
 			return c;
 		};
 		auto hostCands = [&] (const IconSrcSw &src) {
 			ArtCandidates c;
+			if (m_hostSystem.isEmpty())
+				return c;
 			QString const ext = src.native ? QStringLiteral(".ico") : QStringLiteral(".png");
-			if (src.native)
+			for (const QString &path : (src.native ? m_iconsPaths : src.machinePaths))
 			{
-				if (!m_hostSystem.isEmpty()) c.append({ m_iconsPath, m_hostSystem + ext });
-				if (!m_hostParent.isEmpty()) c.append({ m_iconsPath, m_hostParent + ext });
-			}
-			else
-			{
-				if (!src.machinePath.isEmpty() && !m_hostSystem.isEmpty())
-				{
-					c.append({ src.machinePath, m_hostSystem + ext });
-					if (!m_hostParent.isEmpty()) c.append({ src.machinePath, m_hostParent + ext });
-				}
-				if (!src.machineKey.isEmpty() && !m_hostSystem.isEmpty())
-					for (const QString &secondaryRoot : secondaryRoots)
-					{
-						QString const base = secondaryRoot + QLatin1Char('/') + src.machineKey;
-						c.append({ base, m_hostSystem + ext });
-						if (!m_hostParent.isEmpty()) c.append({ base, m_hostParent + ext });
-					}
+				c.append({ path, m_hostSystem + ext });
+				if (!m_hostParent.isEmpty()) c.append({ path, m_hostParent + ext });
 			}
 			return c;
 		};

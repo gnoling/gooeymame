@@ -512,164 +512,117 @@ void ArtworkPanel::loadCurrent()
 		loadVisible(m_infoTabs);
 }
 
-void ArtworkPanel::addSecondaryCandidates(
-		QVector<QPair<QString, QString>> &candidates, const QString &key, const QString &ext) const
+// Build the (path, entry) candidate list for one art extension: the software
+// item's own art (its list/short name, then its clone parent) across every
+// search path of the software key, then the machine's art (system, then
+// parent) across every search path of the system key.  artSearchPaths()
+// already appends the secondary media root(s) behind each key's own paths.
+ArtCandidates ArtworkPanel::artCandidatesFor(const Tab &tab, const QString &ext) const
 {
-	if (key.isEmpty())
-		return;
-	// Several roots may be configured (';'-separated); earlier roots win.
-	for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
+	ArtCandidates candidates;
+
+	if (m_mode == Mode::Software && !tab.swKey.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
 	{
-		QString const base = root + QLatin1Char('/') + key;
-		if (m_mode == Mode::Software)
+		for (const QString &path : artSearchPaths(tab.swKey))
 		{
-			if (m_swList.isEmpty() || m_swName.isEmpty())
-				return;
-			candidates.append({ base, m_swList + QLatin1Char('/') + m_swName + ext });
+			candidates.append({ path, m_swList + QLatin1Char('/') + m_swName + ext });
+			// Fall back to the software clone parent: variants often share art,
+			// and the media importers prune a clone's copy when it matches.
 			if (!m_swParent.isEmpty())
-				candidates.append({ base, m_swList + QLatin1Char('/') + m_swParent + ext });
-		}
-		else if (!m_system.isEmpty())
-		{
-			candidates.append({ base, m_system + ext });
-			std::string const parent = qtui_parent_of(m_system.toStdString());
-			if (!parent.empty())
-				candidates.append({ base, QString::fromStdString(parent) + ext });
+				candidates.append({ path, m_swList + QLatin1Char('/') + m_swParent + ext });
 		}
 	}
+	if (!tab.sysKey.isEmpty() && !m_system.isEmpty())
+	{
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		for (const QString &path : artSearchPaths(tab.sysKey))
+		{
+			candidates.append({ path, m_system + ext });
+			if (!parent.empty())
+				candidates.append({ path, QString::fromStdString(parent) + ext });
+		}
+	}
+	return candidates;
 }
 
 ArtCandidates ArtworkPanel::imageCandidates(const Tab &tab) const
 {
-	ArtCandidates candidates;
-
-	auto addSystemArt = [&] {
-		if (tab.sysKey.isEmpty() || m_system.isEmpty())
-			return;
-		QString const path = frontendFolderPath(tab.sysKey);
-		if (path.isEmpty())
-			return;
-		candidates.append({ path, m_system + QStringLiteral(".png") });
-		std::string const parent = qtui_parent_of(m_system.toStdString());
-		if (!parent.empty())
-			candidates.append({ path, QString::fromStdString(parent) + QStringLiteral(".png") });
-	};
-
-	if (m_mode == Mode::Software)
-	{
-		if (!tab.swKey.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
-		{
-			QString const path = frontendFolderPath(tab.swKey);
-			if (!path.isEmpty())
-			{
-				candidates.append({ path, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".png") });
-				// Fall back to the software clone parent: variants often share art,
-				// and the media optimizer prunes a clone's copy when it matches.
-				if (!m_swParent.isEmpty())
-					candidates.append({ path, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".png") });
-			}
-		}
-		addSystemArt();   // machine fallback
-	}
-	else
-	{
-		addSystemArt();
-	}
-
-	// Secondary media root fills gaps the primary sources don't cover.
-	addSecondaryCandidates(candidates,
-			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".png"));
-	return candidates;
+	return artCandidatesFor(tab, QStringLiteral(".png"));
 }
 
 ArtCandidates ArtworkPanel::manualCandidates(const Tab &tab) const
 {
-	ArtCandidates candidates;
-	QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
-	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-
-	if (m_mode == Mode::Software && !slBase.isEmpty() && !m_swList.isEmpty() && !m_swName.isEmpty())
-	{
-		candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swName + QStringLiteral(".pdf") });
-		if (!m_swParent.isEmpty())
-			candidates.append({ slBase, m_swList + QLatin1Char('/') + m_swParent + QStringLiteral(".pdf") });
-	}
-	if (!base.isEmpty() && !m_system.isEmpty())
-	{
-		candidates.append({ base, m_system + QStringLiteral(".pdf") });
-		std::string const parent = qtui_parent_of(m_system.toStdString());
-		if (!parent.empty())
-			candidates.append({ base, QString::fromStdString(parent) + QStringLiteral(".pdf") });
-	}
-	addSecondaryCandidates(candidates,
-			m_mode == Mode::Software ? tab.swKey : tab.sysKey, QStringLiteral(".pdf"));
-	return candidates;
+	return artCandidatesFor(tab, QStringLiteral(".pdf"));
 }
 
 QString ArtworkPanel::videoPathFor(const Tab &tab) const
 {
-	QString const base = tab.sysKey.isEmpty() ? QString() : frontendFolderPath(tab.sysKey);
-	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-
 	QString path;
 	auto trySoftware = [&] (const QString &dir) {
-		if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+		if (path.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
 		{
 			path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swName);
 			if (path.isEmpty() && !m_swParent.isEmpty())
 				path = resolveVideo(dir, m_swList + QLatin1Char('/') + m_swParent);
 		}
 	};
-	trySoftware(slBase);
-	if (path.isEmpty() && !base.isEmpty() && !m_system.isEmpty())
+	for (const QString &dir : artSearchPaths(tab.swKey))
+		trySoftware(dir);
+	if (!m_system.isEmpty())
 	{
-		path = resolveVideo(base, m_system);
-		if (path.isEmpty())
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		for (const QString &dir : artSearchPaths(tab.sysKey))
 		{
-			std::string const parent = qtui_parent_of(m_system.toStdString());
-			if (!parent.empty())
-				path = resolveVideo(base, QString::fromStdString(parent));
+			if (path.isEmpty())
+				path = resolveVideo(dir, m_system);
+			if (path.isEmpty() && !parent.empty())
+				path = resolveVideo(dir, QString::fromStdString(parent));
 		}
 	}
-	if (!tab.swKey.isEmpty())   // secondary media root(s) last
-		for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
-			trySoftware(root + QLatin1Char('/') + tab.swKey);
 	return path;
 }
 
 QString ArtworkPanel::musicPathFor(const Tab &tab) const
 {
-	QString const slBase = tab.swKey.isEmpty() ? QString() : frontendFolderPath(tab.swKey);
-
 	QString path;
 	auto trySoftware = [&] (const QString &dir) {
-		if (path.isEmpty() && !dir.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
+		if (path.isEmpty() && m_mode == Mode::Software && !m_swList.isEmpty() && !m_swName.isEmpty())
 		{
 			path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swName);
 			if (path.isEmpty() && !m_swParent.isEmpty())
 				path = resolveAudio(dir, m_swList + QLatin1Char('/') + m_swParent);
 		}
 	};
-	trySoftware(slBase);
-	if (!tab.swKey.isEmpty())
-		for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
-			trySoftware(root + QLatin1Char('/') + tab.swKey);
+	for (const QString &dir : artSearchPaths(tab.swKey))
+		trySoftware(dir);
+	if (!m_system.isEmpty())
+	{
+		std::string const parent = qtui_parent_of(m_system.toStdString());
+		for (const QString &dir : artSearchPaths(tab.sysKey))
+		{
+			if (path.isEmpty())
+				path = resolveAudio(dir, m_system);
+			if (path.isEmpty() && !parent.empty())
+				path = resolveAudio(dir, QString::fromStdString(parent));
+		}
+	}
 	return path;
 }
 
 QStringList ArtworkPanel::soundtrackTracks() const
 {
-	QString const base = frontendFolderPath(QStringLiteral("soundtrack"));
-	if (base.isEmpty())
+	if (m_system.isEmpty())
 		return QStringList();
-	QStringList tracks = listTracks(base, m_system);
-	if (tracks.isEmpty() && !m_system.isEmpty())
+	std::string const parent = qtui_parent_of(m_system.toStdString());
+	for (const QString &base : artSearchPaths(QStringLiteral("soundtrack")))
 	{
-		std::string const parent = qtui_parent_of(m_system.toStdString());
-		if (!parent.empty())
+		QStringList tracks = listTracks(base, m_system);
+		if (tracks.isEmpty() && !parent.empty())
 			tracks = listTracks(base, QString::fromStdString(parent));
+		if (!tracks.isEmpty())
+			return tracks;
 	}
-	return tracks;
+	return QStringList();
 }
 
 // Would this tab show anything for the current selection?  Used to hide empty
@@ -802,7 +755,7 @@ void ArtworkPanel::loadTab(int index)
 	// Soundtrack tab: list the audio files in the machine's folder.
 	if (tab.kind == KindSoundtrack)
 	{
-		if (frontendFolderPath(QStringLiteral("soundtrack")).isEmpty())
+		if (artSearchPaths(QStringLiteral("soundtrack")).isEmpty())
 			m_soundtrackTab->setTracks(QStringList(), tr("Soundtrack folder not configured."));
 		else
 			m_soundtrackTab->setTracks(soundtrackTracks(), tr("No soundtrack for this item."));
