@@ -2470,59 +2470,21 @@ int qtui_map_option_type(core_options::option_type type)
 	}
 }
 
+// Defined further down (shared with the per-game reader).
+std::vector<qtui_option_group> groups_from_options(const emu_options &options);
+
 } // anonymous namespace
 
 
 std::vector<qtui_option_group> qtui_read_options()
 {
-	std::vector<qtui_option_group> groups;
-
 	core_guard guard;
 
 	qt_options options;
 	std::ostringstream errors;
 	mame_options::parse_standard_inis(options, errors);
 
-	qtui_option_group *current = nullptr;
-	for (const auto &entry : options.entries())
-	{
-		if (entry->type() == core_options::option_type::HEADER)
-		{
-			groups.emplace_back();
-			current = &groups.back();
-			current->header = entry->description() ? entry->description() : "";
-			continue;
-		}
-
-		int const mapped = qtui_map_option_type(entry->type());
-		if (mapped < 0 || entry->names().empty())
-			continue;
-
-		// Skip internal/positional entries like "<UNADORNED0>" (the system and
-		// software names) which are not real ini settings.
-		if (!entry->name().empty() && entry->name().front() == '<')
-			continue;
-
-		// Options before the first header land in an unnamed leading group.
-		if (!current)
-		{
-			groups.emplace_back();
-			current = &groups.back();
-		}
-
-		qtui_option opt;
-		opt.name = entry->name();
-		opt.description = entry->description() ? entry->description() : "";
-		opt.value = entry->value() ? entry->value() : "";
-		// Note: entry::default_value() abort()s on entries that don't support
-		// it, so it is intentionally not read here.
-		opt.minimum = entry->minimum() ? entry->minimum() : "";
-		opt.maximum = entry->maximum() ? entry->maximum() : "";
-		opt.type = mapped;
-		current->options.push_back(std::move(opt));
-	}
-
-	return groups;
+	return groups_from_options(options);
 }
 
 
@@ -2620,7 +2582,7 @@ namespace {
 
 // Turn a parsed core_options into the grouped, GUI-friendly representation
 // shared by the global and per-game option readers.
-std::vector<qtui_option_group> groups_from_options(const core_options &options)
+std::vector<qtui_option_group> groups_from_options(const emu_options &options)
 {
 	std::vector<qtui_option_group> groups;
 	qtui_option_group *current = nullptr;
@@ -2653,6 +2615,12 @@ std::vector<qtui_option_group> groups_from_options(const core_options &options)
 		opt.minimum = entry->minimum() ? entry->minimum() : "";
 		opt.maximum = entry->maximum() ? entry->maximum() : "";
 		opt.type = mapped;
+		// entry::default_value() abort()s on the dynamically-added slot and
+		// image entries (they have no fixed default); every other entry is a
+		// plain simple_entry whose default is safe to read.
+		opt.has_default = !options.has_slot_option(opt.name) && !options.has_image_option(opt.name);
+		if (opt.has_default)
+			opt.default_value = entry->default_value();
 		current->options.push_back(std::move(opt));
 	}
 	return groups;

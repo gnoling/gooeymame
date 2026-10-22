@@ -2,7 +2,7 @@
 // copyright-holders:MAMEdev Team
 //============================================================
 //
-//  optionsdialog.cpp - editor for mame.ini options and front-end folders
+//  optionsdialog.cpp - editor for mame.ini options and front-end settings
 //
 //============================================================
 
@@ -14,16 +14,18 @@
 #include "gamelistmodel.h"
 #include "regions.h"
 
-#include <QtCore/QEvent>
+#include <QtCore/QAbstractItemModel>
+#include <QtCore/QHash>
 #include <QtCore/QSettings>
 #include <QtGui/QDoubleValidator>
 #include <QtGui/QFont>
 #include <QtGui/QIntValidator>
+#include <QtGui/QPalette>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
-#include <QtWidgets/QDoubleSpinBox>
-#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QFrame>
@@ -35,10 +37,14 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTabWidget>
+#include <QtWidgets/QToolButton>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+
+#include <cmath>
 
 
 namespace osd::qtui {
@@ -52,6 +58,16 @@ QString titleCase(const QString &text)
 	for (QString &word : words)
 		word = word.left(1).toUpper() + word.mid(1).toLower();
 	return words.join(QLatin1Char(' '));
+}
+
+// MAME option descriptions are lower-case fragments ("path to ROM sets");
+// capitalise the first letter so they read as a sentence next to a control.
+QString sentence(const QString &text)
+{
+	QString out = text.trimmed();
+	if (!out.isEmpty())
+		out[0] = out[0].toUpper();
+	return out;
 }
 
 // Curated mapping of mame.ini headers (with " OPTIONS" stripped) into a
@@ -194,7 +210,37 @@ QStringList choicesFor(const QString &name)
 	return {};
 }
 
+// Append an in-place-editable entry to a search-path list.
+QListWidgetItem *addPathItem(QListWidget *list, const QString &path)
+{
+	QListWidgetItem *item = new QListWidgetItem(path, list);
+	item->setFlags(item->flags() | Qt::ItemIsEditable);
+	return item;
+}
+
+// Move the current item of an ordered list up or down.
+void moveCurrentItem(QListWidget *list, int delta)
+{
+	int const from = list->currentRow();
+	int const to = from + delta;
+	if (from < 0 || to < 0 || to >= list->count())
+		return;
+	QListWidgetItem *item = list->takeItem(from);
+	list->insertItem(to, item);
+	list->setCurrentItem(item);
+}
+
+// Settings keys for the remembered dialog geometry and last page.
+constexpr char kGeometryKey[] = "options/geometry";
+constexpr char kPageGlobalKey[] = "options/pageGlobal";
+constexpr char kPageMachineKey[] = "options/pageMachine";
+
 } // anonymous namespace
+
+
+//-------------------------------------------------
+//  construction / chrome
+//-------------------------------------------------
 
 OptionsDialog::OptionsDialog(QWidget *parent) :
 	QDialog(parent)
@@ -219,57 +265,372 @@ void OptionsDialog::buildUi()
 		setWindowTitle(tr("Properties: %1").arg(m_system));
 	else
 		setWindowTitle(tr("Properties: %1 (%2)").arg(m_systemDescription, m_system));
-	resize(820, 620);
+	resize(980, 700);
+	setMinimumSize(760, 520);
+
+	// Left column: search box over a sectioned page list.
+	m_search = new QLineEdit(this);
+	m_search->setPlaceholderText(tr("Search settings…"));
+	m_search->setClearButtonEnabled(true);
+	m_search->setToolTip(tr("Filter every page by option name, description or page title."));
+	connect(m_search, &QLineEdit::textChanged, this, &OptionsDialog::applyFilter);
 
 	m_categoryList = new QListWidget(this);
-	m_categoryList->setMaximumWidth(220);
+	m_categoryList->setFixedWidth(210);
+	m_categoryList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	m_stack = new QStackedWidget(this);
-	connect(m_categoryList, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+	connect(m_categoryList, &QListWidget::currentItemChanged, this,
+			[this] (QListWidgetItem *current, QListWidgetItem *) {
+				if (!current)
+					return;
+				QVariant const page = current->data(Qt::UserRole);
+				if (page.isValid())
+					m_stack->setCurrentIndex(page.toInt());
+			});
 
-	buildOptionCategories();
 	if (!gameMode)
 	{
-		buildGameplayCategory();   // global only
-		buildVersionsCategory();   // global only
-		buildGridArtCategory();    // grid thumbnail fallback (global only)
-		buildIconSourcesCategory();// row-icon source priority (global only)
-		buildArtScaleCategory();   // per-art-type image scaling (global only)
-		buildFolderCategory();     // front-end folders are global only
+		addSectionHeader(tr("Front-end"));
+		buildFolderCategory();
+		buildGameplayCategory();
+		buildVersionsCategory();
+		buildGridArtCategory();
+		buildIconSourcesCategory();
+		buildArtScaleCategory();
+		addSectionHeader(tr("Emulator (mame.ini)"));
 	}
-	if (m_categoryList->count() > 0)
-		m_categoryList->setCurrentRow(0);
+	else
+	{
+		addSectionHeader(tr("%1.ini").arg(m_system));
+	}
+	buildOptionCategories();
 
-	// Hover-driven description area.
-	m_description = new QLabel(tr("Hover over an option to see its description."), this);
-	m_description->setWordWrap(true);
-	m_description->setFrameShape(QFrame::StyledPanel);
-	m_description->setMinimumHeight(56);
-	m_description->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-	m_description->setMargin(6);
+	QVBoxLayout *left = new QVBoxLayout;
+	left->setContentsMargins(0, 0, 0, 0);
+	left->addWidget(m_search);
+	left->addWidget(m_categoryList, 1);
+
+	QVBoxLayout *right = new QVBoxLayout;
+	right->setContentsMargins(0, 0, 0, 0);
+	if (gameMode)
+	{
+		QLabel *note = makeMuted(
+				tr("Changes are written to %1.ini and apply only to this machine, layered over "
+				   "the global options.  Bold names are already set in that file.").arg(m_system), this);
+		right->addWidget(note);
+	}
+	right->addWidget(m_stack, 1);
+
+	QHBoxLayout *top = new QHBoxLayout;
+	top->setSpacing(10);
+	top->addLayout(left);
+	top->addLayout(right, 1);
 
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 			QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 	connect(buttons, &QDialogButtonBox::accepted, this, &OptionsDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &OptionsDialog::reject);
 
-	QHBoxLayout *top = new QHBoxLayout;
-	top->addWidget(m_categoryList);
-	top->addWidget(m_stack, 1);
-
 	QVBoxLayout *layout = new QVBoxLayout(this);
 	layout->addLayout(top, 1);
-	layout->addWidget(m_description);
 	layout->addWidget(buttons);
+
+	restoreState();
 }
 
-void OptionsDialog::addCategory(const QString &title, QWidget *page)
+void OptionsDialog::addSectionHeader(const QString &title)
+{
+	QListWidgetItem *item = new QListWidgetItem(title.toUpper(), m_categoryList);
+	item->setFlags(Qt::NoItemFlags);
+	QFont font = item->font();
+	font.setBold(true);
+	font.setPointSizeF(font.pointSizeF() * 0.85);
+	item->setFont(font);
+	// Breathing room above every header but the first.
+	int const extra = (m_categoryList->count() > 1) ? 10 : 2;
+	item->setSizeHint(QSize(0, m_categoryList->fontMetrics().height() + 6 + extra));
+	item->setTextAlignment(Qt::AlignLeft | Qt::AlignBottom);
+}
+
+int OptionsDialog::addCategory(const QString &title, QWidget *page, const QString &keywords)
 {
 	QScrollArea *scroll = new QScrollArea;
 	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
 	scroll->setWidget(page);
-	m_stack->addWidget(scroll);
-	m_categoryList->addItem(title);
+	int const index = m_stack->addWidget(scroll);
+
+	QListWidgetItem *item = new QListWidgetItem(QStringLiteral("   ") + title, m_categoryList);
+	item->setData(Qt::UserRole, index);
+	item->setSizeHint(QSize(0, m_categoryList->fontMetrics().height() + 10));
+
+	m_categories.push_back({ item, index, (title + QLatin1Char(' ') + keywords).toLower(), false });
+	return int(m_categories.size()) - 1;
 }
+
+void OptionsDialog::registerRow(int category, QTabWidget *tabs, int tab, QFormLayout *form, QWidget *field, const QString &text)
+{
+	m_rows.push_back({ category, tabs, tab, form, field, text.toLower() });
+	m_categories[category].hasRows = true;
+}
+
+void OptionsDialog::selectCategory(int stackIndex)
+{
+	for (int i = 0; i < m_categoryList->count(); i++)
+	{
+		QListWidgetItem *item = m_categoryList->item(i);
+		if (item->data(Qt::UserRole).isValid() && item->data(Qt::UserRole).toInt() == stackIndex)
+		{
+			m_categoryList->setCurrentItem(item);
+			return;
+		}
+	}
+}
+
+void OptionsDialog::applyFilter(const QString &text)
+{
+	QString const needle = text.trimmed().toLower();
+	bool const filtering = !needle.isEmpty();
+
+	// Rows first: hide every non-matching form row, remembering which sub-tabs
+	// and pages keep at least one.
+	std::vector<int> visibleRows(m_categories.size(), 0);
+	QHash<QTabWidget *, QSet<int>> visibleTabs;
+	for (const SearchRow &row : m_rows)
+	{
+		bool const show = !filtering || row.text.contains(needle);
+		row.form->setRowVisible(row.field, show);
+		if (row.tabs)
+		{
+			if (!visibleTabs.contains(row.tabs))
+				visibleTabs.insert(row.tabs, {});
+			if (show)
+				visibleTabs[row.tabs].insert(row.tab);
+		}
+		if (show)
+			visibleRows[row.category]++;
+	}
+
+	// Sub-tabs with nothing left are hidden; land on the first one still shown.
+	for (auto it = visibleTabs.constBegin(); it != visibleTabs.constEnd(); ++it)
+	{
+		QTabWidget *tabs = it.key();
+		int first = -1;
+		for (int i = 0; i < tabs->count(); i++)
+		{
+			bool const show = !filtering || it.value().contains(i);
+			tabs->setTabVisible(i, show);
+			if (show && first < 0)
+				first = i;
+		}
+		if (first >= 0 && !tabs->isTabVisible(tabs->currentIndex()))
+			tabs->setCurrentIndex(first);
+	}
+
+	// Pages: hidden when none of their rows match (pages without rows match
+	// on their title/keywords instead).  Keep a visible page selected.
+	int const current = m_stack->currentIndex();
+	int firstVisible = -1;
+	bool currentVisible = false;
+	for (std::size_t i = 0; i < m_categories.size(); i++)
+	{
+		const Category &cat = m_categories[i];
+		bool const show = !filtering
+				|| (cat.hasRows ? (visibleRows[i] > 0) : cat.keywords.contains(needle));
+		cat.item->setHidden(!show);
+		if (show)
+		{
+			if (firstVisible < 0)
+				firstVisible = int(i);
+			if (cat.stackIndex == current)
+				currentVisible = true;
+		}
+	}
+	if (!currentVisible && firstVisible >= 0)
+		selectCategory(m_categories[firstVisible].stackIndex);
+
+	// Section headers follow their pages.
+	for (int i = 0; i < m_categoryList->count(); i++)
+	{
+		QListWidgetItem *header = m_categoryList->item(i);
+		if (header->data(Qt::UserRole).isValid())
+			continue;
+		bool any = false;
+		for (int j = i + 1; j < m_categoryList->count(); j++)
+		{
+			QListWidgetItem *next = m_categoryList->item(j);
+			if (!next->data(Qt::UserRole).isValid())
+				break;
+			if (!next->isHidden())
+			{
+				any = true;
+				break;
+			}
+		}
+		header->setHidden(!any);
+	}
+}
+
+void OptionsDialog::restoreState()
+{
+	QSettings settings;
+	QByteArray const geometry = settings.value(QLatin1String(kGeometryKey)).toByteArray();
+	if (!geometry.isEmpty())
+		restoreGeometry(geometry);
+
+	QString const key = QLatin1String(m_system.isEmpty() ? kPageGlobalKey : kPageMachineKey);
+	QString const wanted = settings.value(key).toString();
+	for (const Category &cat : m_categories)
+	{
+		if (!wanted.isEmpty() && cat.item->text().trimmed() == wanted)
+		{
+			m_categoryList->setCurrentItem(cat.item);
+			return;
+		}
+	}
+	if (!m_categories.empty())
+		m_categoryList->setCurrentItem(m_categories.front().item);
+}
+
+void OptionsDialog::done(int result)
+{
+	QSettings settings;
+	settings.setValue(QLatin1String(kGeometryKey), saveGeometry());
+	if (QListWidgetItem *item = m_categoryList->currentItem())
+		if (item->data(Qt::UserRole).isValid())
+			settings.setValue(QLatin1String(m_system.isEmpty() ? kPageGlobalKey : kPageMachineKey), item->text().trimmed());
+	QDialog::done(result);
+}
+
+
+//-------------------------------------------------
+//  shared building blocks
+//-------------------------------------------------
+
+QLabel *OptionsDialog::makeIntro(const QString &text, QWidget *parent)
+{
+	QLabel *label = new QLabel(text, parent);
+	label->setWordWrap(true);
+	label->setContentsMargins(0, 0, 0, 6);
+	return label;
+}
+
+QLabel *OptionsDialog::makeMuted(const QString &text, QWidget *parent)
+{
+	QLabel *label = new QLabel(text, parent);
+	label->setWordWrap(true);
+	QPalette pal = label->palette();
+	pal.setColor(QPalette::WindowText, pal.color(QPalette::Disabled, QPalette::WindowText));
+	label->setPalette(pal);
+	QFont font = label->font();
+	font.setPointSizeF(font.pointSizeF() * 0.92);
+	label->setFont(font);
+	return label;
+}
+
+QWidget *OptionsDialog::makeOrderedList(QWidget *parent, QListWidget *&list)
+{
+	QWidget *box = new QWidget(parent);
+	QHBoxLayout *h = new QHBoxLayout(box);
+	h->setContentsMargins(0, 0, 0, 0);
+
+	list = new QListWidget(box);
+	list->setToolTip(tr("Top is tried first.  Uncheck an entry to skip it."));
+	h->addWidget(list, 1);
+
+	QVBoxLayout *v = new QVBoxLayout;
+	QPushButton *up = new QPushButton(tr("Up"), box);
+	QPushButton *down = new QPushButton(tr("Down"), box);
+	QListWidget *const target = list;
+	connect(up, &QPushButton::clicked, list, [target] { moveCurrentItem(target, -1); });
+	connect(down, &QPushButton::clicked, list, [target] { moveCurrentItem(target, +1); });
+	v->addWidget(up);
+	v->addWidget(down);
+	v->addStretch(1);
+	h->addLayout(v);
+	return box;
+}
+
+QListWidget *OptionsDialog::makeSearchPathEditor(QWidget *parent, const QStringList &initial, bool allowArchives, QWidget *&container)
+{
+	QWidget *row = new QWidget(parent);
+	QVBoxLayout *col = new QVBoxLayout(row);
+	col->setContentsMargins(0, 0, 0, 0);
+	col->setSpacing(2);
+
+	QListWidget *list = new QListWidget(row);
+	list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+	list->setToolTip(tr("Searched top to bottom.  Double-click an entry to edit it."));
+	for (const QString &path : initial)
+		addPathItem(list, path);
+
+	// Size each list to its contents (two to five rows) so a page full of
+	// mostly-empty search paths stays compact.
+	auto fit = [list] {
+		int const rowHeight = list->fontMetrics().height() + 6;
+		int const rows = qBound(2, list->count(), 5);
+		list->setFixedHeight(rows * rowHeight + 2 * list->frameWidth() + 4);
+	};
+	fit();
+	connect(list->model(), &QAbstractItemModel::rowsInserted, list, fit);
+	connect(list->model(), &QAbstractItemModel::rowsRemoved, list, fit);
+
+	QPushButton *addDir = new QPushButton(tr("Add Folder…"), row);
+	connect(addDir, &QPushButton::clicked, this, [this, list] {
+		QString const dir = QFileDialog::getExistingDirectory(this, tr("Add Folder"));
+		if (!dir.isEmpty() && !searchPathEntries(list).contains(dir))
+			list->setCurrentItem(addPathItem(list, dir));
+	});
+	QPushButton *addZip = nullptr;
+	if (allowArchives)
+	{
+		addZip = new QPushButton(tr("Add Zip…"), row);
+		connect(addZip, &QPushButton::clicked, this, [this, list] {
+			QString const zip = QFileDialog::getOpenFileName(this, tr("Add Zip Archive"), QString(), tr("Zip archives (*.zip *.7z);;All files (*)"));
+			if (!zip.isEmpty() && !searchPathEntries(list).contains(zip))
+				list->setCurrentItem(addPathItem(list, zip));
+		});
+	}
+	QPushButton *remove = new QPushButton(tr("Remove"), row);
+	connect(remove, &QPushButton::clicked, list, [list] {
+		qDeleteAll(list->selectedItems());
+	});
+	QPushButton *up = new QPushButton(tr("Up"), row);
+	QPushButton *down = new QPushButton(tr("Down"), row);
+	connect(up, &QPushButton::clicked, list, [list] { moveCurrentItem(list, -1); });
+	connect(down, &QPushButton::clicked, list, [list] { moveCurrentItem(list, +1); });
+
+	QHBoxLayout *btns = new QHBoxLayout;
+	btns->addWidget(addDir);
+	if (addZip)
+		btns->addWidget(addZip);
+	btns->addWidget(remove);
+	btns->addWidget(up);
+	btns->addWidget(down);
+	btns->addStretch(1);
+	col->addWidget(list);
+	col->addLayout(btns);
+
+	container = row;
+	return list;
+}
+
+QStringList OptionsDialog::searchPathEntries(const QListWidget *list)
+{
+	QStringList out;
+	for (int i = 0; i < list->count(); i++)
+	{
+		QString const text = list->item(i)->text().trimmed();
+		if (!text.isEmpty())
+			out.append(text);
+	}
+	return out;
+}
+
+
+//-------------------------------------------------
+//  mame.ini option pages
+//-------------------------------------------------
 
 void OptionsDialog::buildOptionCategories()
 {
@@ -312,80 +673,61 @@ void OptionsDialog::buildOptionCategories()
 		buckets[index].push_back({ sub, &group });
 	}
 
-	// Build one left-list category per top group, with sub-tabs inside.
+	// Build one page per top group, with sub-tabs inside.
 	for (int t = 0; t < int(topOrder.size()); t++)
 	{
 		QWidget *page = new QWidget;
 		QVBoxLayout *outer = new QVBoxLayout(page);
 		outer->setContentsMargins(0, 0, 0, 0);
-
 		QTabWidget *subtabs = new QTabWidget(page);
+		outer->addWidget(subtabs);
+		int const category = addCategory(topOrder[t], page);
+
 		for (const Sub &sub : buckets[t])
 		{
+			// Form + trailing stretch, so a page (or a filtered-down page) keeps
+			// its rows packed at the top instead of spreading them out.
 			QWidget *subPage = new QWidget;
-			QFormLayout *form = new QFormLayout(subPage);
+			QVBoxLayout *subLayout = new QVBoxLayout(subPage);
+			QFormLayout *form = new QFormLayout;
 			form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-			for (const qtui_option &opt : sub.group->options)
-				addOptionRow(form, opt);
+			form->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
+			form->setVerticalSpacing(10);
+			subLayout->addLayout(form);
+			subLayout->addStretch(1);
 
 			QScrollArea *scroll = new QScrollArea;
 			scroll->setWidgetResizable(true);
+			scroll->setFrameShape(QFrame::NoFrame);
 			scroll->setWidget(subPage);
-			subtabs->addTab(scroll, sub.title);
-		}
-		outer->addWidget(subtabs);
+			int const tab = subtabs->addTab(scroll, sub.title);
 
-		m_stack->addWidget(page);
-		m_categoryList->addItem(topOrder[t]);
+			QString const context = topOrder[t] + QLatin1Char(' ') + sub.title;
+			for (const qtui_option &opt : sub.group->options)
+				addOptionRow(form, opt, category, subtabs, tab, context);
+		}
 	}
 }
 
-void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
+void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt, int category, QTabWidget *tabs, int tab, const QString &context)
 {
 	QString const name = QString::fromStdString(opt.name);
 	QString const value = QString::fromStdString(opt.value);
-	QString const help = QString::fromStdString(opt.description);
-	QWidget *readWidget = nullptr;   // widget queried in accept()
+	QString const help = sentence(QString::fromStdString(opt.description));
+	QString const defaultValue = QString::fromStdString(opt.default_value);
+
+	QWidget *editor = nullptr;      // widget whose value is read back
+	QWidget *control = nullptr;     // widget placed in the row (editor or its container)
 
 	if (opt.type == QTUI_OPT_BOOLEAN)
 	{
-		QCheckBox *check = new QCheckBox;
+		QCheckBox *check = new QCheckBox(help);
 		check->setChecked(value == QLatin1String("1") || value.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0);
-		form->addRow(name, check);
-		readWidget = check;
+		editor = control = check;
 	}
 	else if (opt.type == QTUI_OPT_MULTIPATH)
 	{
-		// List of paths with add/remove.
-		QWidget *row = new QWidget;
-		QVBoxLayout *col = new QVBoxLayout(row);
-		col->setContentsMargins(0, 0, 0, 0);
-
-		QListWidget *list = new QListWidget(row);
-		list->setMaximumHeight(96);
-		for (const QString &p : value.split(QLatin1Char(';'), Qt::SkipEmptyParts))
-			list->addItem(p);
-
-		QPushButton *add = new QPushButton(tr("Add…"), row);
-		QPushButton *remove = new QPushButton(tr("Remove"), row);
-		connect(add, &QPushButton::clicked, this, [this, list] {
-			QString const dir = QFileDialog::getExistingDirectory(this, tr("Add Folder"));
-			if (!dir.isEmpty())
-				list->addItem(dir);
-		});
-		connect(remove, &QPushButton::clicked, list, [list] {
-			qDeleteAll(list->selectedItems());
-		});
-
-		QHBoxLayout *btns = new QHBoxLayout;
-		btns->addWidget(add);
-		btns->addWidget(remove);
-		btns->addStretch(1);
-		col->addWidget(list);
-		col->addLayout(btns);
-
-		form->addRow(name, row);
-		readWidget = list;
+		editor = makeSearchPathEditor(nullptr, value.split(QLatin1Char(';'), Qt::SkipEmptyParts), false, control);
 	}
 	else if (opt.type == QTUI_OPT_PATH)
 	{
@@ -401,8 +743,8 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 		});
 		h->addWidget(edit, 1);
 		h->addWidget(browse);
-		form->addRow(name, row);
-		readWidget = edit;
+		editor = edit;
+		control = row;
 	}
 	else if (opt.type == QTUI_OPT_INTEGER)
 	{
@@ -414,15 +756,13 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 			QSpinBox *spin = new QSpinBox;
 			spin->setRange(lo, hi);
 			spin->setValue(value.toInt());
-			form->addRow(name, spin);
-			readWidget = spin;
+			editor = control = spin;
 		}
 		else
 		{
 			QLineEdit *edit = new QLineEdit(value);
 			edit->setValidator(new QIntValidator(edit));
-			form->addRow(name, edit);
-			readWidget = edit;
+			editor = control = edit;
 		}
 	}
 	else if (opt.type == QTUI_OPT_FLOAT)
@@ -435,16 +775,15 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 			QDoubleSpinBox *spin = new QDoubleSpinBox;
 			spin->setDecimals(3);
 			spin->setRange(lo, hi);
+			spin->setSingleStep((hi - lo) >= 10.0 ? 1.0 : 0.05);
 			spin->setValue(value.toDouble());
-			form->addRow(name, spin);
-			readWidget = spin;
+			editor = control = spin;
 		}
 		else
 		{
 			QLineEdit *edit = new QLineEdit(value);
 			edit->setValidator(new QDoubleValidator(edit));
-			form->addRow(name, edit);
-			readWidget = edit;
+			editor = control = edit;
 		}
 	}
 	else
@@ -458,80 +797,189 @@ void OptionsDialog::addOptionRow(QFormLayout *form, const qtui_option &opt)
 			if (combo->findText(value) < 0 && !value.isEmpty())
 				combo->addItem(value);
 			combo->setCurrentText(value);
-			form->addRow(name, combo);
-			readWidget = combo;
+			editor = control = combo;
 		}
 		else
 		{
-			QLineEdit *edit = new QLineEdit(value);
-			form->addRow(name, edit);
-			readWidget = edit;
+			editor = control = new QLineEdit(value);
 		}
 	}
 
-	bool const overridden = m_overridden.contains(name);
-
-	// Hover help: watch the editor (and show on mouse-enter).
-	if (readWidget)
+	// Reset-to-default, visible only while the value differs from MAME's default.
+	QToolButton *reset = nullptr;
+	if (opt.has_default)
 	{
-		readWidget->setToolTip(help);
-		QString helpText = help.isEmpty() ? name : QStringLiteral("%1 — %2").arg(name, help);
-		if (overridden)
-			helpText = tr("[set for this machine] ") + helpText;
-		m_help.insert(readWidget, helpText);
-		readWidget->installEventFilter(this);
-
-		// Bold the label of an overridden option where the form created one.
-		if (overridden)
-		{
-			if (auto *label = qobject_cast<QLabel *>(form->labelForField(readWidget)))
-			{
-				QFont font = label->font();
-				font.setBold(true);
-				label->setFont(font);
-			}
-		}
+		reset = new QToolButton;
+		reset->setAutoRaise(true);
+		reset->setText(tr("Reset"));
+		reset->setToolTip(tr("Reset to MAME's default: %1").arg(defaultValue.isEmpty() ? tr("(empty)") : defaultValue));
 	}
 
-	m_editors.push_back({ name, opt.type, readWidget, value });
+	// Field cell: the control (+ reset) with the description underneath, so a
+	// page reads without hovering.  Booleans carry the description as their
+	// checkbox text instead.
+	QWidget *field = new QWidget;
+	QVBoxLayout *col = new QVBoxLayout(field);
+	col->setContentsMargins(0, 0, 0, 0);
+	col->setSpacing(2);
+	QHBoxLayout *line = new QHBoxLayout;
+	line->setContentsMargins(0, 0, 0, 0);
+	line->addWidget(control, 1);
+	if (reset)
+		line->addWidget(reset, 0, Qt::AlignTop);
+	col->addLayout(line);
+	if (opt.type != QTUI_OPT_BOOLEAN && !help.isEmpty())
+		col->addWidget(makeMuted(help, field));
+
+	QLabel *label = new QLabel(name);
+	bool const overridden = m_overridden.contains(name);
+	if (overridden)
+	{
+		QFont font = label->font();
+		font.setBold(true);
+		label->setFont(font);
+		label->setToolTip(tr("Set in %1.ini").arg(m_system));
+	}
+	if (editor)
+		editor->setToolTip(help);
+	form->addRow(label, field);
+
+	int const index = int(m_editors.size());
+	m_editors.push_back({ name, opt.type, editor, value, defaultValue, opt.has_default, reset });
+
+	if (reset)
+	{
+		connect(reset, &QToolButton::clicked, this, [this, index] {
+			setEditorValue(m_editors[index], m_editors[index].defaultValue);
+			refreshReset(index);
+		});
+		auto track = [this, index] { refreshReset(index); };
+		if (auto *check = qobject_cast<QCheckBox *>(editor))
+			connect(check, &QCheckBox::toggled, this, track);
+		else if (auto *combo = qobject_cast<QComboBox *>(editor))
+			connect(combo, &QComboBox::currentTextChanged, this, track);
+		else if (auto *spin = qobject_cast<QSpinBox *>(editor))
+			connect(spin, &QSpinBox::valueChanged, this, track);
+		else if (auto *dspin = qobject_cast<QDoubleSpinBox *>(editor))
+			connect(dspin, &QDoubleSpinBox::valueChanged, this, track);
+		else if (auto *list = qobject_cast<QListWidget *>(editor))
+		{
+			connect(list->model(), &QAbstractItemModel::rowsInserted, this, track);
+			connect(list->model(), &QAbstractItemModel::rowsRemoved, this, track);
+			connect(list->model(), &QAbstractItemModel::rowsMoved, this, track);
+			connect(list, &QListWidget::itemChanged, this, track);
+		}
+		else if (auto *edit = qobject_cast<QLineEdit *>(editor))
+			connect(edit, &QLineEdit::textChanged, this, track);
+		refreshReset(index);
+	}
+
+	registerRow(category, tabs, tab, form, field, name + QLatin1Char(' ') + help + QLatin1Char(' ') + context);
 }
+
+QString OptionsDialog::editorValue(const Editor &editor) const
+{
+	QWidget *w = editor.widget;
+	if (auto *check = qobject_cast<QCheckBox *>(w))
+		return check->isChecked() ? QStringLiteral("1") : QStringLiteral("0");
+	if (auto *combo = qobject_cast<QComboBox *>(w))
+		return combo->currentText();
+	if (auto *spin = qobject_cast<QSpinBox *>(w))
+		return QString::number(spin->value());
+	if (auto *dspin = qobject_cast<QDoubleSpinBox *>(w))
+		return QString::number(dspin->value());
+	if (auto *list = qobject_cast<QListWidget *>(w))
+		return searchPathEntries(list).join(QLatin1Char(';'));
+	if (auto *edit = qobject_cast<QLineEdit *>(w))
+		return edit->text();
+	return editor.original;
+}
+
+void OptionsDialog::setEditorValue(const Editor &editor, const QString &value)
+{
+	QWidget *w = editor.widget;
+	if (auto *check = qobject_cast<QCheckBox *>(w))
+		check->setChecked(value == QLatin1String("1") || value.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0);
+	else if (auto *combo = qobject_cast<QComboBox *>(w))
+		combo->setCurrentText(value);
+	else if (auto *spin = qobject_cast<QSpinBox *>(w))
+		spin->setValue(value.toInt());
+	else if (auto *dspin = qobject_cast<QDoubleSpinBox *>(w))
+		dspin->setValue(value.toDouble());
+	else if (auto *list = qobject_cast<QListWidget *>(w))
+	{
+		list->clear();
+		for (const QString &part : value.split(QLatin1Char(';'), Qt::SkipEmptyParts))
+			addPathItem(list, part);
+	}
+	else if (auto *edit = qobject_cast<QLineEdit *>(w))
+		edit->setText(value);
+}
+
+bool OptionsDialog::valueEquals(const Editor &editor, const QString &a, const QString &b) const
+{
+	switch (editor.type)
+	{
+	case QTUI_OPT_BOOLEAN:
+	{
+		auto truth = [] (const QString &s) { return s == QLatin1String("1") || s.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0; };
+		return truth(a) == truth(b);
+	}
+	case QTUI_OPT_INTEGER:
+		return a.toInt() == b.toInt();
+	case QTUI_OPT_FLOAT:
+		return std::fabs(a.toDouble() - b.toDouble()) < 1e-6;
+	default:
+		return a.trimmed() == b.trimmed();
+	}
+}
+
+void OptionsDialog::refreshReset(int index)
+{
+	const Editor &editor = m_editors[index];
+	if (editor.reset)
+		editor.reset->setVisible(editor.hasDefault && !valueEquals(editor, editorValue(editor), editor.defaultValue));
+}
+
+
+//-------------------------------------------------
+//  front-end pages
+//-------------------------------------------------
 
 void OptionsDialog::buildGameplayCategory()
 {
 	QWidget *page = new QWidget;
 	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
-			tr("No Nag — skip MAME's startup screens so games boot straight in.  "
-			   "Each screen can be skipped independently; these are global "
-			   "front-end settings."), page);
-	intro->setWordWrap(true);
-	layout->addWidget(intro);
+	layout->addWidget(makeIntro(
+			tr("Skip MAME's startup screens so games boot straight in.  Each screen "
+			   "can be skipped independently; these apply to every launch."), page));
 
 	// Fall back to the previous single "play/noNag" value so an existing
 	// preference carries over to all three when the split keys aren't set yet.
 	bool const old = QSettings().value(QStringLiteral("play/noNag"), false).toBool();
 
-	m_noNagInfo = new QCheckBox(tr("Skip the system-information screen"), page);
+	QGroupBox *box = new QGroupBox(tr("Startup screens to skip"), page);
+	QVBoxLayout *v = new QVBoxLayout(box);
+
+	m_noNagInfo = new QCheckBox(tr("System-information screen"), box);
 	m_noNagInfo->setChecked(QSettings().value(QStringLiteral("play/noNagInfo"), old).toBool());
-	m_noNagInfo->setToolTip(tr("The blue screen listing the system name, manufacturer and "
-							   "emulation status shown before a game starts."));
-	layout->addWidget(m_noNagInfo);
+	v->addWidget(m_noNagInfo);
+	v->addWidget(makeMuted(tr("The blue screen listing the system name, manufacturer and emulation status."), box));
 
-	m_noNagWarnings = new QCheckBox(tr("Skip the warning screen"), page);
+	m_noNagWarnings = new QCheckBox(tr("Warning screen"), box);
 	m_noNagWarnings->setChecked(QSettings().value(QStringLiteral("play/noNagWarnings"), old).toBool());
-	m_noNagWarnings->setToolTip(tr("The red/yellow screen warning about imperfect or "
-								   "non-working emulation."));
-	layout->addWidget(m_noNagWarnings);
+	v->addWidget(m_noNagWarnings);
+	v->addWidget(makeMuted(tr("The red/yellow screen warning about imperfect or non-working emulation."), box));
 
-	m_noNagLoading = new QCheckBox(tr("Skip the loading / initialising messages"), page);
+	m_noNagLoading = new QCheckBox(tr("Loading / initialising messages"), box);
 	m_noNagLoading->setChecked(QSettings().value(QStringLiteral("play/noNagLoading"), old).toBool());
-	m_noNagLoading->setToolTip(tr("The \"Initializing / Loading / Decrypting\" messages shown "
-								  "while the machine starts up."));
-	layout->addWidget(m_noNagLoading);
+	v->addWidget(m_noNagLoading);
+	v->addWidget(makeMuted(tr("The \"Initializing / Loading / Decrypting\" messages shown while the machine starts."), box));
 
+	layout->addWidget(box);
 	layout->addStretch(1);
-	addCategory(tr("Gameplay"), page);
+	addCategory(tr("Gameplay"), page, tr("no nag skip startup screens information warning loading launch"));
 }
 
 void OptionsDialog::buildVersionsCategory()
@@ -539,45 +987,26 @@ void OptionsDialog::buildVersionsCategory()
 	QWidget *page = new QWidget;
 	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
+	layout->addWidget(makeIntro(
 			tr("How the front-end picks the primary version of a game that has "
 			   "clones (regional/revision variants).  Affects the top item, its "
-			   "artwork, and what launching a group runs."), page);
-	intro->setWordWrap(true);
-	layout->addWidget(intro);
+			   "artwork, and what launching a group runs."), page));
 
 	QFormLayout *form = new QFormLayout;
 	m_versionMode = new QComboBox(page);
 	m_versionMode->addItem(tr("Match MAME (use the parent set)"), GameListModel::MatchParent);
 	m_versionMode->addItem(tr("Promote my preferred region"), GameListModel::PromoteRegion);
-	form->addRow(tr("Default version:"), m_versionMode);
+	form->addRow(tr("Default version"), m_versionMode);
 
 	m_useSystemRegion = new QCheckBox(tr("Use my system region automatically"), page);
 	form->addRow(QString(), m_useSystemRegion);
 	layout->addLayout(form);
 
-	layout->addWidget(new QLabel(tr("Region priority (top = preferred; uncheck to ignore):"), page));
-	m_regionList = new QListWidget(page);
-	layout->addWidget(m_regionList, 1);
-
-	QHBoxLayout *buttons = new QHBoxLayout;
-	QPushButton *up = new QPushButton(tr("Move Up"), page);
-	QPushButton *down = new QPushButton(tr("Move Down"), page);
-	auto move = [this] (int delta) {
-		int const row = m_regionList->currentRow();
-		int const target = row + delta;
-		if (row < 0 || target < 0 || target >= m_regionList->count())
-			return;
-		QListWidgetItem *item = m_regionList->takeItem(row);
-		m_regionList->insertItem(target, item);
-		m_regionList->setCurrentRow(target);
-	};
-	connect(up, &QPushButton::clicked, this, [move] { move(-1); });
-	connect(down, &QPushButton::clicked, this, [move] { move(1); });
-	buttons->addWidget(up);
-	buttons->addWidget(down);
-	buttons->addStretch();
-	layout->addLayout(buttons);
+	QGroupBox *box = new QGroupBox(tr("Region priority"), page);
+	QVBoxLayout *v = new QVBoxLayout(box);
+	v->addWidget(makeMuted(tr("Top is preferred.  Uncheck a region to ignore it."), box));
+	v->addWidget(makeOrderedList(box, m_regionList), 1);
+	layout->addWidget(box, 1);
 
 	// Load current settings.
 	QSettings settings;
@@ -609,7 +1038,7 @@ void OptionsDialog::buildVersionsCategory()
 		item->setCheckState(checked.contains(region) ? Qt::Checked : Qt::Unchecked);
 	}
 
-	addCategory(tr("Versions & Regions"), page);
+	addCategory(tr("Versions & Regions"), page, tr("clone parent region version revision world usa japan europe"));
 }
 
 void OptionsDialog::buildGridArtCategory()
@@ -617,38 +1046,19 @@ void OptionsDialog::buildGridArtCategory()
 	QWidget *page = new QWidget;
 	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
+	layout->addWidget(makeIntro(
 			tr("When a grid tile has no image for the selected type, fall back to "
-			   "these art types in order (top = tried first).  Uncheck a type to "
-			   "skip it."), page);
-	intro->setWordWrap(true);
-	layout->addWidget(intro);
+			   "these art types in order."), page));
 
 	m_gridArtFamily = new QCheckBox(
 			tr("Also use images from related sets (clone parent / other regions)"), page);
 	layout->addWidget(m_gridArtFamily);
 
-	m_gridArtList = new QListWidget(page);
-	layout->addWidget(m_gridArtList, 1);
-
-	QHBoxLayout *buttons = new QHBoxLayout;
-	QPushButton *up = new QPushButton(tr("Move Up"), page);
-	QPushButton *down = new QPushButton(tr("Move Down"), page);
-	auto move = [this] (int delta) {
-		int const row = m_gridArtList->currentRow();
-		int const target = row + delta;
-		if (row < 0 || target < 0 || target >= m_gridArtList->count())
-			return;
-		QListWidgetItem *item = m_gridArtList->takeItem(row);
-		m_gridArtList->insertItem(target, item);
-		m_gridArtList->setCurrentRow(target);
-	};
-	connect(up, &QPushButton::clicked, this, [move] { move(-1); });
-	connect(down, &QPushButton::clicked, this, [move] { move(1); });
-	buttons->addWidget(up);
-	buttons->addWidget(down);
-	buttons->addStretch();
-	layout->addLayout(buttons);
+	QGroupBox *box = new QGroupBox(tr("Fallback order"), page);
+	QVBoxLayout *v = new QVBoxLayout(box);
+	v->addWidget(makeMuted(tr("Top is tried first.  Uncheck a type to skip it."), box));
+	v->addWidget(makeOrderedList(box, m_gridArtList), 1);
+	layout->addWidget(box, 1);
 
 	// Load settings: the saved order is the checked subset; append the rest.
 	QSettings settings;
@@ -681,7 +1091,7 @@ void OptionsDialog::buildGridArtCategory()
 		item->setCheckState(checked.contains(label) ? Qt::Checked : Qt::Unchecked);
 	}
 
-	addCategory(tr("Grid Artwork"), page);
+	addCategory(tr("Grid Artwork"), page, tr("grid tiles thumbnail fallback snapshot title flyer cover"));
 }
 
 void OptionsDialog::buildIconSourcesCategory()
@@ -689,16 +1099,13 @@ void OptionsDialog::buildIconSourcesCategory()
 	QWidget *page = new QWidget;
 	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
+	layout->addWidget(makeIntro(
 			tr("Which artwork the small row icons use, as an independent priority "
-			   "list per list (top = tried first; uncheck to skip).  \"Icon\" is the "
-			   "icons.zip set; the rest are art folders."), page);
-	intro->setWordWrap(true);
-	layout->addWidget(intro);
+			   "list per list.  \"Icon\" is the icons.zip set; the rest are art folders."), page));
 
 	// Build one reorderable, checkable icon-source section into `box`, wiring the
 	// list + the two toggles.  `preferLabel` differs (parent vs host machine).
-	auto buildSection = [this, page] (QGroupBox *box, const QString &orderKey,
+	auto buildSection = [this] (QGroupBox *box, const QString &orderKey,
 			const QString &preferKey, const QString &familyKey, const QString &preferLabel,
 			QListWidget *&listOut, QCheckBox *&preferOut, QCheckBox *&familyOut) {
 		QVBoxLayout *v = new QVBoxLayout(box);
@@ -707,28 +1114,8 @@ void OptionsDialog::buildIconSourcesCategory()
 		familyOut = new QCheckBox(tr("Also try region/family variants"), box);
 		v->addWidget(preferOut);
 		v->addWidget(familyOut);
-
-		listOut = new QListWidget(box);
-		v->addWidget(listOut, 1);
-
-		QHBoxLayout *buttons = new QHBoxLayout;
-		QPushButton *up = new QPushButton(tr("Move Up"), box);
-		QPushButton *down = new QPushButton(tr("Move Down"), box);
+		v->addWidget(makeOrderedList(box, listOut), 1);
 		QListWidget *const list = listOut;
-		auto move = [list] (int delta) {
-			int const row = list->currentRow();
-			int const target = row + delta;
-			if (row < 0 || target < 0 || target >= list->count())
-				return;
-			list->insertItem(target, list->takeItem(row));
-			list->setCurrentRow(target);
-		};
-		connect(up, &QPushButton::clicked, box, [move] { move(-1); });
-		connect(down, &QPushButton::clicked, box, [move] { move(1); });
-		buttons->addWidget(up);
-		buttons->addWidget(down);
-		buttons->addStretch();
-		v->addLayout(buttons);
 
 		// Load: saved order is the checked ids; default = just "icon" checked.
 		QSettings settings;
@@ -750,7 +1137,6 @@ void OptionsDialog::buildIconSourcesCategory()
 		}
 		for (const QString &id : ordered)
 		{
-			// Resolve the label for this id.
 			QString label = id;
 			for (std::size_t i = 0; i < ICON_SOURCE_COUNT; ++i)
 				if (id == QLatin1String(ICON_SOURCES[i].id))
@@ -776,7 +1162,7 @@ void OptionsDialog::buildIconSourcesCategory()
 			m_iconSoftwareList, m_iconSoftwarePrefer, m_iconSoftwareFamily);
 	layout->addWidget(softwareBox, 1);
 
-	addCategory(tr("Row Icons"), page);
+	addCategory(tr("Row Icons"), page, tr("icons list rows artwork priority machine software"));
 }
 
 void OptionsDialog::buildArtScaleCategory()
@@ -784,120 +1170,229 @@ void OptionsDialog::buildArtScaleCategory()
 	QWidget *page = new QWidget;
 	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
+	layout->addWidget(makeIntro(
 			tr("How each art-view image is resampled when scaled larger than its "
 			   "source.  Smooth blurs; nearest neighbour keeps crisp pixels.  Can "
-			   "also be changed by right-clicking an image in the art view."), page);
-	intro->setWordWrap(true);
-	layout->addWidget(intro);
+			   "also be changed by right-clicking an image in the art view."), page));
 
-	QWidget *form = new QWidget;
-	QFormLayout *formLayout = new QFormLayout(form);
+	QFormLayout *form = new QFormLayout;
+	form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	layout->addLayout(form);
+	layout->addStretch(1);
+	int const category = addCategory(tr("Art Scaling"), page, tr("scaling smooth nearest pixel integer"));
+
 	for (const auto &type : artScaleTypes())
 	{
-		QComboBox *combo = new QComboBox(form);
+		QComboBox *combo = new QComboBox(page);
 		combo->addItem(tr("Smooth"), int(ArtScaleSmooth));
 		combo->addItem(tr("Nearest neighbour"), int(ArtScaleNearest));
 		int const idx = combo->findData(artScaleMode(type.second));
 		combo->setCurrentIndex(idx >= 0 ? idx : 0);
 
-		QCheckBox *integer = new QCheckBox(tr("Integer"), form);
+		QCheckBox *integer = new QCheckBox(tr("Integer"), page);
 		integer->setToolTip(tr("Scale only by whole-pixel multiples"));
 		integer->setChecked(artScaleInteger(type.second));
 
-		QWidget *row = new QWidget(form);
+		QWidget *row = new QWidget(page);
 		QHBoxLayout *rowLayout = new QHBoxLayout(row);
 		rowLayout->setContentsMargins(0, 0, 0, 0);
 		rowLayout->addWidget(combo, 1);
 		rowLayout->addWidget(integer);
-		formLayout->addRow(type.first, row);
+		form->addRow(type.first, row);
 		m_artScaleEditors.push_back({ type.second, combo, integer });
+		registerRow(category, nullptr, 0, form, row, type.first + QLatin1String(" art scaling"));
 	}
-
-	QScrollArea *scroll = new QScrollArea(page);
-	scroll->setWidgetResizable(true);
-	scroll->setWidget(form);
-	layout->addWidget(scroll, 1);
-
-	addCategory(tr("Art Scaling"), page);
 }
 
 void OptionsDialog::buildFolderCategory()
 {
 	QWidget *page = new QWidget;
-	QFormLayout *form = new QFormLayout(page);
-	form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	QVBoxLayout *layout = new QVBoxLayout(page);
 
-	QLabel *intro = new QLabel(
-			tr("Folders for MAME EXTRAs used by the front-end.  Image sets may "
-			   "be a folder or a .zip; snapshots and artwork are configured on "
-			   "the options tabs."), page);
-	intro->setWordWrap(true);
-	form->addRow(intro);
+	layout->addWidget(makeIntro(
+			tr("MAME EXTRAs used by the front-end.  Art sets are search paths: add "
+			   "any number of folders or .zip archives and they are tried top to "
+			   "bottom, so a second media set (a Multimedia pack, an "
+			   "optimize-sl-media.py or LaunchBox import tree, …) simply goes below "
+			   "the first.  Snapshots and artwork for the emulator itself are "
+			   "configured under Emulator ▸ Paths."), page));
 
-	// Front-end playback behaviour.
+	// Settings that belong to no single tab: one-click setup and playback.
+	QFormLayout *top = new QFormLayout;
+	top->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+	QWidget *fillRow = new QWidget(page);
+	QHBoxLayout *fillH = new QHBoxLayout(fillRow);
+	fillH->setContentsMargins(0, 0, 0, 0);
+	QPushButton *fill = new QPushButton(tr("Auto-fill from a media folder…"), fillRow);
+	fill->setToolTip(tr("Pick the top folder of a MAME EXTRAs download, a Multimedia pack or a "
+						"generated media tree.  Everything inside named after an art type "
+						"(snap.zip, titles/, dats/history.xml, box_sl/, …) is added to the "
+						"matching setting on every tab: search paths gain an entry, single "
+						"folders and files are filled only while still empty.  Repeat for "
+						"each root you have; each one is appended below the previous."));
+	connect(fill, &QPushButton::clicked, this, &OptionsDialog::autoFillFolders);
+	fillH->addWidget(fill);
+	fillH->addWidget(makeMuted(tr("Adds to the lists on every tab; run once per media folder."), fillRow), 1);
+	top->addRow(tr("Quick setup"), fillRow);
+
 	m_videoAutoplay = new QCheckBox(tr("Auto-play videos when a system is selected"), page);
 	m_videoAutoplay->setChecked(QSettings().value(QStringLiteral("artwork/videoAutoplay"), true).toBool());
 	m_videoAutoplay->setToolTip(tr("When off, the video tab loads paused and you press Play yourself."));
-	form->addRow(tr("Video"), m_videoAutoplay);
+	top->addRow(tr("Video"), m_videoAutoplay);
+	layout->addLayout(top);
+
+	// One tab per folder group, each a scrolling form.
+	QTabWidget *tabs = new QTabWidget(page);
+	struct Tab { FolderGroup group; QString title; QFormLayout *form; QWidget *page; int index; };
+	Tab tabPages[] = {
+		{ FolderGroup::MachineArt,  tr("Machine Art"),  nullptr, nullptr, -1 },
+		{ FolderGroup::SoftwareArt, tr("Software Art"), nullptr, nullptr, -1 },
+		{ FolderGroup::DataFiles,   tr("Data Files"),   nullptr, nullptr, -1 },
+	};
+	for (Tab &tab : tabPages)
+	{
+		QWidget *tabPage = new QWidget;
+		QVBoxLayout *tabLayout = new QVBoxLayout(tabPage);
+		tab.form = new QFormLayout;
+		tab.form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+		tab.form->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
+		tabLayout->addLayout(tab.form);
+		tabLayout->addStretch(1);
+		tab.page = tabPage;
+		QScrollArea *scroll = new QScrollArea(tabs);
+		scroll->setWidgetResizable(true);
+		scroll->setFrameShape(QFrame::NoFrame);
+		scroll->setWidget(tabPage);
+		tab.index = tabs->addTab(scroll, tab.title);
+	}
+	layout->addWidget(tabs, 1);
+	int const category = addCategory(tr("Front-end Folders"), page);
 
 	for (std::size_t i = 0; i < FRONTEND_FOLDER_COUNT; i++)
 	{
 		const FrontendFolder &folder = FRONTEND_FOLDERS[i];
 		QString const key = QString::fromLatin1(folder.key);
+		QString const label = QString::fromLatin1(folder.label);
 
-		QWidget *row = new QWidget(page);
-		QHBoxLayout *h = new QHBoxLayout(row);
-		h->setContentsMargins(0, 0, 0, 0);
-		QLineEdit *edit = new QLineEdit(frontendFolderPath(key), row);
-		h->addWidget(edit, 1);
+		const Tab *tab = nullptr;
+		for (const Tab &t : tabPages)
+			if (t.group == folder.group)
+				tab = &t;
+		if (!tab)
+			continue;
+		QFormLayout *form = tab->form;
 
-		if (folder.isFile)
+		// On the Software Art tab the "Software " prefix is implied by the tab.
+		QString rowLabel = label;
+		if (folder.group == FolderGroup::SoftwareArt && rowLabel.startsWith(QLatin1String("Software ")))
 		{
-			QPushButton *file = new QPushButton(tr("File…"), row);
-			connect(file, &QPushButton::clicked, this, [this, edit] {
-				QString const picked = QFileDialog::getOpenFileName(this, tr("Select File"));
-				if (!picked.isEmpty())
-					edit->setText(picked);
-			});
-			h->addWidget(file);
+			rowLabel.remove(0, 9);
+			rowLabel[0] = rowLabel[0].toUpper();
+		}
+
+		QWidget *tabPage = tab->page;
+		QWidget *row = nullptr;
+		if (folder.kind == FolderKind::SearchPath)
+		{
+			QListWidget *list = makeSearchPathEditor(tabPage, frontendFolderPathList(key), true, row);
+			m_folderEditors.push_back({ key, label, list });
 		}
 		else
 		{
-			// Image sets can be a folder or a zip archive.
-			QPushButton *dir = new QPushButton(tr("Folder…"), row);
-			QPushButton *zip = new QPushButton(tr("Zip…"), row);
-			connect(dir, &QPushButton::clicked, this, [this, edit] {
-				QString const picked = QFileDialog::getExistingDirectory(this, tr("Select Folder"));
-				if (!picked.isEmpty())
-					edit->setText(picked);
-			});
-			connect(zip, &QPushButton::clicked, this, [this, edit] {
-				QString const picked = QFileDialog::getOpenFileName(this, tr("Select Zip Archive"), QString(), tr("Zip archives (*.zip *.7z);;All files (*)"));
-				if (!picked.isEmpty())
-					edit->setText(picked);
-			});
-			h->addWidget(dir);
-			h->addWidget(zip);
+			row = new QWidget(tabPage);
+			QHBoxLayout *h = new QHBoxLayout(row);
+			h->setContentsMargins(0, 0, 0, 0);
+			QLineEdit *edit = new QLineEdit(frontendFolderPath(key), row);
+			h->addWidget(edit, 1);
+
+			if (folder.kind == FolderKind::File)
+			{
+				QPushButton *file = new QPushButton(tr("File…"), row);
+				connect(file, &QPushButton::clicked, this, [this, edit] {
+					QString const picked = QFileDialog::getOpenFileName(this, tr("Select File"));
+					if (!picked.isEmpty())
+						edit->setText(picked);
+				});
+				h->addWidget(file);
+			}
+			else
+			{
+				QPushButton *dir = new QPushButton(tr("Folder…"), row);
+				connect(dir, &QPushButton::clicked, this, [this, edit] {
+					QString const picked = QFileDialog::getExistingDirectory(this, tr("Select Folder"));
+					if (!picked.isEmpty())
+						edit->setText(picked);
+				});
+				h->addWidget(dir);
+			}
+			m_folderEditors.push_back({ key, label, edit });
 		}
 
-		form->addRow(QString::fromLatin1(folder.label), row);
-		m_folderEditors.push_back({ key, edit });
+		form->addRow(rowLabel, row);
+		registerRow(category, tabs, tab->index, form, row,
+				label + QLatin1Char(' ') + key + QLatin1Char(' ') + tab->title + QLatin1String(" folders extras art"));
 	}
-
-	addCategory(tr("Front-end Folders"), page);
 }
 
-bool OptionsDialog::eventFilter(QObject *watched, QEvent *event)
+void OptionsDialog::autoFillFolders()
 {
-	if (event->type() == QEvent::Enter)
+	QString const root = QFileDialog::getExistingDirectory(this, tr("Select Media Folder"));
+	if (root.isEmpty())
+		return;
+
+	QHash<QString, QString> const found = discoverFrontendFolders(root);
+	QStringList added, unchanged;
+	for (const FolderEditor &folder : m_folderEditors)
 	{
-		auto it = m_help.constFind(watched);
-		if (it != m_help.constEnd())
-			m_description->setText(it.value());
+		auto const it = found.constFind(folder.key);
+		if (it == found.constEnd())
+			continue;
+		if (auto *list = qobject_cast<QListWidget *>(folder.widget))
+		{
+			if (searchPathEntries(list).contains(it.value()))
+			{
+				unchanged.append(folder.label);
+				continue;
+			}
+			addPathItem(list, it.value());
+			added.append(folder.label);
+		}
+		else if (auto *edit = qobject_cast<QLineEdit *>(folder.widget))
+		{
+			if (edit->text().trimmed().isEmpty())
+			{
+				edit->setText(it.value());
+				added.append(folder.label);
+			}
+			else
+			{
+				unchanged.append(folder.label);
+			}
+		}
 	}
-	return QDialog::eventFilter(watched, event);
+
+	if (added.isEmpty() && unchanged.isEmpty())
+	{
+		QMessageBox::information(this, tr("Auto-fill"),
+				tr("Nothing recognised under\n%1\n\nExpected folders or archives named after an art "
+				   "type (snap, titles, flyers, box_sl, …) or data files such as dats/history.xml.").arg(root));
+		return;
+	}
+
+	QString text = tr("From %1:").arg(root);
+	if (!added.isEmpty())
+		text += tr("\n\nAdded (%1):\n%2").arg(added.size()).arg(added.join(QLatin1String(", ")));
+	if (!unchanged.isEmpty())
+		text += tr("\n\nAlready configured, left as is (%1):\n%2").arg(unchanged.size()).arg(unchanged.join(QLatin1String(", ")));
+	text += tr("\n\nNothing is saved until you press OK.");
+	QMessageBox::information(this, tr("Auto-fill"), text);
 }
+
+
+//-------------------------------------------------
+//  save
+//-------------------------------------------------
 
 void OptionsDialog::accept()
 {
@@ -905,29 +1400,7 @@ void OptionsDialog::accept()
 	std::vector<std::pair<std::string, std::string>> changes;
 	for (const Editor &editor : m_editors)
 	{
-		// Read the value back according to the concrete editor widget.
-		QString current;
-		QWidget *w = editor.widget;
-		if (auto *check = qobject_cast<QCheckBox *>(w))
-			current = check->isChecked() ? QStringLiteral("1") : QStringLiteral("0");
-		else if (auto *combo = qobject_cast<QComboBox *>(w))
-			current = combo->currentText();
-		else if (auto *spin = qobject_cast<QSpinBox *>(w))
-			current = QString::number(spin->value());
-		else if (auto *dspin = qobject_cast<QDoubleSpinBox *>(w))
-			current = QString::number(dspin->value());
-		else if (auto *list = qobject_cast<QListWidget *>(w))
-		{
-			QStringList parts;
-			for (int i = 0; i < list->count(); i++)
-				parts << list->item(i)->text();
-			current = parts.join(QLatin1Char(';'));
-		}
-		else if (auto *edit = qobject_cast<QLineEdit *>(w))
-			current = edit->text();
-		else
-			continue;
-
+		QString const current = editorValue(editor);
 		if (current != editor.original)
 			changes.emplace_back(editor.name.toStdString(), current.toStdString());
 	}
@@ -955,7 +1428,14 @@ void OptionsDialog::accept()
 	if (m_system.isEmpty())
 	{
 		for (const FolderEditor &folder : m_folderEditors)
-			setFrontendFolderPath(folder.key, qobject_cast<QLineEdit *>(folder.widget)->text());
+		{
+			QString value;
+			if (auto *list = qobject_cast<QListWidget *>(folder.widget))
+				value = searchPathEntries(list).join(QLatin1Char(';'));
+			else if (auto *edit = qobject_cast<QLineEdit *>(folder.widget))
+				value = edit->text().trimmed();
+			setFrontendFolderPath(folder.key, value);
+		}
 		if (m_videoAutoplay)
 			QSettings().setValue(QStringLiteral("artwork/videoAutoplay"), m_videoAutoplay->isChecked());
 		if (m_noNagInfo)

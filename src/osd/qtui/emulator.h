@@ -130,10 +130,11 @@ struct qtui_option
 	std::string name;
 	std::string description;
 	std::string value;
-	std::string default_value;
+	std::string default_value;  // valid only when has_default
 	std::string minimum;
 	std::string maximum;
 	int         type;       // qtui_option_type
+	bool        has_default = false;  // false for slot/image entries (no fixed default)
 };
 
 // A group of options under one ini header (e.g. "CORE SEARCH PATH OPTIONS").
