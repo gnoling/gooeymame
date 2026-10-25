@@ -40,9 +40,10 @@ QT_QPA_PLATFORM=offscreen ./mame -help   # headless smoke test
 - Windows: MSYS2 **UCRT64** (not mingw64; qt6-pdf only exists there), same make line with `-j16`.
   Run `dist\mame.exe`, never the repo-root exe (no Qt DLLs beside it). After a plain rebuild just
   `cp -f mame.exe dist/`; redo windeployqt + deep-ldd only when the toolchain/Qt changes.
-  Smoke-testing over SSH: set `APPDATA` to a scratch folder first. Even `-help` constructs the
-  GUI and runs the settings migration against `%APPDATA%\GooeyMAME\GooeyMAME.ini`, and the
-  user's mapped drives (`Y:`, `G:`) are invisible to an SSH session.
+  Smoke-testing over SSH: set `GOOEY_CONFIG_DIR=<scratch dir>` first. Even `-help` constructs
+  the GUI and runs the settings migration against `%APPDATA%\GooeyMAME\GooeyMAME.ini`, the
+  user's mapped drives (`Y:`, `G:`) are invisible to an SSH session, and overriding `APPDATA`
+  does nothing because Qt asks the shell for that folder.
 - There are no qtui unit tests. MAME's `tests/` is upstream's core test suite and does not cover
   the front-end. Verification is: build, offscreen `-help`, then on-screen use.
 
@@ -113,9 +114,10 @@ Windows. The native run forces its providers on the command line it builds.
 - Headless UI check: run `./mame` under `xvfb-run` and drive it with `xdotool` (focus the window,
   `alt+t` then `o` opens Options), then `import -window <id> out.png`. There is no window manager,
   so use `xdotool windowfocus`, not `windowactivate`. **Always point it at a throwaway config**
-  (`XDG_CONFIG_HOME=<scratch> XDG_DATA_HOME=<scratch>`, after copying the real .conf in if the
-  test needs it): the GUI persists most state the moment it changes, so stray clicks or a resize
-  under Xvfb silently rewrite the user's live settings even if the process is killed afterwards.
+  (`GOOEY_CONFIG_DIR=<scratch>`, after copying the real .conf in as `GooeyMAME/GooeyMAME.conf`
+  if the test needs it; add `XDG_DATA_HOME=<scratch>` to keep the caches out too): the GUI
+  persists most state the moment it changes, so stray clicks or a resize under Xvfb silently
+  rewrite the user's live settings even if the process is killed afterwards.
 
 ### Persistence (user requirement: everything persists)
 Every control, filter, view mode and splitter position is saved to QSettings

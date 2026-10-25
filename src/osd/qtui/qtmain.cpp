@@ -134,6 +134,21 @@ int main(int argc, char *argv[])
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 #endif
 
+	// GOOEY_CONFIG_DIR=<dir> keeps the GUI settings file under that directory
+	// instead of the per-user location (portable installs, and headless or
+	// automated runs that must not touch the real configuration).  Qt resolves
+	// the per-user location through the platform API, so APPDATA/XDG overrides
+	// alone are not reliable on every platform.
+	{
+		QByteArray const configDir = qgetenv("GOOEY_CONFIG_DIR");
+		if (!configDir.isEmpty())
+		{
+			QString const dir = QString::fromLocal8Bit(configDir);
+			QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, dir);
+			QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir);
+		}
+	}
+
 	// Upgrade older front-end folder settings in place (fold the retired
 	// secondary media roots into the per-art-type search paths).  Must run
 	// before anything reads the folder keys.
