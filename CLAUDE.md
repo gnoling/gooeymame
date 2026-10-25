@@ -40,6 +40,9 @@ QT_QPA_PLATFORM=offscreen ./mame -help   # headless smoke test
 - Windows: MSYS2 **UCRT64** (not mingw64; qt6-pdf only exists there), same make line with `-j16`.
   Run `dist\mame.exe`, never the repo-root exe (no Qt DLLs beside it). After a plain rebuild just
   `cp -f mame.exe dist/`; redo windeployqt + deep-ldd only when the toolchain/Qt changes.
+  Smoke-testing over SSH: set `APPDATA` to a scratch folder first. Even `-help` constructs the
+  GUI and runs the settings migration against `%APPDATA%\GooeyMAME\GooeyMAME.ini`, and the
+  user's mapped drives (`Y:`, `G:`) are invisible to an SSH session.
 - There are no qtui unit tests. MAME's `tests/` is upstream's core test suite and does not cover
   the front-end. Verification is: build, offscreen `-help`, then on-screen use.
 
