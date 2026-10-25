@@ -249,8 +249,17 @@ void migrateFrontendFolders()
 	if (!settings.contains(rootKey))
 		return;
 
+	// A root that cannot be seen right now (a network share that is not
+	// mounted, a per-session mapped drive invisible to a headless/SSH run)
+	// is kept for a later launch instead of being silently dropped.
+	QStringList deferred;
 	for (const QString &root : frontendFolderPathList(QStringLiteral("secondaryRoot")))
 	{
+		if (!QDir(root).exists())
+		{
+			deferred.append(root);
+			continue;
+		}
 		QHash<QString, QString> const found = discoverFrontendFolders(root);
 		for (std::size_t i = 0; i < FRONTEND_FOLDER_COUNT; i++)
 		{
@@ -269,7 +278,10 @@ void migrateFrontendFolders()
 			}
 		}
 	}
-	settings.remove(rootKey);
+	if (deferred.isEmpty())
+		settings.remove(rootKey);
+	else
+		settings.setValue(rootKey, deferred.join(QLatin1Char(';')));
 }
 
 void setFrontendFolderPath(const QString &key, const QString &path)
